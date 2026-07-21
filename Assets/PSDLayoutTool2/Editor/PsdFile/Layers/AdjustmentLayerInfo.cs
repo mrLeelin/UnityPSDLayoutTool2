@@ -43,6 +43,16 @@
         }
 
         /// <summary>
+        /// Gets the raw descriptor bytes. The layer parser uses these bytes to
+        /// normalize common Photoshop layer effects without exposing the
+        /// mutable backing array to callers.
+        /// </summary>
+        public byte[] RawData
+        {
+            get { return Data; }
+        }
+
+        /// <summary>
         /// Gets or sets the actual data contained within the adjustment info
         /// </summary>
         private byte[] Data { get; set; }

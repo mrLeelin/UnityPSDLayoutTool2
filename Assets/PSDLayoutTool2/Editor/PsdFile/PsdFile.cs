@@ -99,6 +99,12 @@
         public List<Layer> Layers { get; private set; }
 
         /// <summary>
+        /// Gets the optional source-state manifest embedded by the Photoshop
+        /// companion plugin in the PSD XMP resource.
+        /// </summary>
+        public PsdEmbeddedLayoutManifest EmbeddedLayoutManifest { get; private set; }
+
+        /// <summary>
         /// Gets or sets the meta-data of the PSD file in XML format
         /// </summary>
         private XDocument MetaData { get; set; }
@@ -198,6 +204,7 @@
                 {
                     case ResourceIDs.XMLInfo:
                         MetaData = XDocument.Load(XmlReader.Create(new MemoryStream(imgRes.Data)));
+                        EmbeddedLayoutManifest = ReadEmbeddedLayoutManifest(MetaData);
                         IEnumerable<XElement> source = MetaData.Descendants(XName.Get("Category", "http://ns.adobe.com/photoshop/1.0/"));
                         if (source.Any())
                         {
@@ -219,6 +226,24 @@
             }
 
             reader.BaseStream.Position = position + num;
+        }
+
+        /// <summary>Reads the custom manifest attribute from the XMP RDF description.</summary>
+        private static PsdEmbeddedLayoutManifest ReadEmbeddedLayoutManifest(XDocument metadata)
+        {
+            if (metadata == null || metadata.Root == null)
+            {
+                return null;
+            }
+
+            const string namespaceUri = "https://codex.openai.com/psd-layout/1.0/";
+            XAttribute manifestAttribute = metadata.Descendants().Attributes()
+                .FirstOrDefault(attribute =>
+                    attribute.Name.NamespaceName == namespaceUri &&
+                    attribute.Name.LocalName == "manifest");
+            return manifestAttribute != null
+                ? PsdEmbeddedLayoutManifest.FromBase64Utf8(manifestAttribute.Value)
+                : null;
         }
 
         /// <summary>

@@ -483,6 +483,29 @@
                 CanvasSize = new Vector2(psd.Width, psd.Height);
                 TargetCanvasSize = CanvasSize;
                 PsdLogger.Info("PSD loaded. Size=" + psd.Width + "x" + psd.Height + ", layers=" + psd.Layers.Count);
+                if (psd.EmbeddedLayoutManifest != null)
+                {
+                    PsdLogger.Info(
+                        "Embedded PSD layout manifest loaded. fingerprint=" +
+                        psd.EmbeddedLayoutManifest.documentFingerprint +
+                        ", manifestLayers=" + psd.EmbeddedLayoutManifest.layers.Length);
+                }
+                else
+                {
+                    PsdLogger.Info("No embedded PSD layout manifest found. Falling back to native PSD parsing.");
+                }
+
+                PsdPrefabDocumentModel sourceModel = PsdPrefabModelBuilder.Build(psd);
+                var conversionContext = new PsdPrefabConversionContext
+                {
+                    source = sourceModel
+                };
+                PsdPrefabConversionPlan conversionPlan = new PsdPrefabConversionPipeline().CreatePlan(conversionContext);
+                PsdLogger.Info(
+                    "Conversion plan created. nodes=" + sourceModel.nodes.Count +
+                    ", added=" + conversionPlan.Count(PsdPrefabChangeKind.Added) +
+                    ", updated=" + conversionPlan.Count(PsdPrefabChangeKind.Updated) +
+                    ", removed=" + conversionPlan.Count(PsdPrefabChangeKind.Removed));
 
                 // Set the depth step based on the layer count.  If there are no layers, default to 0.1f.
                 depthStep = psd.Layers.Count != 0 ? MaximumDepth / psd.Layers.Count : 0.1f;
@@ -3251,6 +3274,11 @@
             if (!string.IsNullOrEmpty(layer.FontName))
             {
                 fontCandidates.Add(layer.FontName.Trim());
+
+                // Unity does not expose a stable API for enumerating all mounted
+                // OS fonts. CreateDynamicFontFromOSFont will resolve the exact
+                // mounted family name when it is available, so keep the PSD name
+                // as the first candidate and use the fallback list below.
             }
 
             fontCandidates.Add("Microsoft YaHei");
@@ -3271,7 +3299,7 @@
 
                 try
                 {
-                    Font font = Font.CreateDynamicFontFromOSFont(fontName, 16);
+                    Font font = Font.CreateDynamicFontFromOSFont(fontName, Mathf.Max(1, Mathf.CeilToInt(layer.FontSize)));
                     if (font != null)
                     {
                         return font;
@@ -3284,6 +3312,20 @@
             }
 
             return Resources.GetBuiltinResource<Font>("Arial.ttf");
+        }
+
+        /// <summary>Normalizes a Photoshop or OS font display name for matching.</summary>
+        private static string NormalizeFontName(string fontName)
+        {
+            if (string.IsNullOrEmpty(fontName))
+            {
+                return string.Empty;
+            }
+
+            string normalized = fontName.Trim().Replace("-", " ").Replace("_", " ");
+            normalized = Regex.Replace(normalized, "\\s+", " ");
+            normalized = Regex.Replace(normalized, "\\s+(Regular|Normal|Book|系|标准|Std)$", string.Empty, RegexOptions.IgnoreCase);
+            return normalized;
         }
 
         /// <summary>
@@ -3620,6 +3662,12 @@
 
             textUI.color = color;
             textUI.alignment = TextAnchor.MiddleCenter;
+            textUI.horizontalOverflow = HorizontalWrapMode.Overflow;
+            textUI.verticalOverflow = VerticalWrapMode.Overflow;
+            textUI.resizeTextForBestFit = false;
+            textUI.raycastTarget = false;
+
+            ApplyTextStyle(textUI, layer);
 
             switch (layer.Justification)
             {
@@ -3632,6 +3680,50 @@
                 case TextJustification.Center:
                     textUI.alignment = TextAnchor.MiddleCenter;
                     break;
+            }
+        }
+
+        /// <summary>
+        /// Applies normalized PSD text effects to the generated UI text. Unity's
+        /// built-in Outline/Shadow are used so the result remains editable in
+        /// the generated Prefab and does not require nine-slice assets.
+        /// </summary>
+        private static void ApplyTextStyle(Text textUI, Layer layer)
+        {
+            if (textUI == null || layer == null || layer.TextStyle == null)
+            {
+                return;
+            }
+
+            float scale = UseTargetCanvasCoordinates ? GetTargetCanvasUniformScale() : 1f / Mathf.Max(0.0001f, PixelsToUnits);
+            PsdTextStyle style = layer.TextStyle;
+            if (style.LineHeight > 0f && layer.FontSize > 0f)
+            {
+                textUI.lineSpacing = Mathf.Max(0.01f, style.LineHeight / layer.FontSize);
+            }
+
+            if (style.StrokeEnabled && style.StrokeWidth > 0f)
+            {
+                Outline outline = textUI.gameObject.AddComponent<Outline>();
+                float width = Mathf.Max(0.01f, style.StrokeWidth * scale);
+                outline.effectDistance = new Vector2(width, width);
+                outline.effectColor = ApplyLayerOpacity(style.StrokeColor, layer);
+                outline.useGraphicAlpha = true;
+            }
+
+            if (style.ShadowEnabled)
+            {
+                Shadow shadow = textUI.gameObject.AddComponent<Shadow>();
+                float distance = Mathf.Max(0f, style.ShadowDistance * scale);
+                float angle = style.ShadowAngle * Mathf.Deg2Rad;
+                shadow.effectDistance = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * distance;
+                shadow.effectColor = ApplyLayerOpacity(style.ShadowColor, layer);
+                shadow.useGraphicAlpha = true;
+
+                if (style.ShadowBlur > 0f)
+                {
+                    PsdLogger.Warning("PSD text shadow blur is approximated by Unity UI Shadow; layer=" + GetRuntimeObjectName(layer));
+                }
             }
         }
 

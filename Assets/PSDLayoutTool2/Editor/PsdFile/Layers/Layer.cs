@@ -3,6 +3,8 @@
     using System.Collections.Generic;
     using System.Collections.Specialized;
     using System.IO;
+    using System;
+    using System.Text;
     using UnityEngine;
 
     /// <summary>
@@ -122,6 +124,10 @@
                 {
                     ReadTextLayer(adjustmentLayerInfo.DataReader);
                 }
+                else if (adjustmentLayerInfo.Key == "lfx2" || adjustmentLayerInfo.Key == "lrFX")
+                {
+                    ReadLayerEffects(adjustmentLayerInfo.RawData);
+                }
                 else if (adjustmentLayerInfo.Key == "luni")
                 {
                     // read the unicode name
@@ -174,6 +180,9 @@
         /// Can be warpNone, warpTwist, etc.
         /// </summary>
         public string WarpStyle { get; private set; }
+
+        /// <summary>Gets normalized Photoshop text effects.</summary>
+        public PsdTextStyle TextStyle { get; private set; }
 
         #endregion
 
@@ -263,6 +272,10 @@
         private void ReadTextLayer(BinaryReverseReader dataReader)
         {
             IsTextLayer = true;
+            if (TextStyle == null)
+            {
+                TextStyle = PsdTextStyle.CreateDefault(0f);
+            }
 
             // read the text layer's text string
             dataReader.Seek("/Text");
@@ -285,6 +298,7 @@
             // read the font size
             dataReader.Seek("/FontSize ");
             FontSize = dataReader.ReadFloat();
+            TextStyle.LineHeight = FontSize > 0f ? FontSize * 1.2f : 0f;
 
             // read the font fill color
             dataReader.Seek("/FillColor");
@@ -316,6 +330,198 @@
                 string str = WarpStyle + dataReader.ReadChar();
                 WarpStyle = str;
             }
+        }
+
+        /// <summary>
+        /// Reads the stable, numeric part of Photoshop's common layer-effect
+        /// descriptors. Unknown descriptor variants are intentionally ignored.
+        /// </summary>
+        private void ReadLayerEffects(byte[] data)
+        {
+            if (TextStyle == null)
+            {
+                TextStyle = PsdTextStyle.CreateDefault(FontSize);
+            }
+
+            bool enabled;
+            double value;
+            if (TryReadBool(data, "FrFX", out enabled))
+            {
+                TextStyle.StrokeEnabled = enabled;
+                if (TryReadUnitValue(data, "Sz  ", out value))
+                {
+                    TextStyle.StrokeWidth = Mathf.Max(0f, (float)value);
+                }
+
+                Color effectColor;
+                if (TryReadColor(data, "Clr ", out effectColor))
+                {
+                    TextStyle.StrokeColor = effectColor;
+                }
+            }
+
+            if (TryReadBool(data, "dsdw", out enabled))
+            {
+                TextStyle.ShadowEnabled = enabled;
+                if (TryReadUnitValue(data, "Dstn", out value))
+                {
+                    TextStyle.ShadowDistance = Mathf.Max(0f, (float)value);
+                }
+
+                if (TryReadUnitValue(data, "lagl", out value))
+                {
+                    TextStyle.ShadowAngle = (float)value;
+                }
+
+                if (TryReadUnitValue(data, "blur", out value))
+                {
+                    TextStyle.ShadowBlur = Mathf.Max(0f, (float)value);
+                }
+
+                Color effectColor;
+                if (TryReadColor(data, "Clr ", out effectColor))
+                {
+                    TextStyle.ShadowColor = effectColor;
+                }
+
+                if (TryReadUnitValue(data, "Opct", out value))
+                {
+                    Color shadowColor = TextStyle.ShadowColor;
+                    shadowColor.a = Mathf.Clamp01((float)value / 100f);
+                    TextStyle.ShadowColor = shadowColor;
+                }
+            }
+        }
+
+        private static bool TryReadBool(byte[] data, string key, out bool value)
+        {
+            value = false;
+            int keyIndex = FindAscii(data, key);
+            if (keyIndex < 0)
+            {
+                return false;
+            }
+
+            int boolIndex = FindAscii(data, "bool", keyIndex + key.Length, Math.Min(data.Length, keyIndex + 32));
+            if (boolIndex < 0 || boolIndex + 4 >= data.Length)
+            {
+                return false;
+            }
+
+            value = data[boolIndex + 4] != 0;
+            return true;
+        }
+
+        private static bool TryReadUnitValue(byte[] data, string key, out double value)
+        {
+            value = 0d;
+            int keyIndex = FindAscii(data, key);
+            if (keyIndex < 0)
+            {
+                return false;
+            }
+
+            int unitIndex = FindAscii(data, "UntF", keyIndex + key.Length, Math.Min(data.Length, keyIndex + 48));
+            if (unitIndex < 0 || unitIndex + 16 > data.Length)
+            {
+                return false;
+            }
+
+            long bits = 0L;
+            for (int index = unitIndex + 8; index < unitIndex + 16; ++index)
+            {
+                bits = (bits << 8) | data[index];
+            }
+
+            value = BitConverter.Int64BitsToDouble(bits);
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        private static bool TryReadColor(byte[] data, string key, out Color color)
+        {
+            color = Color.black;
+            int keyIndex = FindAscii(data, key);
+            if (keyIndex < 0)
+            {
+                return false;
+            }
+
+            double red;
+            double green;
+            double blue;
+            if (!TryReadDescriptorDouble(data, "Rd  ", keyIndex, out red) ||
+                !TryReadDescriptorDouble(data, "Grn ", keyIndex, out green) ||
+                !TryReadDescriptorDouble(data, "Bl  ", keyIndex, out blue))
+            {
+                return false;
+            }
+
+            color = new Color(
+                Mathf.Clamp01((float)red / 255f),
+                Mathf.Clamp01((float)green / 255f),
+                Mathf.Clamp01((float)blue / 255f),
+                1f);
+            return true;
+        }
+
+        private static bool TryReadDescriptorDouble(byte[] data, string key, int start, out double value)
+        {
+            value = 0d;
+            int keyIndex = FindAscii(data, key, start, Math.Min(data.Length, start + 128));
+            if (keyIndex < 0)
+            {
+                return false;
+            }
+
+            int typeIndex = FindAscii(data, "doub", keyIndex + key.Length, Math.Min(data.Length, keyIndex + 20));
+            if (typeIndex < 0 || typeIndex + 12 > data.Length)
+            {
+                return false;
+            }
+
+            long bits = 0L;
+            for (int index = typeIndex + 4; index < typeIndex + 12; ++index)
+            {
+                bits = (bits << 8) | data[index];
+            }
+
+            value = BitConverter.Int64BitsToDouble(bits);
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        private static int FindAscii(byte[] data, string value)
+        {
+            return FindAscii(data, value, 0, data != null ? data.Length : 0);
+        }
+
+        private static int FindAscii(byte[] data, string value, int start, int end)
+        {
+            if (data == null || string.IsNullOrEmpty(value))
+            {
+                return -1;
+            }
+
+            byte[] bytes = Encoding.ASCII.GetBytes(value);
+            int max = Math.Min(end, data.Length - bytes.Length + 1);
+            for (int offset = Math.Max(0, start); offset < max; ++offset)
+            {
+                bool match = true;
+                for (int index = 0; index < bytes.Length; ++index)
+                {
+                    if (data[offset + index] != bytes[index])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                {
+                    return offset;
+                }
+            }
+
+            return -1;
         }
     }
 }
