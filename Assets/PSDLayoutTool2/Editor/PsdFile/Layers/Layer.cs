@@ -51,6 +51,7 @@
         {
             Children = new List<Layer>();
             PsdFile = psdFile;
+            SectionType = -1;
 
             // read the rect
             Rect rect = new Rect();
@@ -136,6 +137,13 @@
                     dataReader.ReadByte();
                     Name = dataReader.ReadString().TrimEnd(new char[1]);
                 }
+                else if (adjustmentLayerInfo.Key == "lsct")
+                {
+                    // read the section divider type:
+                    // 0 = other, 1 = open folder, 2 = closed folder, 3 = bounding
+                    BinaryReverseReader dataReader = adjustmentLayerInfo.DataReader;
+                    SectionType = dataReader.ReadInt32();
+                }
             }
 
             reader.BaseStream.Position = num4;
@@ -180,6 +188,13 @@
         /// Can be warpNone, warpTwist, etc.
         /// </summary>
         public string WarpStyle { get; private set; }
+
+        /// <summary>
+        /// Gets the section divider type from the 'lsct' tag.
+        /// 0 = other, 1 = open folder, 2 = closed folder, 3 = bounding (group end).
+        /// -1 means no 'lsct' tag was found.
+        /// </summary>
+        public int SectionType { get; private set; }
 
         /// <summary>Gets normalized Photoshop text effects.</summary>
         public PsdTextStyle TextStyle { get; private set; }
@@ -239,6 +254,30 @@
         }
 
         /// <summary>
+        /// Gets a value indicating whether this layer starts a group based on the 'lsct' tag.
+        /// Returns true for OPEN_FOLDER (1) or CLOSED_FOLDER (2).
+        /// </summary>
+        public bool IsGroupStart
+        {
+            get
+            {
+                return SectionType == 1 || SectionType == 2;
+            }
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether this layer ends a group based on the 'lsct' tag.
+        /// Returns true for BOUNDING (3).
+        /// </summary>
+        public bool IsGroupEnd
+        {
+            get
+            {
+                return SectionType == 3;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets the name of the layer.
         /// </summary>
         public string Name { get; set; }
@@ -278,10 +317,14 @@
             }
 
             // read the text layer's text string
+            // PSD engine-data descriptors store the value after /Text as:
+            //   space '(' BOM UTF16BE... ')'
+            // The old code used ReadString() which reads null-terminated UTF-16BE,
+            // but the actual delimiter is the PostScript ')' character.
             if (TrySeekFromStart(dataReader, "/Text"))
             {
-                dataReader.ReadBytes(4);
-                Text = dataReader.ReadString();
+                dataReader.ReadBytes(4); // skip space, '(', BOM
+                Text = ReadPostScriptUtf16String(dataReader);
             }
             else
             {
@@ -342,7 +385,7 @@
             if (TrySeekFromStart(dataReader, "/FontSet") && dataReader.TrySeek("/Name"))
             {
                 dataReader.ReadBytes(4);
-                FontName = dataReader.ReadString();
+                FontName = ReadPostScriptUtf16String(dataReader);
             }
 
             // read the warp style
@@ -362,6 +405,45 @@
         {
             dataReader.BaseStream.Position = 0;
             return dataReader.TrySeek(search);
+        }
+
+        /// <summary>
+        /// Reads a PostScript string literal encoded as UTF-16BE.
+        /// The stream must be positioned right after the opening '(' and BOM.
+        /// Reads bytes until the closing ')' and decodes them as UTF-16BE.
+        /// </summary>
+        private static string ReadPostScriptUtf16String(BinaryReverseReader reader)
+        {
+            System.Collections.Generic.List<byte> bytes = new System.Collections.Generic.List<byte>();
+            while (reader.BaseStream.Position < reader.BaseStream.Length)
+            {
+                byte b = reader.ReadByte();
+                if (b == 0x29) // ')' — end of PostScript string
+                {
+                    break;
+                }
+
+                if (b == 0x5C && reader.BaseStream.Position < reader.BaseStream.Length)
+                {
+                    // '\' escape — include both the backslash and the next byte
+                    bytes.Add(b);
+                    bytes.Add(reader.ReadByte());
+                }
+                else
+                {
+                    bytes.Add(b);
+                }
+            }
+
+            // Decode as UTF-16BE
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i + 1 < bytes.Count; i += 2)
+            {
+                char c = (char)((bytes[i] << 8) | bytes[i + 1]);
+                sb.Append(c);
+            }
+
+            return sb.ToString();
         }
 
         private static bool TryReadAsciiInt(BinaryReverseReader dataReader, out int value)

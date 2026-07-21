@@ -114,6 +114,16 @@
         private static Dictionary<Layer, LayerImportInfo> currentLayerInfos;
 
         /// <summary>
+        /// Total number of layers to export (for progress bar).
+        /// </summary>
+        private static int progressTotalLayers;
+
+        /// <summary>
+        /// Number of layers exported so far (for progress bar).
+        /// </summary>
+        private static int progressExportedLayers;
+
+        /// <summary>
         /// Cached set of invalid filesystem characters for generated file and folder names.
         /// </summary>
         private static readonly HashSet<char> InvalidGeneratedNameChars = new HashSet<char>(
@@ -672,6 +682,8 @@
                 }
 
                 PsdLogger.Step("Export layer tree");
+                progressTotalLayers = CountAllLayers(tree);
+                progressExportedLayers = 0;
                 ExportTree(tree);
 
                 if (CreatePrefab && importRootGameObject != null)
@@ -679,6 +691,7 @@
                     if (ShouldSavePrefab(prefabRelativePath))
                     {
                         PsdLogger.Step("Save prefab: " + prefabRelativePath);
+                        EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "保存 Prefab...", 0.95f);
                         PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath);
                     }
                     else
@@ -694,7 +707,8 @@
                 }
 
                 PsdLogger.Step("Refresh AssetDatabase");
-                AssetDatabase.Refresh();
+                EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "刷新 AssetDatabase...", 0.98f);
+                AssetDatabase.ImportAsset(outputRelativePath, ImportAssetOptions.ForceSynchronousImport);
             }
             catch (Exception exception)
             {
@@ -704,6 +718,7 @@
             }
             finally
             {
+                EditorUtility.ClearProgressBar();
                 ClearCurrentImportSelection();
                 currentLayerInfos = null;
                 PsdLogger.EndImportSession(sessionResult);
@@ -2708,7 +2723,7 @@
 
             foreach (Layer layer in flatLayers)
             {
-                if (IsEndGroup(layer))
+                if (IsEndGroup(layer) && currentGroupLayer != null)
                 {
                     if (previousLayers.Count > 0)
                     {
@@ -2716,7 +2731,7 @@
                         previousLayer.Children.Add(currentGroupLayer);
                         currentGroupLayer = previousLayer;
                     }
-                    else if (currentGroupLayer != null)
+                    else
                     {
                         tree.Add(currentGroupLayer);
                         currentGroupLayer = null;
@@ -2746,10 +2761,15 @@
                 }
             }
 
-            // if there are any dangling layers, add them to the tree
-            if (tree.Count == 0 && currentGroupLayer != null && currentGroupLayer.Children.Count > 0)
+            // flush all remaining unclosed groups into the tree
+            while (currentGroupLayer != null)
             {
-                tree.Add(currentGroupLayer);
+                if (currentGroupLayer.Children.Count > 0)
+                {
+                    tree.Add(currentGroupLayer);
+                }
+
+                currentGroupLayer = previousLayers.Count > 0 ? previousLayers.Pop() : null;
             }
 
             return tree;
@@ -2774,11 +2794,27 @@
 
         /// <summary>
         /// Returns true if the given <see cref="Layer"/> is marking the start of a layer group.
+        /// Uses the 'lsct' section divider tag when available (type 1 or 2); falls back to the
+        /// pixel-data-irrelevant flag when the lsct tag indicates "other" (type 0) or is absent
+        /// (older PSD files). Only type 3 (bounding) definitively excludes a group start.
         /// </summary>
         /// <param name="layer">The <see cref="Layer"/> to check if it's the start of a group</param>
         /// <returns>True if the layer starts a group, otherwise false.</returns>
         private static bool IsStartGroup(Layer layer)
         {
+            if (layer.IsGroupStart)
+            {
+                return true;
+            }
+
+            // SectionType 3 (bounding) is a group end — cannot be a group start.
+            if (layer.SectionType == 3)
+            {
+                return false;
+            }
+
+            // SectionType 0 (other) or -1 (no tag): fall back to the
+            // pixel-data-irrelevant flag (original behaviour for old PSD files).
             return layer.IsPixelDataIrrelevant;
         }
 
@@ -2789,7 +2825,8 @@
         /// <returns>True if the layer ends a group, otherwise false.</returns>
         private static bool IsEndGroup(Layer layer)
         {
-            return layer.Name.Contains("</Layer set>") ||
+            return layer.IsGroupEnd ||
+                layer.Name.Contains("</Layer set>") ||
                 layer.Name.Contains("</Layer group>") ||
                 (layer.Name == " copy" && layer.Rect.height == 0);
         }
@@ -2846,6 +2883,38 @@
         #region Layer Exporting Methods
 
         /// <summary>
+        /// Counts all layers recursively in the tree (including groups).
+        /// </summary>
+        private static int CountAllLayers(List<Layer> tree)
+        {
+            int count = 0;
+            foreach (Layer layer in tree)
+            {
+                count++;
+                if (layer.Children.Count > 0)
+                {
+                    count += CountAllLayers(layer.Children);
+                }
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// Updates the progress bar with the current layer name.
+        /// </summary>
+        private static void UpdateExportProgress(string layerName)
+        {
+            progressExportedLayers++;
+            float progress = progressTotalLayers > 0
+                ? (float)progressExportedLayers / progressTotalLayers
+                : 0f;
+            EditorUtility.DisplayProgressBar(
+                "PSD Layout Tool 2",
+                string.Format("导出图层 ({0}/{1}): {2}", progressExportedLayers, progressTotalLayers, layerName),
+                progress);
+        }
+
+        /// <summary>
         /// Processes and saves the layer tree.
         /// </summary>
         /// <param name="tree">The layer tree to export.</param>
@@ -2864,6 +2933,7 @@
         /// <param name="layer">The layer to export.</param>
         private static void ExportLayer(Layer layer)
         {
+            UpdateExportProgress(layer.Name);
             PsdLogger.Step("Export layer: " + DescribeLayerForLog(layer));
             LayerImportInfo info = GetLayerInfo(layer);
             if (info == null)
@@ -3767,6 +3837,9 @@
                 return;
             }
 
+            // Both LineHeight and FontSize are in PSD document pixels (unscaled).
+            // The ratio between them is scale-independent, so the result is a
+            // correct TMP lineSpacing percentage regardless of canvas scaling.
             textUI.lineSpacing = ((layer.TextStyle.LineHeight / layer.FontSize) - 1f) * 100f;
         }
 
@@ -4181,6 +4254,10 @@
         {
             if (UseTargetCanvasCoordinates)
             {
+                // PSD font size is in points (1pt = 1px at 72 DPI).  Scale uniformly
+                // by the same fit factor used for the PSD root so the text stays
+                // proportional to both width and height, preventing overlap when the
+                // target canvas aspect ratio differs from the PSD canvas.
                 return layer.FontSize * GetTargetCanvasUniformScale();
             }
 

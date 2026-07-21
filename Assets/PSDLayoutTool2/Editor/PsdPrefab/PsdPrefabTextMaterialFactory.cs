@@ -46,9 +46,17 @@ namespace PsdLayoutTool2
                 name = System.IO.Path.GetFileNameWithoutExtension(materialPath)
             };
             ApplyMaterialProperties(material, text.effect);
-            AssetDatabase.CreateAsset(material, materialPath);
-            AssetDatabase.SaveAssets();
-            return AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            try
+            {
+                AssetDatabase.CreateAsset(material, materialPath);
+                AssetDatabase.SaveAssets();
+                return AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("PSDLayoutTool2: Failed to create TMP material at " + materialPath + ": " + ex.Message);
+                return null;
+            }
         }
 
         private static void ApplyMaterialProperties(Material material, PsdPrefabTextEffectModel effect)
@@ -110,16 +118,29 @@ namespace PsdLayoutTool2
                 throw new InvalidOperationException("TMP material output must be inside the Assets folder: " + assetFolder);
             }
 
-            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-            string absoluteFolder = Path.Combine(
-                projectRoot,
-                assetFolder.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(absoluteFolder);
-            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            // Build the folder hierarchy one segment at a time using AssetDatabase.CreateFolder
+            // so Unity immediately recognises each intermediate folder.
+            string current = parts[0];
+            for (int i = 1; i < parts.Length; i++)
+            {
+                string next = current + "/" + parts[i];
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    AssetDatabase.CreateFolder(current, parts[i]);
+                }
+
+                current = next;
+            }
 
             if (!AssetDatabase.IsValidFolder(assetFolder))
             {
-                throw new InvalidOperationException("Unity did not register TMP material output folder: " + assetFolder);
+                // Last-resort: create on disk and force a refresh
+                string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+                string absoluteFolder = Path.Combine(
+                    projectRoot,
+                    assetFolder.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(absoluteFolder);
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             }
         }
 
