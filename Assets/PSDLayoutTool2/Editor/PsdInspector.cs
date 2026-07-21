@@ -446,6 +446,16 @@
                         PsdImporter.ExportLayersAsTextures(assetPath);
                     }
 
+                    if (GUILayout.Button(Localize("打开九宫图工具", "Open 9-Slice Tool")))
+                    {
+                        PsdNineSliceWindow.Open(AssetDatabase.GetAssetPath(Selection.activeObject));
+                    }
+
+                    if (GUILayout.Button(Localize("配置公共资源库", "Configure Common Asset Library")))
+                    {
+                        SettingsService.OpenProjectSettings("Project/PSD Layout Tool/Common Asset Library");
+                    }
+
                     if (GUILayout.Button(Localize("在当前场景中布局", "Layout In Current Scene")))
                     {
                         PsdImporter.LayoutInCurrentScene(assetPath);

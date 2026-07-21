@@ -1,12 +1,17 @@
 namespace PsdLayoutTool2
 {
     using System;
+    using System.Globalization;
+    using System.Text.RegularExpressions;
     using PhotoshopFile;
     using UnityEngine;
 
     /// <summary>把当前 PSD 解析结果转换为与 Unity 写入器解耦的中间模型。</summary>
     public static class PsdPrefabModelBuilder
     {
+        private const string NineSliceTagPattern =
+            @"(?:\|9slice\s*=\s*|\[9slice\s*:\s*)([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*\]?";
+
         public static PsdPrefabDocumentModel Build(PsdFile psd)
         {
             if (psd == null)
@@ -47,13 +52,22 @@ namespace PsdLayoutTool2
                     stableId = source.layerId,
                     parentStableId = source.parentId ?? string.Empty,
                     siblingIndex = source.siblingIndex,
-                    name = source.name ?? string.Empty,
+                    name = RemoveNineSliceTag(source.name ?? string.Empty),
                     kind = ParseKind(source.kind, source.text != null),
                     visible = source.visible,
                     opacity = Mathf.Clamp01(source.opacity),
                     bounds = ToRect(source.bounds),
                     contentFingerprint = source.fingerprint ?? string.Empty,
-                    assetFingerprint = source.fingerprint ?? string.Empty
+                    assetFingerprint = source.fingerprint ?? string.Empty,
+                    nineSlice = source.nineSlice != null && source.nineSlice.enabled
+                        ? new PsdPrefabNineSliceModel
+                        {
+                            left = source.nineSlice.left,
+                            top = source.nineSlice.top,
+                            right = source.nineSlice.right,
+                            bottom = source.nineSlice.bottom
+                        }
+                        : null
                 };
 
                 if (source.text != null)
@@ -97,13 +111,15 @@ namespace PsdLayoutTool2
             string parentId,
             int siblingIndex)
         {
-            string stableId = BuildFallbackStableId(parentId, siblingIndex, layer.Name);
+            string stableId = layer.Id != 0U
+                ? layer.Id.ToString(CultureInfo.InvariantCulture)
+                : BuildFallbackStableId(parentId, siblingIndex, layer.Name);
             var node = new PsdPrefabNodeModel
             {
                 stableId = stableId,
                 parentStableId = parentId,
                 siblingIndex = siblingIndex,
-                name = layer.Name ?? string.Empty,
+                name = RemoveNineSliceTag(layer.Name ?? string.Empty),
                 kind = layer.IsTextLayer ? PsdPrefabNodeKind.Text :
                     (layer.Children != null && layer.Children.Count > 0 ? PsdPrefabNodeKind.Group : PsdPrefabNodeKind.Image),
                 visible = layer.Visible,
@@ -173,8 +189,13 @@ namespace PsdLayoutTool2
 
         private static string BuildFallbackStableId(string parentId, int siblingIndex, string name)
         {
-            string input = (parentId ?? string.Empty) + "/" + siblingIndex + "/" + (name ?? string.Empty);
+            string input = (parentId ?? string.Empty) + "/" + siblingIndex + "/" + RemoveNineSliceTag(name ?? string.Empty);
             return "native_" + ComputeFnv1a(input);
+        }
+
+        private static string RemoveNineSliceTag(string name)
+        {
+            return Regex.Replace(name ?? string.Empty, NineSliceTagPattern, string.Empty, RegexOptions.IgnoreCase);
         }
 
         private static string BuildContentFingerprint(PsdPrefabNodeModel node)

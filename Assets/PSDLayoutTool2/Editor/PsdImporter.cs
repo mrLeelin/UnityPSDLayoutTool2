@@ -79,6 +79,25 @@
         private static UiLayoutContext currentGroupLayoutContext;
 
         /// <summary>
+        /// Embedded PSD 9-slice borders keyed by Photoshop's stable <c>lyid</c>.
+        /// Values use Unity's left, bottom, right, top order.
+        /// </summary>
+        private static Dictionary<uint, Vector4> currentNineSliceBordersByLayerId;
+
+        /// <summary>
+        /// Borders calculated from bare PSD name tags while PNGs are generated.
+        /// They only live for this import run; the PSD name remains the source
+        /// of truth for future incremental updates.
+        /// </summary>
+        private static Dictionary<Layer, Vector4> currentAutomaticNineSliceBordersByLayer;
+
+        /// <summary>
+        /// Whether the embedded manifest is the authoritative 9-slice source
+        /// for the current import. Older manifests retain layer-name fallback.
+        /// </summary>
+        private static bool useEmbeddedNineSliceMetadata;
+
+        /// <summary>
         /// The current depth (Z axis position) that sprites will be placed on.  It is initialized to the MaximumDepth ("back" depth) and it is automatically
         /// decremented as the PSD file is processed, back to front.
         /// </summary>
@@ -511,6 +530,9 @@
                 currentSortingOrder = 0;
                 UseTargetCanvasCoordinates = false;
                 currentLayerInfos = null;
+                currentNineSliceBordersByLayerId = new Dictionary<uint, Vector4>();
+                currentAutomaticNineSliceBordersByLayer = new Dictionary<Layer, Vector4>();
+                useEmbeddedNineSliceMetadata = false;
                 string normalizedAssetPath = asset.Replace('\\', '/');
                 string fullPath = Path.Combine(GetFullProjectPath(), normalizedAssetPath);
 
@@ -531,6 +553,8 @@
                 {
                     PsdLogger.Info("No embedded PSD layout manifest found. Falling back to native PSD parsing.");
                 }
+
+                ConfigureEmbeddedNineSliceBorders(psd.EmbeddedLayoutManifest);
 
                 PsdPrefabDocumentModel sourceModel = PsdPrefabModelBuilder.Build(psd);
                 var conversionContext = new PsdPrefabConversionContext
@@ -577,6 +601,7 @@
                 PsdLogger.Step("Build layer tree");
                 List<Layer> tree = BuildLayerTree(psd.Layers) ?? new List<Layer>();
                 currentLayerInfos = BuildLayerImportInfoMap(tree);
+                ValidateCommonLibraryReferences(tree);
                 bool hasVisibleRuntimeObjects = HasVisibleRuntimeContent(tree);
                 PsdLogger.Info("Layer tree root count=" + tree.Count + ", hasVisibleRuntimeObjects=" + hasVisibleRuntimeObjects);
 
@@ -1135,6 +1160,12 @@
         {
             LayerImportInfo info = GetLayerInfo(layer);
             if (info == null)
+            {
+                return;
+            }
+
+            PsdCommonAssetReference commonReference;
+            if (PsdCommonAssetNameParser.TryParse(layer.Name, out commonReference))
             {
                 return;
             }
@@ -2008,9 +2039,7 @@
         /// <returns>Name without the 9-slice tag.</returns>
         private static string RemoveNineSliceTag(string name)
         {
-            return string.IsNullOrEmpty(name)
-                ? string.Empty
-                : Regex.Replace(name, NineSliceTagPattern, string.Empty, RegexOptions.IgnoreCase);
+            return PsdNineSliceNameRules.RemoveTag(name);
         }
 
         /// <summary>
@@ -2064,6 +2093,12 @@
         private static bool ShouldLayerEmitTextureFile(LayerImportInfo info)
         {
             if (info == null || info.IsFolderLike || info.Layer.Rect.width <= 0 || info.Layer.Rect.height <= 0)
+            {
+                return false;
+            }
+
+            PsdCommonAssetReference commonReference;
+            if (PsdCommonAssetNameParser.TryParse(info.Layer.Name, out commonReference))
             {
                 return false;
             }
@@ -2233,6 +2268,12 @@
         /// <returns>Resolved runtime name.</returns>
         private static string GetRuntimeObjectName(Layer layer)
         {
+            PsdCommonAssetReference commonReference;
+            if (layer != null && PsdCommonAssetNameParser.TryParse(layer.Name, out commonReference))
+            {
+                return MakeNameSafe(commonReference.Key);
+            }
+
             LayerImportInfo info = GetLayerInfo(layer);
             if (info == null)
             {
@@ -3049,6 +3090,13 @@
                 return;
             }
 
+            PsdCommonAssetReference commonReference;
+            if (PsdCommonAssetNameParser.TryParse(layer.Name, out commonReference))
+            {
+                ExportCommonLayer(layer, info, commonReference);
+                return;
+            }
+
             if (info.IsFolderLike)
             {
                 ExportFolderLayer(layer);
@@ -3354,9 +3402,71 @@
                 // decode the layer into a texture
                 PsdLogger.Step("Decode layer image: " + DescribeLayerForLog(layer));
                 Texture2D texture = ImageDecoder.DecodeImage(layer);
+                if (texture == null)
+                {
+                    PsdLogger.Warning("Skip PNG because the PSD layer could not be decoded: " + DescribeLayerForLog(layer));
+                    return string.Empty;
+                }
 
-                PsdLogger.Step("Write PNG: " + file);
-                File.WriteAllBytes(file, texture.EncodeToPNG());
+                try
+                {
+                    byte[] png = texture.EncodeToPNG();
+                    if (png == null || png.Length == 0)
+                    {
+                        PsdLogger.Warning("Skip PNG because Unity could not encode the PSD layer: " + DescribeLayerForLog(layer));
+                        return string.Empty;
+                    }
+
+                    PsdNineSliceNameRule nineSliceRule;
+                    if (TryGetNineSliceConversionRule(layer, out nineSliceRule))
+                    {
+                        byte[] originalPng = png;
+                        byte[] processedPng;
+                        PsdNineSliceBorder appliedBorder;
+                        string reason;
+                        if (PsdNineSliceUnityAutoProcessor.TryProcess(
+                                texture,
+                                nineSliceRule,
+                                out processedPng,
+                                out appliedBorder,
+                                out reason))
+                        {
+                            png = processedPng;
+                            RegisterAutomaticNineSliceBorder(layer, PsdNineSliceTextureProcessor.ToUnityBorder(appliedBorder));
+                            PsdLogger.Info(
+                                "Auto 9-slice crop from PSD name. mode=" + nineSliceRule.Mode +
+                                ", border(left,top,right,bottom)=" +
+                                appliedBorder.Left + "," + appliedBorder.Top + "," +
+                                appliedBorder.Right + "," + appliedBorder.Bottom +
+                                ", layer=" + DescribeLayerForLog(layer));
+                        }
+                        else
+                        {
+                            png = originalPng;
+                            ClearAutomaticNineSliceBorder(layer);
+                            PsdLogger.Warning(
+                                "PSD 9-slice tag kept the original PNG because analysis failed. " +
+                                reason + " Layer: " + DescribeLayerForLog(layer));
+                        }
+                    }
+                    else
+                    {
+                        ClearAutomaticNineSliceBorder(layer);
+                    }
+
+                    if (png == null || png.Length == 0)
+                    {
+                        PsdLogger.Warning("Skip PNG because the processed PSD layer produced no encoded bytes: " + DescribeLayerForLog(layer));
+                        return string.Empty;
+                    }
+
+                    PsdLogger.Step("Write PNG: " + file);
+                    File.WriteAllBytes(file, png);
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(texture);
+                }
             }
             else
             {
@@ -3437,6 +3547,11 @@
                 textureImporter.maxTextureSize = 2048;
                 textureImporter.spritePixelsPerUnit = PixelsToUnits;
 
+                if (layer != null && layer.Id != 0U)
+                {
+                    textureImporter.userData = PsdNineSliceAssetState.WriteLayerIdentity(textureImporter.userData, layer.Id);
+                }
+
                 Vector4 nineSliceBorder;
                 if (TryGetNineSliceBorder(layer, out nineSliceBorder))
                 {
@@ -3449,9 +3564,17 @@
                 }
                 else
                 {
-                    // Clear a previous border when the tag is removed during an
-                    // incremental PSD update.
+                    // Name/XMP metadata is now the only source of automatic
+                    // nine-slice. Do not revive stale manual recipes from a
+                    // TextureImporter meta file during an incremental update.
                     textureImporter.spriteBorder = Vector4.zero;
+                    bool isUntaggedLayer = PsdNineSliceImportPolicy.ShouldClearUntaggedBorder(
+                        layer != null ? layer.Name : string.Empty);
+                    PsdLogger.Info(
+                        (isUntaggedLayer
+                            ? "Cleared stale 9-slice border for untagged PSD layer: "
+                            : "Cleared unresolved PSD 9-slice border: ") +
+                        relativePathToSprite);
                 }
             }
             else
@@ -4292,9 +4415,14 @@
             }
 
             Vector4 border;
-            if (!TryGetNineSliceBorder(layer, out border))
+            bool hasExplicitBorder = TryGetNineSliceBorder(layer, out border);
+            if (!hasExplicitBorder)
             {
-                return;
+                border = image.sprite.border;
+                if (border.x <= 0.0f && border.y <= 0.0f && border.z <= 0.0f && border.w <= 0.0f)
+                {
+                    return;
+                }
             }
 
             image.type = Image.Type.Sliced;
@@ -4311,7 +4439,158 @@
         }
 
         /// <summary>
-        /// Resolves a PSD 9-slice tag into Unity's sprite-border order.
+        /// Validates every Common_* import contract before generated output is
+        /// changed, so a missing public asset cannot create a partial prefab.
+        /// </summary>
+        private static void ValidateCommonLibraryReferences(IEnumerable<Layer> layers)
+        {
+            foreach (Layer layer in layers)
+            {
+                PsdCommonAssetReference reference;
+                if (PsdCommonAssetNameParser.TryParse(layer.Name, out reference))
+                {
+                    if (reference.Kind == PsdCommonAssetKind.Texture && layer.Children.Count > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Common_Texture_ layers must be leaf art layers. Invalid layer: " + DescribeLayerForLog(layer));
+                    }
+
+                    UnityEngine.Object asset;
+                    string error;
+                    if (!PsdCommonAssetResolver.TryResolve(reference, out asset, out error))
+                    {
+                        throw new InvalidOperationException(error + " Layer: " + DescribeLayerForLog(layer));
+                    }
+
+                    // A common prefab replaces the complete PSD subtree; its
+                    // child names are implementation details of the source PSD
+                    // and must not be independently validated or emitted.
+                    if (reference.Kind == PsdCommonAssetKind.Prefab)
+                    {
+                        continue;
+                    }
+                }
+
+                if (layer.Children != null && layer.Children.Count > 0)
+                {
+                    ValidateCommonLibraryReferences(layer.Children);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Creates the runtime representation for a hard Common_* PSD rule and
+        /// intentionally suppresses normal PNG export for the layer subtree.
+        /// </summary>
+        private static void ExportCommonLayer(
+            Layer layer,
+            LayerImportInfo info,
+            PsdCommonAssetReference reference)
+        {
+            if (!(LayoutInScene || CreatePrefab) || !info.EffectiveVisible)
+            {
+                PsdLogger.Info("Skip hidden Common layer runtime output: " + DescribeLayerForLog(layer));
+                return;
+            }
+
+            UnityEngine.Object asset;
+            string error;
+            if (!PsdCommonAssetResolver.TryResolve(reference, out asset, out error))
+            {
+                throw new InvalidOperationException(error + " Layer: " + DescribeLayerForLog(layer));
+            }
+
+            if (reference.Kind == PsdCommonAssetKind.Prefab)
+            {
+                GameObject prefab = asset as GameObject;
+                if (prefab == null)
+                {
+                    throw new InvalidOperationException("Resolved Common Prefab is not a GameObject: " + reference.Key);
+                }
+
+                CreateCommonPrefabInstance(layer, info, prefab);
+                return;
+            }
+
+            Sprite sprite = asset as Sprite;
+            if (sprite == null)
+            {
+                throw new InvalidOperationException("Resolved Common Texture is not a Sprite: " + reference.Key);
+            }
+
+            if (UseUnityUI)
+            {
+                CreateCommonUIImage(layer, info, sprite);
+            }
+            else
+            {
+                CreateCommonSpriteGameObject(layer, sprite);
+            }
+        }
+
+        private static void CreateCommonPrefabInstance(Layer layer, LayerImportInfo info, GameObject prefab)
+        {
+            GameObject instance = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
+            if (instance == null)
+            {
+                throw new InvalidOperationException("Unable to instantiate Common Prefab: " + prefab.name);
+            }
+
+            instance.name = GetRuntimeObjectName(layer);
+            if (UseUnityUI)
+            {
+                RectTransform rectTransform = instance.GetComponent<RectTransform>();
+                if (rectTransform == null)
+                {
+                    UnityEngine.Object.DestroyImmediate(instance);
+                    throw new InvalidOperationException("Common Prefab must have a RectTransform when Use Unity UI is enabled: " + prefab.name);
+                }
+
+                rectTransform.SetParent(currentGroupGameObject.transform, false);
+                ApplyLayerUILayout(rectTransform, layer, info.AnchorPreset);
+                return;
+            }
+
+            instance.transform.SetParent(currentGroupGameObject.transform, false);
+            ApplyCommonWorldPosition(instance.transform, layer);
+        }
+
+        private static void CreateCommonUIImage(Layer layer, LayerImportInfo info, Sprite sprite)
+        {
+            GameObject uiObject = new GameObject(GetRuntimeObjectName(layer), typeof(RectTransform));
+            uiObject.transform.SetParent(currentGroupGameObject.transform, false);
+            RectTransform transform = uiObject.GetComponent<RectTransform>();
+            ApplyLayerUILayout(transform, layer, info.AnchorPreset);
+
+            Image image = uiObject.AddComponent<Image>();
+            image.sprite = sprite;
+            ApplyImageLayoutBehavior(image, info.AnchorPreset);
+        }
+
+        private static void CreateCommonSpriteGameObject(Layer layer, Sprite sprite)
+        {
+            GameObject gameObject = new GameObject(GetRuntimeObjectName(layer));
+            gameObject.transform.SetParent(currentGroupGameObject.transform, false);
+            ApplyCommonWorldPosition(gameObject.transform, layer);
+
+            SpriteRenderer spriteRenderer = gameObject.AddComponent<SpriteRenderer>();
+            spriteRenderer.sprite = sprite;
+            spriteRenderer.sortingOrder = currentSortingOrder++;
+        }
+
+        private static void ApplyCommonWorldPosition(Transform transform, Layer layer)
+        {
+            float x = layer.Rect.x / PixelsToUnits;
+            float y = (CanvasSize.y - layer.Rect.y) / PixelsToUnits;
+            float width = layer.Rect.width / PixelsToUnits;
+            float height = layer.Rect.height / PixelsToUnits;
+            transform.localPosition = new Vector3(x + (width / 2f), y - (height / 2f), currentDepth);
+            currentDepth -= depthStep;
+        }
+
+        /// <summary>
+        /// Resolves embedded 9-slice metadata, then falls back to the legacy
+        /// PSD layer-name tag for documents written by older plugin versions.
         /// </summary>
         /// <param name="layer">PSD layer.</param>
         /// <param name="border">Unity border in left, bottom, right, top order.</param>
@@ -4319,7 +4598,30 @@
         private static bool TryGetNineSliceBorder(Layer layer, out Vector4 border)
         {
             border = Vector4.zero;
-            if (layer == null || string.IsNullOrEmpty(layer.Name))
+            if (layer == null)
+            {
+                return false;
+            }
+
+            if (currentAutomaticNineSliceBordersByLayer != null &&
+                currentAutomaticNineSliceBordersByLayer.TryGetValue(layer, out border))
+            {
+                return IsNineSliceBorderValid(layer, border, "PSD name auto-analysis");
+            }
+
+            if (layer.Id != 0U &&
+                currentNineSliceBordersByLayerId != null &&
+                currentNineSliceBordersByLayerId.TryGetValue(layer.Id, out border))
+            {
+                return IsNineSliceBorderValid(layer, border, "embedded XMP");
+            }
+
+            if (useEmbeddedNineSliceMetadata)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(layer.Name))
             {
                 return false;
             }
@@ -4342,17 +4644,131 @@
                 return false;
             }
 
+            border = new Vector4(left, bottom, right, top);
+            return IsNineSliceBorderValid(layer, border, "layer-name fallback: " + match.Value);
+        }
+
+        /// <summary>
+        /// Resolves the automatic PNG conversion requested by an embedded
+        /// border, legacy explicit name tag, or the new bare name tags.
+        /// </summary>
+        private static bool TryGetNineSliceConversionRule(Layer layer, out PsdNineSliceNameRule rule)
+        {
+            rule = null;
+            Vector4 explicitBorder;
+            if (TryGetNineSliceBorder(layer, out explicitBorder))
+            {
+                rule = new PsdNineSliceNameRule(
+                    PsdNineSliceMode.NineSlice,
+                    new PsdNineSliceBorder(
+                        Mathf.RoundToInt(explicitBorder.x),
+                        Mathf.RoundToInt(explicitBorder.w),
+                        Mathf.RoundToInt(explicitBorder.z),
+                        Mathf.RoundToInt(explicitBorder.y)));
+                return true;
+            }
+
+            return layer != null && PsdNineSliceNameRules.TryParse(layer.Name, out rule);
+        }
+
+        private static void RegisterAutomaticNineSliceBorder(Layer layer, Vector4 border)
+        {
+            if (layer == null)
+            {
+                return;
+            }
+
+            if (currentAutomaticNineSliceBordersByLayer == null)
+            {
+                currentAutomaticNineSliceBordersByLayer = new Dictionary<Layer, Vector4>();
+            }
+
+            currentAutomaticNineSliceBordersByLayer[layer] = border;
+        }
+
+        private static void ClearAutomaticNineSliceBorder(Layer layer)
+        {
+            if (layer != null && currentAutomaticNineSliceBordersByLayer != null)
+            {
+                currentAutomaticNineSliceBordersByLayer.Remove(layer);
+            }
+        }
+
+        /// <summary>
+        /// Reads per-layer 9-slice values from the PSD's embedded XMP manifest.
+        /// The Photoshop layer ID is the stable join key between this metadata and
+        /// the native layer records used by the texture exporter.
+        /// </summary>
+        /// <param name="manifest">Optional embedded PSD layout manifest.</param>
+        private static void ConfigureEmbeddedNineSliceBorders(PsdEmbeddedLayoutManifest manifest)
+        {
+            if (currentNineSliceBordersByLayerId == null)
+            {
+                currentNineSliceBordersByLayerId = new Dictionary<uint, Vector4>();
+            }
+
+            currentNineSliceBordersByLayerId.Clear();
+            useEmbeddedNineSliceMetadata = manifest != null &&
+                manifest.IsUsable &&
+                manifest.nineSliceSchemaVersion >= 1;
+            if (manifest == null || !manifest.IsUsable || manifest.layers == null)
+            {
+                return;
+            }
+
+            foreach (PsdEmbeddedLayoutLayer sourceLayer in manifest.layers)
+            {
+                if (sourceLayer == null || sourceLayer.nineSlice == null || !sourceLayer.nineSlice.enabled)
+                {
+                    continue;
+                }
+
+                uint layerId;
+                if (!uint.TryParse(
+                        sourceLayer.layerId,
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out layerId) ||
+                    layerId == 0U)
+                {
+                    PsdLogger.Warning("Ignore embedded 9-slice data with invalid layerId: " + sourceLayer.layerId);
+                    continue;
+                }
+
+                currentNineSliceBordersByLayerId[layerId] = new Vector4(
+                    sourceLayer.nineSlice.left,
+                    sourceLayer.nineSlice.bottom,
+                    sourceLayer.nineSlice.right,
+                    sourceLayer.nineSlice.top);
+            }
+
+            if (currentNineSliceBordersByLayerId.Count > 0)
+            {
+                PsdLogger.Info(
+                    "Loaded embedded 9-slice data for " +
+                    currentNineSliceBordersByLayerId.Count + " PSD layer(s).");
+            }
+        }
+
+        /// <summary>
+        /// Validates Unity-order border values against one native PSD layer.
+        /// </summary>
+        /// <param name="layer">PSD layer receiving the border.</param>
+        /// <param name="border">Border in left, bottom, right, top order.</param>
+        /// <param name="source">Human-readable metadata source for diagnostics.</param>
+        /// <returns>True when the border can be applied to the layer texture.</returns>
+        private static bool IsNineSliceBorderValid(Layer layer, Vector4 border, string source)
+        {
             if (layer.Rect.width <= 0f || layer.Rect.height <= 0f ||
-                left < 0f || top < 0f || right < 0f || bottom < 0f ||
-                left + right > layer.Rect.width || top + bottom > layer.Rect.height)
+                border.x < 0f || border.y < 0f || border.z < 0f || border.w < 0f ||
+                border.x + border.z > layer.Rect.width || border.y + border.w > layer.Rect.height)
             {
                 PsdLogger.Warning(
                     "Ignore invalid 9-slice border for layer: " + DescribeLayerForLog(layer) +
-                    ", tag=" + match.Value);
+                    ", source=" + source + ", border=" + border);
                 return false;
             }
 
-            border = new Vector4(left, bottom, right, top);
             return true;
         }
 

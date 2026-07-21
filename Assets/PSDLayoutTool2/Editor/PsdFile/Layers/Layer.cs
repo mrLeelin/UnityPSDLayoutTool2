@@ -52,6 +52,7 @@
             Children = new List<Layer>();
             PsdFile = psdFile;
             SectionType = -1;
+            Id = 0U;
 
             // read the rect
             Rect rect = new Rect();
@@ -144,12 +145,28 @@
                     BinaryReverseReader dataReader = adjustmentLayerInfo.DataReader;
                     SectionType = dataReader.ReadInt32();
                 }
+                else if (adjustmentLayerInfo.Key == "lyid")
+                {
+                    // Photoshop stores its stable layer identity in a four-byte
+                    // big-endian additional-layer-information block.
+                    BinaryReverseReader dataReader = adjustmentLayerInfo.DataReader;
+                    if (dataReader.BaseStream.Length >= sizeof(uint))
+                    {
+                        Id = dataReader.ReadUInt32();
+                    }
+                }
             }
 
             reader.BaseStream.Position = num4;
         }
 
         #region Properties
+
+        /// <summary>
+        /// Gets the Photoshop layer ID from the <c>lyid</c> additional layer
+        /// information block. A value of zero means the PSD did not contain it.
+        /// </summary>
+        public uint Id { get; private set; }
 
         #region Text Layer Properties
 

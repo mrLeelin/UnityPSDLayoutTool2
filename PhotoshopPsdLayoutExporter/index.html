@@ -3,15 +3,38 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    body { font-family: sans-serif; padding: 12px; }
+    body { font-family: sans-serif; padding: 12px; color: #f2f2f2; }
+    h3 { margin: 0 0 10px; }
     button { width: 100%; margin: 6px 0; }
+    fieldset { border: 1px solid #666; margin: 10px 0; padding: 10px; }
+    legend { color: #ddd; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+    label { display: flex; align-items: center; gap: 6px; color: #ddd; }
+    input[type="number"] { width: 100%; box-sizing: border-box; }
+    #selected-layer { color: #8ecaff; margin: 6px 0; overflow-wrap: anywhere; }
     #status { white-space: pre-wrap; color: #bbb; margin-top: 10px; }
   </style>
 </head>
 <body>
   <h3>PSD Layout Exporter</h3>
-  <button id="write-xmp">写入 PSD 内嵌布局数据</button>
-  <div id="status">请选择一个已保存的 PSD 文件。</div>
+  <div id="selected-layer">Select one Photoshop layer.</div>
+
+  <fieldset>
+    <legend>9-slice (PSD pixels)</legend>
+    <label><input id="nine-slice-enabled" type="checkbox"> Enable 9-slice for selected layer</label>
+    <div class="grid">
+      <label>Left <input id="nine-slice-left" type="number" min="0" step="0.01" value="0"></label>
+      <label>Top <input id="nine-slice-top" type="number" min="0" step="0.01" value="0"></label>
+      <label>Right <input id="nine-slice-right" type="number" min="0" step="0.01" value="0"></label>
+      <label>Bottom <input id="nine-slice-bottom" type="number" min="0" step="0.01" value="0"></label>
+    </div>
+    <button id="load-nine-slice">Load selected layer settings</button>
+    <button id="auto-nine-slice">Auto-calculate candidate from layer pixels</button>
+    <button id="apply-nine-slice">Apply selected layer and write PSD metadata</button>
+  </fieldset>
+
+  <button id="write-xmp">Write PSD embedded layout metadata</button>
+  <div id="status">Select one saved PSD layer before applying 9-slice.</div>
   <script src="index.js"></script>
 </body>
 </html>

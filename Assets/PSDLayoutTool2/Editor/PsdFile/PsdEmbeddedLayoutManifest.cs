@@ -13,6 +13,7 @@ namespace PhotoshopFile
     {
         public string schema;
         public int schemaVersion;
+        public int nineSliceSchemaVersion;
         public string source;
         public string documentFingerprint;
         public PsdEmbeddedLayoutDocument document;
@@ -75,6 +76,7 @@ namespace PhotoshopFile
         public float opacity;
         public PsdEmbeddedLayoutBounds bounds;
         public PsdEmbeddedLayoutText text;
+        public PsdEmbeddedLayoutNineSlice nineSlice;
         public string fingerprint;
     }
 
@@ -96,5 +98,15 @@ namespace PhotoshopFile
         public float fontSize;
         public string fontName;
         public string justification;
+    }
+
+    [Serializable]
+    public sealed class PsdEmbeddedLayoutNineSlice
+    {
+        public bool enabled;
+        public float left;
+        public float top;
+        public float right;
+        public float bottom;
     }
 }

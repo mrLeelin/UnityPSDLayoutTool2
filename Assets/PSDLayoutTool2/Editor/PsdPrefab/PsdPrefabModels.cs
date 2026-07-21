@@ -31,6 +31,7 @@ namespace PsdLayoutTool2
         public string contentFingerprint;
         public string assetFingerprint;
         public PsdPrefabTextModel text;
+        public PsdPrefabNineSliceModel nineSlice;
     }
 
     /// <summary>文字内容和可渲染样式的中间表示。</summary>
@@ -43,6 +44,16 @@ namespace PsdLayoutTool2
         public Color fillColor = Color.white;
         public float lineHeight;
         public PsdPrefabTextEffectModel effect = new PsdPrefabTextEffectModel();
+    }
+
+    /// <summary>图片九宫格边距，顺序为 PSD 约定的左、上、右、下像素。</summary>
+    [Serializable]
+    public sealed class PsdPrefabNineSliceModel
+    {
+        public float left;
+        public float top;
+        public float right;
+        public float bottom;
     }
 
     /// <summary>TMP 材质需要的描边和阴影参数。</summary>
