@@ -2,6 +2,7 @@
 {
     using System;
     using System.Collections.Generic;
+    using System.Globalization;
     using System.IO;
     using System.Linq;
     using System.Text;
@@ -158,6 +159,14 @@
             "LPT8",
             "LPT9"
         };
+
+        /// <summary>
+        /// Parses the PSD authoring tag in the order left, top, right, bottom.
+        /// Both pipe tags and bracket tags are accepted so older PSD naming
+        /// conventions can remain stable.
+        /// </summary>
+        private const string NineSliceTagPattern =
+            @"(?:\|9slice\s*=\s*|\[9slice\s*:\s*)([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*\]?";
 
         /// <summary>
         /// Represents how a button-group child should be interpreted.
@@ -552,7 +561,17 @@
 
                 if (CreatePrefab)
                 {
-                    CloseTargetPrefabStageIfOpen(prefabRelativePath);
+                    if (IsTargetPrefabOpenInPrefabMode(prefabRelativePath))
+                    {
+                        SchedulePrefabModeExitAndResumeImport(
+                            asset,
+                            forcedSelection,
+                            skipConflictPrompt,
+                            prefabRelativePath);
+                        sessionResult = "Waiting for target Prefab Mode to close";
+                        currentLayerInfos = null;
+                        return;
+                    }
                 }
 
                 PsdLogger.Step("Build layer tree");
@@ -997,6 +1016,48 @@
             string prefabFullPath = NormalizePath(
                 Path.Combine(GetFullProjectPath(), prefabRelativePath.Replace('/', Path.DirectorySeparatorChar)));
             return ShouldOverwriteExistingGeneratedFile(prefabFullPath);
+        }
+
+        /// <summary>
+        /// Checks whether the Prefab that will be overwritten is the active Prefab stage.
+        /// </summary>
+        /// <param name="prefabRelativePath">Prefab path relative to the project.</param>
+        /// <returns>True when the target Prefab is currently open in Prefab Mode.</returns>
+        private static bool IsTargetPrefabOpenInPrefabMode(string prefabRelativePath)
+        {
+            if (string.IsNullOrEmpty(prefabRelativePath))
+            {
+                return false;
+            }
+
+            PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (prefabStage == null || string.IsNullOrEmpty(prefabStage.assetPath))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                NormalizePath(prefabStage.assetPath),
+                NormalizePath(prefabRelativePath),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Defers Prefab Mode exit until after the current Inspector callback returns, then
+        /// resumes the import after Unity has completed the stage transition.
+        /// </summary>
+        /// <param name="prefabRelativePath">Prefab path relative to the project.</param>
+        private static void SchedulePrefabModeExitAndResumeImport(
+            string asset,
+            ImportConflictSelection forcedSelection,
+            bool skipConflictPrompt,
+            string prefabRelativePath)
+        {
+            EditorApplication.delayCall += () =>
+            {
+                CloseTargetPrefabStageIfOpen(prefabRelativePath);
+                EditorApplication.delayCall += () => Import(asset, forcedSelection, skipConflictPrompt);
+            };
         }
 
         /// <summary>
@@ -1928,13 +1989,28 @@
         /// <returns>Sanitized stable name.</returns>
         private static string SanitizeStableName(string name, string fallbackName)
         {
-            string safeName = MakeNameSafeSilently(string.IsNullOrWhiteSpace(name) ? fallbackName : name.Trim());
+            string sourceName = string.IsNullOrWhiteSpace(name) ? fallbackName : name.Trim();
+            sourceName = RemoveNineSliceTag(sourceName);
+            string safeName = MakeNameSafeSilently(sourceName);
             if (string.IsNullOrWhiteSpace(safeName))
             {
                 safeName = MakeNameSafeSilently(fallbackName);
             }
 
             return string.IsNullOrWhiteSpace(safeName) ? fallbackName : safeName;
+        }
+
+        /// <summary>
+        /// Removes the optional 9-slice authoring tag before creating stable
+        /// runtime names and generated asset paths.
+        /// </summary>
+        /// <param name="name">Raw PSD layer name.</param>
+        /// <returns>Name without the 9-slice tag.</returns>
+        private static string RemoveNineSliceTag(string name)
+        {
+            return string.IsNullOrEmpty(name)
+                ? string.Empty
+                : Regex.Replace(name, NineSliceTagPattern, string.Empty, RegexOptions.IgnoreCase);
         }
 
         /// <summary>
@@ -3299,7 +3375,7 @@
             string file = CreatePNG(layer, true);
             if (!string.IsNullOrEmpty(file) && (LayoutInScene || CreatePrefab))
             {
-                ImportSprite(GetRelativePath(file), PsdName);
+                ImportSprite(GetRelativePath(file), PsdName, layer);
             }
         }
 
@@ -3328,7 +3404,7 @@
                 string file = CreatePNG(layer);
                 if (!string.IsNullOrEmpty(file))
                 {
-                    sprite = ImportSprite(GetRelativePath(file), packingTag);
+                    sprite = ImportSprite(GetRelativePath(file), packingTag, layer);
                 }
             }
 
@@ -3340,8 +3416,9 @@
         /// </summary>
         /// <param name="relativePathToSprite">The path to the sprite, relative to the Unity project "Assets/Textures/texture.png".</param>
         /// <param name="packingTag">The tag to use for Unity's atlas packing.</param>
+        /// <param name="layer">The PSD layer that owns the generated texture.</param>
         /// <returns>The imported image as a <see cref="Sprite"/> object.</returns>
-        private static Sprite ImportSprite(string relativePathToSprite, string packingTag)
+        private static Sprite ImportSprite(string relativePathToSprite, string packingTag, Layer layer)
         {
             _ = packingTag;
             relativePathToSprite = relativePathToSprite.Replace('\\', '/');
@@ -3359,6 +3436,23 @@
                 textureImporter.spritePivot = new Vector2(0.5f, 0.5f);
                 textureImporter.maxTextureSize = 2048;
                 textureImporter.spritePixelsPerUnit = PixelsToUnits;
+
+                Vector4 nineSliceBorder;
+                if (TryGetNineSliceBorder(layer, out nineSliceBorder))
+                {
+                    // Unity expects (left, bottom, right, top), while the PSD
+                    // tag uses the more author-friendly (left, top, right, bottom).
+                    textureImporter.spriteBorder = nineSliceBorder;
+                    PsdLogger.Info(
+                        "Apply 9-slice border (left,bottom,right,top)=" +
+                        nineSliceBorder + ": " + relativePathToSprite);
+                }
+                else
+                {
+                    // Clear a previous border when the tag is removed during an
+                    // incremental PSD update.
+                    textureImporter.spriteBorder = Vector4.zero;
+                }
             }
             else
             {
@@ -3735,6 +3829,7 @@
             Image uiImage = uiObject.AddComponent<Image>();
             uiImage.sprite = CreateSprite(layer);
             ApplyImageLayoutBehavior(uiImage, preset);
+            ApplyNineSliceImageBehavior(uiImage, layer);
             return uiImage;
         }
 
@@ -3768,21 +3863,7 @@
             textUI.font = font;
 
             float fontSize = GetUIFontSize(layer);
-            float ceiling = Mathf.Ceil(fontSize);
-            if (fontSize > 0f && fontSize < ceiling)
-            {
-                textUI.fontSize = (int)ceiling;
-                if (!IsGlobalAnchorPreset(preset))
-                {
-                    float scaleFactor = ceiling / fontSize;
-                    textUI.rectTransform.sizeDelta *= scaleFactor;
-                    textUI.rectTransform.localScale /= scaleFactor;
-                }
-            }
-            else
-            {
-                textUI.fontSize = Mathf.Max(1, (int)ceiling);
-            }
+            textUI.fontSize = Mathf.Max(1, Mathf.RoundToInt(fontSize));
 
             textUI.color = color;
             textUI.alignment = TextAnchor.MiddleCenter;
@@ -3817,8 +3898,7 @@
             TextMeshProUGUI textUI = uiObject.AddComponent<TextMeshProUGUI>();
             textUI.text = layer.Text ?? string.Empty;
             textUI.font = TextMeshProFont != null ? TextMeshProFont : TMP_Settings.defaultFontAsset;
-            textUI.fontSize = Mathf.Max(1f, layer.FontSize);
-            float visualScale = GetTextMeshProVisualScale();
+            textUI.fontSize = Mathf.Max(1f, GetUIFontSize(layer));
             textUI.color = ApplyLayerOpacity(layer.FillColor, layer);
             textUI.enableWordWrapping = false;
             textUI.overflowMode = TextOverflowModes.Overflow;
@@ -3846,55 +3926,44 @@
             }
 
             ApplyTextMeshProLineHeight(textUI, layer);
-            ApplyTextMeshProPsdBoundsScale(textUI, layer, visualScale);
+            ApplyTextMeshProPsdBoundsFontSize(textUI, layer);
         }
 
         /// <summary>
-        /// Gets the visual scale for a TMP node without changing its PSD-authored font size.
-        /// </summary>
-        /// <returns>Scale used to map PSD pixels to the generated UI coordinate space.</returns>
-        private static float GetTextMeshProVisualScale()
-        {
-            if (UseTargetCanvasCoordinates)
-            {
-                return GetTargetCanvasUniformScale();
-            }
-
-            return 1f / Mathf.Max(0.0001f, PixelsToUnits);
-        }
-
-        /// <summary>
-        /// Fits TMP's measured glyph bounds to the PSD text layer bounds.
-        /// Photoshop's font size and TMP's glyph metrics are not guaranteed to have
-        /// identical ascent, descent, and atlas padding, so matching only fontSize
-        /// can still produce visibly oversized text.
+        /// Fits TMP's font size to the PSD text layer bounds without changing the
+        /// RectTransform scale. Photoshop and TMP use different glyph metrics, so the
+        /// PSD-authored size is used as the starting point and then corrected through
+        /// TMP's measured preferred size.
         /// </summary>
         /// <param name="textUI">Generated TMP component.</param>
         /// <param name="layer">Source PSD text layer.</param>
-        /// <param name="baseScale">PSD-to-UI coordinate scale.</param>
-        private static void ApplyTextMeshProPsdBoundsScale(
-            TextMeshProUGUI textUI,
-            Layer layer,
-            float baseScale)
+        private static void ApplyTextMeshProPsdBoundsFontSize(TextMeshProUGUI textUI, Layer layer)
         {
-            if (textUI == null || layer == null || baseScale <= 0f)
+            if (textUI == null || layer == null || textUI.fontSize <= 0f)
             {
                 return;
             }
 
             textUI.ForceMeshUpdate(true, true);
-            Vector2 preferredSize = textUI.GetPreferredValues(textUI.text, float.PositiveInfinity, float.PositiveInfinity);
+            Vector2 preferredSize = textUI.GetPreferredValues(
+                textUI.text,
+                float.PositiveInfinity,
+                float.PositiveInfinity);
             Vector2 targetSize = textUI.rectTransform.rect.size;
             if (preferredSize.x <= 0f || preferredSize.y <= 0f || targetSize.x <= 0f || targetSize.y <= 0f)
             {
-                textUI.rectTransform.localScale = Vector3.one * baseScale;
                 return;
             }
 
-            float widthScale = targetSize.x / preferredSize.x;
-            float heightScale = targetSize.y / preferredSize.y;
-            float fittedScale = Mathf.Min(widthScale, heightScale);
-            textUI.rectTransform.localScale = Vector3.one * Mathf.Max(0.0001f, fittedScale);
+            float fittedRatio = Mathf.Min(
+                targetSize.x / preferredSize.x,
+                targetSize.y / preferredSize.y);
+            if (fittedRatio <= 0f || Mathf.Approximately(fittedRatio, 1f))
+            {
+                return;
+            }
+
+            textUI.fontSize = Mathf.Max(1f, textUI.fontSize * fittedRatio);
         }
 
         private static TextAlignmentOptions GetTextMeshProAlignment(TextJustification justification)
@@ -4053,6 +4122,7 @@
                 {
                     image.sprite = CreateSprite(child);
                     ApplyImageLayoutBehavior(image, buttonPreset);
+                    ApplyNineSliceImageBehavior(image, child);
                     button.targetGraphic = image;
                 }
                 else if (childInfo.ButtonRole == ButtonChildRole.TextImage)
@@ -4182,6 +4252,8 @@
                 return;
             }
 
+            image.type = Image.Type.Simple;
+            image.fillCenter = true;
             image.preserveAspect = true;
 
             AspectRatioFitter fitter = image.GetComponent<AspectRatioFitter>();
@@ -4202,6 +4274,86 @@
 
             fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
             fitter.aspectRatio = image.sprite.rect.width / image.sprite.rect.height;
+        }
+
+        /// <summary>
+        /// Applies Figma-style 9-slice behavior to a generated UI image.
+        /// Corners keep their source size, edges stretch on one axis, and the
+        /// center stretches on both axes.  The sprite importer already carries
+        /// the matching pixel border before this method is called.
+        /// </summary>
+        /// <param name="image">Generated UI image.</param>
+        /// <param name="layer">PSD layer that authored the 9-slice tag.</param>
+        private static void ApplyNineSliceImageBehavior(Image image, Layer layer)
+        {
+            if (image == null || image.sprite == null)
+            {
+                return;
+            }
+
+            Vector4 border;
+            if (!TryGetNineSliceBorder(layer, out border))
+            {
+                return;
+            }
+
+            image.type = Image.Type.Sliced;
+            image.fillCenter = true;
+            image.preserveAspect = false;
+
+            // AspectRatioFitter would force the whole image to keep its aspect
+            // ratio and would therefore defeat independent 9-slice stretching.
+            AspectRatioFitter fitter = image.GetComponent<AspectRatioFitter>();
+            if (fitter != null)
+            {
+                UnityEngine.Object.DestroyImmediate(fitter);
+            }
+        }
+
+        /// <summary>
+        /// Resolves a PSD 9-slice tag into Unity's sprite-border order.
+        /// </summary>
+        /// <param name="layer">PSD layer.</param>
+        /// <param name="border">Unity border in left, bottom, right, top order.</param>
+        /// <returns>True when the layer has a valid 9-slice tag.</returns>
+        private static bool TryGetNineSliceBorder(Layer layer, out Vector4 border)
+        {
+            border = Vector4.zero;
+            if (layer == null || string.IsNullOrEmpty(layer.Name))
+            {
+                return false;
+            }
+
+            Match match = Regex.Match(layer.Name, NineSliceTagPattern, RegexOptions.IgnoreCase);
+            if (!match.Success || match.Groups.Count < 5)
+            {
+                return false;
+            }
+
+            float left;
+            float top;
+            float right;
+            float bottom;
+            if (!float.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out left) ||
+                !float.TryParse(match.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out top) ||
+                !float.TryParse(match.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out right) ||
+                !float.TryParse(match.Groups[4].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out bottom))
+            {
+                return false;
+            }
+
+            if (layer.Rect.width <= 0f || layer.Rect.height <= 0f ||
+                left < 0f || top < 0f || right < 0f || bottom < 0f ||
+                left + right > layer.Rect.width || top + bottom > layer.Rect.height)
+            {
+                PsdLogger.Warning(
+                    "Ignore invalid 9-slice border for layer: " + DescribeLayerForLog(layer) +
+                    ", tag=" + match.Value);
+                return false;
+            }
+
+            border = new Vector4(left, bottom, right, top);
+            return true;
         }
 
         /// <summary>
