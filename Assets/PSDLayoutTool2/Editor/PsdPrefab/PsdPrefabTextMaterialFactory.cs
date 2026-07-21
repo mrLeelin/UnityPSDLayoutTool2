@@ -1,6 +1,7 @@
 namespace PsdLayoutTool2
 {
     using System;
+    using System.IO;
     using TMPro;
     using UnityEditor;
     using UnityEngine;
@@ -109,16 +110,16 @@ namespace PsdLayoutTool2
                 throw new InvalidOperationException("TMP material output must be inside the Assets folder: " + assetFolder);
             }
 
-            string current = parts[0];
-            for (int index = 1; index < parts.Length; index++)
-            {
-                string next = current + "/" + parts[index];
-                if (!AssetDatabase.IsValidFolder(next))
-                {
-                    AssetDatabase.CreateFolder(current, parts[index]);
-                }
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            string absoluteFolder = Path.Combine(
+                projectRoot,
+                assetFolder.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(absoluteFolder);
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
-                current = next;
+            if (!AssetDatabase.IsValidFolder(assetFolder))
+            {
+                throw new InvalidOperationException("Unity did not register TMP material output folder: " + assetFolder);
             }
         }
 
