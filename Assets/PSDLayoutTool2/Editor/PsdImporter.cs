@@ -9,6 +9,7 @@
     using PhotoshopFile;
     using UnityEditor;
     using UnityEditorInternal;
+    using UnityEditor.SceneManagement;
     using UnityEngine;
     using UnityEngine.EventSystems;
     using UnityEngine.UI;
@@ -549,6 +550,11 @@
                     PsdLogger.Info("Prefab path: " + prefabRelativePath);
                 }
 
+                if (CreatePrefab)
+                {
+                    CloseTargetPrefabStageIfOpen(prefabRelativePath);
+                }
+
                 PsdLogger.Step("Build layer tree");
                 List<Layer> tree = BuildLayerTree(psd.Layers) ?? new List<Layer>();
                 currentLayerInfos = BuildLayerImportInfoMap(tree);
@@ -991,6 +997,40 @@
             string prefabFullPath = NormalizePath(
                 Path.Combine(GetFullProjectPath(), prefabRelativePath.Replace('/', Path.DirectorySeparatorChar)));
             return ShouldOverwriteExistingGeneratedFile(prefabFullPath);
+        }
+
+        /// <summary>
+        /// Exits the target Prefab Mode before the importer overwrites the generated Prefab.
+        /// PSD is the source of truth, so staged Prefab edits are discarded deliberately.
+        /// </summary>
+        /// <param name="prefabRelativePath">Prefab path relative to the project.</param>
+        private static void CloseTargetPrefabStageIfOpen(string prefabRelativePath)
+        {
+            if (string.IsNullOrEmpty(prefabRelativePath))
+            {
+                return;
+            }
+
+            PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (prefabStage == null || string.IsNullOrEmpty(prefabStage.assetPath))
+            {
+                return;
+            }
+
+            bool isTargetPrefab = string.Equals(
+                NormalizePath(prefabStage.assetPath),
+                NormalizePath(prefabRelativePath),
+                StringComparison.OrdinalIgnoreCase);
+            if (!isTargetPrefab)
+            {
+                return;
+            }
+
+            // Prevent Unity from opening its unsaved-stage confirmation dialog while leaving
+            // Prefab Mode. The next import writes a fresh PSD-authoritative Prefab to disk.
+            prefabStage.ClearDirtiness();
+            StageUtility.GoToMainStage();
+            PsdLogger.Info("Closed target Prefab Mode before overwrite: " + prefabRelativePath);
         }
 
         /// <summary>
@@ -2795,27 +2835,19 @@
         /// <summary>
         /// Returns true if the given <see cref="Layer"/> is marking the start of a layer group.
         /// Uses the 'lsct' section divider tag when available (type 1 or 2); falls back to the
-        /// pixel-data-irrelevant flag when the lsct tag indicates "other" (type 0) or is absent
-        /// (older PSD files). Only type 3 (bounding) definitively excludes a group start.
+        /// pixel-data-irrelevant flag for all other cases (original behaviour).
         /// </summary>
         /// <param name="layer">The <see cref="Layer"/> to check if it's the start of a group</param>
         /// <returns>True if the layer starts a group, otherwise false.</returns>
         private static bool IsStartGroup(Layer layer)
         {
-            if (layer.IsGroupStart)
-            {
-                return true;
-            }
-
-            // SectionType 3 (bounding) is a group end — cannot be a group start.
-            if (layer.SectionType == 3)
+            // SectionType 3 (bounding) marks the end of a group, never a start.
+            if (layer.IsGroupEnd)
             {
                 return false;
             }
 
-            // SectionType 0 (other) or -1 (no tag): fall back to the
-            // pixel-data-irrelevant flag (original behaviour for old PSD files).
-            return layer.IsPixelDataIrrelevant;
+            return layer.IsGroupStart || layer.IsPixelDataIrrelevant;
         }
 
         /// <summary>
@@ -2825,8 +2857,7 @@
         /// <returns>True if the layer ends a group, otherwise false.</returns>
         private static bool IsEndGroup(Layer layer)
         {
-            return layer.IsGroupEnd ||
-                layer.Name.Contains("</Layer set>") ||
+            return layer.Name.Contains("</Layer set>") ||
                 layer.Name.Contains("</Layer group>") ||
                 (layer.Name == " copy" && layer.Rect.height == 0);
         }
@@ -3786,7 +3817,8 @@
             TextMeshProUGUI textUI = uiObject.AddComponent<TextMeshProUGUI>();
             textUI.text = layer.Text ?? string.Empty;
             textUI.font = TextMeshProFont != null ? TextMeshProFont : TMP_Settings.defaultFontAsset;
-            textUI.fontSize = Mathf.Max(1f, GetUIFontSize(layer));
+            textUI.fontSize = Mathf.Max(1f, layer.FontSize);
+            float visualScale = GetTextMeshProVisualScale();
             textUI.color = ApplyLayerOpacity(layer.FillColor, layer);
             textUI.enableWordWrapping = false;
             textUI.overflowMode = TextOverflowModes.Overflow;
@@ -3814,6 +3846,55 @@
             }
 
             ApplyTextMeshProLineHeight(textUI, layer);
+            ApplyTextMeshProPsdBoundsScale(textUI, layer, visualScale);
+        }
+
+        /// <summary>
+        /// Gets the visual scale for a TMP node without changing its PSD-authored font size.
+        /// </summary>
+        /// <returns>Scale used to map PSD pixels to the generated UI coordinate space.</returns>
+        private static float GetTextMeshProVisualScale()
+        {
+            if (UseTargetCanvasCoordinates)
+            {
+                return GetTargetCanvasUniformScale();
+            }
+
+            return 1f / Mathf.Max(0.0001f, PixelsToUnits);
+        }
+
+        /// <summary>
+        /// Fits TMP's measured glyph bounds to the PSD text layer bounds.
+        /// Photoshop's font size and TMP's glyph metrics are not guaranteed to have
+        /// identical ascent, descent, and atlas padding, so matching only fontSize
+        /// can still produce visibly oversized text.
+        /// </summary>
+        /// <param name="textUI">Generated TMP component.</param>
+        /// <param name="layer">Source PSD text layer.</param>
+        /// <param name="baseScale">PSD-to-UI coordinate scale.</param>
+        private static void ApplyTextMeshProPsdBoundsScale(
+            TextMeshProUGUI textUI,
+            Layer layer,
+            float baseScale)
+        {
+            if (textUI == null || layer == null || baseScale <= 0f)
+            {
+                return;
+            }
+
+            textUI.ForceMeshUpdate(true, true);
+            Vector2 preferredSize = textUI.GetPreferredValues(textUI.text, float.PositiveInfinity, float.PositiveInfinity);
+            Vector2 targetSize = textUI.rectTransform.rect.size;
+            if (preferredSize.x <= 0f || preferredSize.y <= 0f || targetSize.x <= 0f || targetSize.y <= 0f)
+            {
+                textUI.rectTransform.localScale = Vector3.one * baseScale;
+                return;
+            }
+
+            float widthScale = targetSize.x / preferredSize.x;
+            float heightScale = targetSize.y / preferredSize.y;
+            float fittedScale = Mathf.Min(widthScale, heightScale);
+            textUI.rectTransform.localScale = Vector3.one * Mathf.Max(0.0001f, fittedScale);
         }
 
         private static TextAlignmentOptions GetTextMeshProAlignment(TextJustification justification)

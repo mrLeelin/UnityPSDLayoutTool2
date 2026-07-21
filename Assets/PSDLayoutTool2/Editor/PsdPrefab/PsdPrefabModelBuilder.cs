@@ -60,7 +60,7 @@ namespace PsdLayoutTool2
                 {
                     node.text = new PsdPrefabTextModel
                     {
-                        contents = source.text.contents ?? string.Empty,
+                        contents = NormalizeTextLineEndings(source.text.contents ?? string.Empty),
                         fontFamily = source.text.fontName ?? string.Empty,
                         fontSize = source.text.fontSize
                     };
@@ -197,6 +197,25 @@ namespace PsdLayoutTool2
 
                 return hash.ToString("x8");
             }
+        }
+
+        /// <summary>
+        /// Converts Photoshop's carriage-return text separators to Unity's line-feed separator.
+        /// TMP treats a standalone carriage return as a horizontal cursor reset, which makes
+        /// multiline PSD text render on top of itself instead of advancing to the next line.
+        /// </summary>
+        private static string NormalizeTextLineEndings(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return text;
+            }
+
+            return text
+                .Replace("\r\n", "\n")
+                .Replace("\r", "\n")
+                .Replace("\u2028", "\n")
+                .Replace("\u2029", "\n");
         }
     }
 }

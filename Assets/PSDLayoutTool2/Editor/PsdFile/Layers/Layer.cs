@@ -324,7 +324,7 @@
             if (TrySeekFromStart(dataReader, "/Text"))
             {
                 dataReader.ReadBytes(4); // skip space, '(', BOM
-                Text = ReadPostScriptUtf16String(dataReader);
+                Text = NormalizeTextLineEndings(ReadPostScriptUtf16String(dataReader));
             }
             else
             {
@@ -444,6 +444,25 @@
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Converts Photoshop's carriage-return text separators to Unity's line-feed separator.
+        /// TMP treats a standalone carriage return as a horizontal cursor reset, which makes
+        /// multiline PSD text render on top of itself instead of advancing to the next line.
+        /// </summary>
+        private static string NormalizeTextLineEndings(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return text;
+            }
+
+            return text
+                .Replace("\r\n", "\n")
+                .Replace("\r", "\n")
+                .Replace("\u2028", "\n")
+                .Replace("\u2029", "\n");
         }
 
         private static bool TryReadAsciiInt(BinaryReverseReader dataReader, out int value)
