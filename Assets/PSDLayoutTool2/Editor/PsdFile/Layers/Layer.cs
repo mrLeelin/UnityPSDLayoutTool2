@@ -278,58 +278,103 @@
             }
 
             // read the text layer's text string
-            dataReader.Seek("/Text");
-            dataReader.ReadBytes(4);
-            Text = dataReader.ReadString();
+            if (TrySeekFromStart(dataReader, "/Text"))
+            {
+                dataReader.ReadBytes(4);
+                Text = dataReader.ReadString();
+            }
+            else
+            {
+                Text = string.Empty;
+            }
 
             // read the text justification
-            dataReader.Seek("/Justification ");
-            int justification = dataReader.ReadByte() - 48;
             Justification = TextJustification.Left;
-            if (justification == 1)
+            if (TrySeekFromStart(dataReader, "/Justification"))
             {
-                Justification = TextJustification.Right;
-            }
-            else if (justification == 2)
-            {
-                Justification = TextJustification.Center;
+                int justification;
+                if (!TryReadAsciiInt(dataReader, out justification))
+                {
+                    justification = 0;
+                }
+
+                if (justification == 1)
+                {
+                    Justification = TextJustification.Right;
+                }
+                else if (justification == 2)
+                {
+                    Justification = TextJustification.Center;
+                }
             }
 
             // read the font size
-            dataReader.Seek("/FontSize ");
-            FontSize = dataReader.ReadFloat();
+            FontSize = 0f;
+            if (TrySeekFromStart(dataReader, "/FontSize"))
+            {
+                float fontSize;
+                if (dataReader.TryReadAsciiFloat(out fontSize))
+                {
+                    FontSize = fontSize;
+                }
+            }
             TextStyle.LineHeight = FontSize > 0f ? FontSize * 1.2f : 0f;
 
             // read the font fill color
-            dataReader.Seek("/FillColor");
-            dataReader.Seek("/Values [ ");
-            float alpha = dataReader.ReadFloat();
-            dataReader.ReadByte();
-            float red = dataReader.ReadFloat();
-            dataReader.ReadByte();
-            float green = dataReader.ReadFloat();
-            dataReader.ReadByte();
-            float blue = dataReader.ReadFloat();
-            FillColor = new Color(red * byte.MaxValue, green * byte.MaxValue, blue * byte.MaxValue, alpha * byte.MaxValue);
+            FillColor = Color.white;
+            if (TrySeekFromStart(dataReader, "/FillColor") && dataReader.TrySeek("/Values"))
+            {
+                float alpha;
+                float red;
+                float green;
+                float blue;
+                if (dataReader.TryReadAsciiFloat(out alpha) &&
+                    dataReader.TryReadAsciiFloat(out red) &&
+                    dataReader.TryReadAsciiFloat(out green) &&
+                    dataReader.TryReadAsciiFloat(out blue))
+                {
+                    FillColor = new Color(red, green, blue, alpha);
+                }
+            }
 
             // read the font name
-            dataReader.Seek("/FontSet ");
-            dataReader.Seek("/Name");
-            dataReader.ReadBytes(4);
-            FontName = dataReader.ReadString();
+            FontName = string.Empty;
+            if (TrySeekFromStart(dataReader, "/FontSet") && dataReader.TrySeek("/Name"))
+            {
+                dataReader.ReadBytes(4);
+                FontName = dataReader.ReadString();
+            }
 
             // read the warp style
-            dataReader.Seek("warpStyle");
-            dataReader.Seek("warpStyle");
-            dataReader.ReadBytes(3);
-            int num13 = dataReader.ReadByte();
             WarpStyle = string.Empty;
-
-            for (; num13 > 0; --num13)
+            if (TrySeekFromStart(dataReader, "warpStyle") && dataReader.TrySeek("warpStyle"))
             {
-                string str = WarpStyle + dataReader.ReadChar();
-                WarpStyle = str;
+                dataReader.ReadBytes(3);
+                int num13 = dataReader.ReadByte();
+                for (; num13 > 0; --num13)
+                {
+                    WarpStyle += dataReader.ReadChar();
+                }
             }
+        }
+
+        private static bool TrySeekFromStart(BinaryReverseReader dataReader, string search)
+        {
+            dataReader.BaseStream.Position = 0;
+            return dataReader.TrySeek(search);
+        }
+
+        private static bool TryReadAsciiInt(BinaryReverseReader dataReader, out int value)
+        {
+            float number;
+            value = 0;
+            if (!dataReader.TryReadAsciiFloat(out number))
+            {
+                return false;
+            }
+
+            value = Mathf.RoundToInt(number);
+            return true;
         }
 
         /// <summary>

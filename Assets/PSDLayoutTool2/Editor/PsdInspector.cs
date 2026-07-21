@@ -3,6 +3,7 @@
     using System;
     using UnityEditor;
     using UnityEngine;
+    using TMPro;
 
     /// <summary>
     /// A custom Inspector to allow PSD files to be turned into prefabs and separate textures per layer.
@@ -72,6 +73,21 @@
         /// EditorPrefs key for default global root anchoring.
         /// </summary>
         private const string RootGlobalAnchorPrefKey = "PsdLayoutTool2.RootUseGlobalAnchorByDefault";
+
+        /// <summary>
+        /// EditorPrefs key for using TextMeshProUGUI for PSD text layers.
+        /// </summary>
+        private const string TextMeshProEnabledPrefKey = "PsdLayoutTool2.UseTextMeshPro";
+
+        /// <summary>
+        /// EditorPrefs key for the selected TMP font asset path.
+        /// </summary>
+        private const string TextMeshProFontPathPrefKey = "PsdLayoutTool2.TextMeshProFontPath";
+
+        /// <summary>
+        /// EditorPrefs key for the selected TMP base material path.
+        /// </summary>
+        private const string TextMeshProBaseMaterialPathPrefKey = "PsdLayoutTool2.TextMeshProBaseMaterialPath";
 
         /// <summary>
         /// EditorPrefs key for inspector display language.
@@ -183,6 +199,17 @@
             {
                 PsdImporter.RootUseGlobalAnchorByDefault = EditorPrefs.GetBool(RootGlobalAnchorPrefKey, true);
             }
+
+            if (EditorPrefs.HasKey(TextMeshProEnabledPrefKey))
+            {
+                PsdImporter.UseTextMeshPro = EditorPrefs.GetBool(TextMeshProEnabledPrefKey, true);
+            }
+
+            string textMeshProFontPath = EditorPrefs.GetString(TextMeshProFontPathPrefKey, string.Empty);
+            PsdImporter.TextMeshProFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(textMeshProFontPath);
+
+            string textMeshProBaseMaterialPath = EditorPrefs.GetString(TextMeshProBaseMaterialPathPrefKey, string.Empty);
+            PsdImporter.TextMeshProBaseMaterial = AssetDatabase.LoadAssetAtPath<Material>(textMeshProBaseMaterialPath);
 
             if (EditorPrefs.HasKey(LanguagePrefKey))
             {
@@ -318,6 +345,38 @@
                             "开启后，最外层导入根节点会自动全拉伸到父 Canvas，四边距为 0。",
                             "When enabled, the outermost generated root stretches to the parent canvas with zero margins.");
                         PsdImporter.RootUseGlobalAnchorByDefault = EditorGUILayout.Toggle(rootGlobalLabel, PsdImporter.RootUseGlobalAnchorByDefault);
+
+                        GUIContent textMeshProEnabledLabel = LocalizedContent(
+                            "使用 TMP 文本",
+                            "Use TextMeshPro",
+                            "启用后，PSD 文字会生成 TextMeshProUGUI，并使用下面选择的 TMP_FontAsset。关闭后回退到 Unity UI Text。",
+                            "When enabled, PSD text layers use TextMeshProUGUI and the selected TMP_FontAsset. Disable to fall back to Unity UI Text.");
+                        PsdImporter.UseTextMeshPro = EditorGUILayout.Toggle(textMeshProEnabledLabel, PsdImporter.UseTextMeshPro);
+
+                        if (PsdImporter.UseTextMeshPro)
+                        {
+                            GUIContent textMeshProFontLabel = LocalizedContent(
+                                "TMP 字体资产",
+                                "TMP Font Asset",
+                                "拖入项目中的 TMP_FontAsset。留空时使用 Unity 的默认 TMP 字体。",
+                                "Assign a TMP_FontAsset from the project. Empty uses Unity's default TMP font.");
+                            PsdImporter.TextMeshProFont = (TMP_FontAsset)EditorGUILayout.ObjectField(
+                                textMeshProFontLabel,
+                                PsdImporter.TextMeshProFont,
+                                typeof(TMP_FontAsset),
+                                false);
+
+                            GUIContent textMeshProMaterialLabel = LocalizedContent(
+                                "TMP 基础材质（可选）",
+                                "TMP Base Material (Optional)",
+                                "可选。用于复制生成描边/阴影材质；留空时使用所选 TMP 字体自带材质。",
+                                "Optional base material used to create outline/shadow materials. Empty uses the selected TMP font material.");
+                            PsdImporter.TextMeshProBaseMaterial = (Material)EditorGUILayout.ObjectField(
+                                textMeshProMaterialLabel,
+                                PsdImporter.TextMeshProBaseMaterial,
+                                typeof(Material),
+                                false);
+                        }
                     }
 
                     GUIContent outputModeLabel = LocalizedContent(
@@ -353,6 +412,13 @@
                         EditorPrefs.SetBool(PreserveAspectPrefKey, PsdImporter.PreserveAspectWhenScalingToCanvas);
                         EditorPrefs.SetBool(AutoAnchorByNamePrefKey, PsdImporter.EnableAutoAnchorByName);
                         EditorPrefs.SetBool(RootGlobalAnchorPrefKey, PsdImporter.RootUseGlobalAnchorByDefault);
+                        EditorPrefs.SetBool(TextMeshProEnabledPrefKey, PsdImporter.UseTextMeshPro);
+                        EditorPrefs.SetString(
+                            TextMeshProFontPathPrefKey,
+                            PsdImporter.TextMeshProFont != null ? AssetDatabase.GetAssetPath(PsdImporter.TextMeshProFont) : string.Empty);
+                        EditorPrefs.SetString(
+                            TextMeshProBaseMaterialPathPrefKey,
+                            PsdImporter.TextMeshProBaseMaterial != null ? AssetDatabase.GetAssetPath(PsdImporter.TextMeshProBaseMaterial) : string.Empty);
                     }
 
                     EditorGUILayout.HelpBox(

@@ -12,6 +12,7 @@
     using UnityEngine;
     using UnityEngine.EventSystems;
     using UnityEngine.UI;
+    using TMPro;
 
     /// <summary>
     /// Handles all of the importing for a PSD file (exporting textures, creating prefabs, etc).
@@ -291,6 +292,7 @@
         {
             MaximumDepth = 10;
             PixelsToUnits = 100;
+            UseTextMeshPro = true;
             OutputMode = OutputDirectoryMode.PsdDirectory;
             OutputFolderName = string.Empty;
             PrefabMode = PrefabOutputMode.SiblingToOutputFolder;
@@ -314,6 +316,21 @@
         /// Gets or sets a value indicating whether to use the Unity 4.6+ UI system or not.
         /// </summary>
         public static bool UseUnityUI { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether Unity UI text layers are generated as TextMeshProUGUI.
+        /// </summary>
+        public static bool UseTextMeshPro { get; set; }
+
+        /// <summary>
+        /// Gets or sets the project-selected TMP font asset for generated PSD text.
+        /// </summary>
+        public static TMP_FontAsset TextMeshProFont { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional base TMP material used to create text-style materials.
+        /// </summary>
+        public static Material TextMeshProBaseMaterial { get; set; }
 
         /// <summary>
         /// Gets or sets the hierarchy path of the target canvas to align generated UI under.
@@ -3637,6 +3654,12 @@
             RectTransform uiTransform = uiObject.GetComponent<RectTransform>();
             ApplyLayerUILayout(uiTransform, layer, preset);
 
+            if (UseTextMeshPro)
+            {
+                CreateTextMeshProComponent(uiObject, layer, preset);
+                return;
+            }
+
             Font font = GetFontForLayer(layer);
 
             Text textUI = uiObject.AddComponent<Text>();
@@ -3681,6 +3704,94 @@
                     textUI.alignment = TextAnchor.MiddleCenter;
                     break;
             }
+        }
+
+        /// <summary>
+        /// Creates a TextMeshProUGUI component and applies the selected font and
+        /// style material. The material is cached by a stable style signature so
+        /// incremental PSD imports do not create duplicate materials.
+        /// </summary>
+        private static void CreateTextMeshProComponent(GameObject uiObject, Layer layer, AnchorNamePreset preset)
+        {
+            TextMeshProUGUI textUI = uiObject.AddComponent<TextMeshProUGUI>();
+            textUI.text = layer.Text ?? string.Empty;
+            textUI.font = TextMeshProFont != null ? TextMeshProFont : TMP_Settings.defaultFontAsset;
+            textUI.fontSize = Mathf.Max(1f, GetUIFontSize(layer));
+            textUI.color = ApplyLayerOpacity(layer.FillColor, layer);
+            textUI.enableWordWrapping = false;
+            textUI.overflowMode = TextOverflowModes.Overflow;
+            textUI.raycastTarget = false;
+            textUI.richText = false;
+            textUI.alignment = GetTextMeshProAlignment(layer.Justification);
+
+            if (textUI.font == null)
+            {
+                PsdLogger.Warning("No TMP font asset is configured and Unity has no default TMP font. layer=" + GetRuntimeObjectName(layer));
+            }
+            else
+            {
+                PsdPrefabTextModel textModel = BuildTextModel(layer);
+                string outputFolder = GetRelativePath(currentPath);
+                Material material = PsdPrefabTextMaterialFactory.GetOrCreate(
+                    textModel,
+                    textUI.font,
+                    TextMeshProBaseMaterial,
+                    outputFolder);
+                if (material != null)
+                {
+                    textUI.fontSharedMaterial = material;
+                }
+            }
+
+            ApplyTextMeshProLineHeight(textUI, layer);
+        }
+
+        private static TextAlignmentOptions GetTextMeshProAlignment(TextJustification justification)
+        {
+            switch (justification)
+            {
+                case TextJustification.Left:
+                    return TextAlignmentOptions.MidlineLeft;
+                case TextJustification.Right:
+                    return TextAlignmentOptions.MidlineRight;
+                case TextJustification.Center:
+                default:
+                    return TextAlignmentOptions.Midline;
+            }
+        }
+
+        private static void ApplyTextMeshProLineHeight(TextMeshProUGUI textUI, Layer layer)
+        {
+            if (textUI == null || layer == null || layer.TextStyle == null || layer.FontSize <= 0f)
+            {
+                return;
+            }
+
+            textUI.lineSpacing = ((layer.TextStyle.LineHeight / layer.FontSize) - 1f) * 100f;
+        }
+
+        private static PsdPrefabTextModel BuildTextModel(Layer layer)
+        {
+            PsdTextStyle style = layer.TextStyle ?? PsdTextStyle.CreateDefault(layer.FontSize);
+            return new PsdPrefabTextModel
+            {
+                contents = layer.Text ?? string.Empty,
+                fontFamily = layer.FontName ?? string.Empty,
+                fontSize = layer.FontSize,
+                fillColor = layer.FillColor,
+                lineHeight = style.LineHeight,
+                effect = new PsdPrefabTextEffectModel
+                {
+                    hasOutline = style.StrokeEnabled,
+                    outlineColor = style.StrokeColor,
+                    outlineWidth = style.StrokeWidth,
+                    hasShadow = style.ShadowEnabled,
+                    shadowColor = style.ShadowColor,
+                    shadowOffsetX = Mathf.Cos(style.ShadowAngle * Mathf.Deg2Rad) * style.ShadowDistance,
+                    shadowOffsetY = Mathf.Sin(style.ShadowAngle * Mathf.Deg2Rad) * style.ShadowDistance,
+                    shadowSoftness = style.ShadowBlur
+                }
+            };
         }
 
         /// <summary>

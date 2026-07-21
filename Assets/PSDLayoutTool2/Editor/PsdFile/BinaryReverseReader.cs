@@ -1,6 +1,7 @@
 ﻿namespace PhotoshopFile
 {
     using System;
+    using System.Globalization;
     using System.IO;
     using System.Text;
 
@@ -101,38 +102,64 @@
         }
 
         /// <summary>
-        /// Reads a floating point number from the stream.  It reads until the newline character '\n' is found.
+        /// Reads one Photoshop descriptor floating-point token from the stream.
         /// </summary>
         /// <returns>The read floating point number.</returns>
         public float ReadFloat()
         {
-            string str = string.Empty;
+            float value;
+            return TryReadAsciiFloat(out value) ? value : 0.0f;
+        }
 
-            try
+        /// <summary>
+        /// Reads one ASCII floating-point token from a Photoshop descriptor.
+        /// Photoshop separates descriptor values with spaces, brackets, commas,
+        /// and newlines; none of those are part of the numeric token.
+        /// </summary>
+        /// <param name="value">The parsed value.</param>
+        /// <returns>True when a valid invariant-culture float was read.</returns>
+        public bool TryReadAsciiFloat(out float value)
+        {
+            value = 0.0f;
+            string token;
+            if (!TryReadAsciiNumberToken(out token))
             {
-                for (int index = PeekChar(); index != 10; index = PeekChar())
+                return false;
+            }
+
+            return float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+        }
+
+        private bool TryReadAsciiNumberToken(out string token)
+        {
+            token = string.Empty;
+            while (BaseStream.Position < BaseStream.Length)
+            {
+                int current = BaseStream.ReadByte();
+                if (current == 32 || current == 9 || current == 10 || current == 13 || current == '[' || current == ',')
                 {
-                    if (index != 32)
-                    {
-                        str = str + ReadChar();
-                    }
-                    else
-                    {
-                        break;
-                    }
+                    continue;
                 }
-            }
-            catch (ArgumentException)
-            {
-                UnityEngine.Debug.LogError("An invalid character was found in the string.");
+
+                BaseStream.Position--;
+                break;
             }
 
-            if (string.IsNullOrEmpty(str))
+            StringBuilder builder = new StringBuilder();
+            while (BaseStream.Position < BaseStream.Length)
             {
-                return 0.0f;
+                int current = BaseStream.ReadByte();
+                if ((current >= '0' && current <= '9') || current == '+' || current == '-' || current == '.' || current == 'e' || current == 'E')
+                {
+                    builder.Append((char)current);
+                    continue;
+                }
+
+                break;
             }
 
-            return Convert.ToSingle(str);
+            token = builder.ToString();
+            return token.Length > 0;
         }
 
         /// <summary>
@@ -174,8 +201,20 @@
         /// <param name="search">The string to search for.</param>
         public void Seek(string search)
         {
-            byte[] bytes = Encoding.ASCII.GetBytes(search);
-            Seek(bytes);
+            TrySeek(search);
+        }
+
+        /// <summary>
+        /// Searches for a byte sequence without recursively skipping a possible
+        /// overlapping match. Photoshop text descriptors contain many similar
+        /// keys, so the old recursive search could run to EOF even when the key
+        /// existed later in the descriptor.
+        /// </summary>
+        /// <param name="search">The ASCII string to search for.</param>
+        /// <returns>True when the sequence was found.</returns>
+        public bool TrySeek(string search)
+        {
+            return TrySeek(Encoding.ASCII.GetBytes(search));
         }
 
         /// <summary>
@@ -252,30 +291,39 @@
         /// end of the stream.
         /// </summary>
         /// <param name="search">The byte array sequence to search for in the stream</param>
-        private void Seek(byte[] search)
+        private bool TrySeek(byte[] search)
         {
-            // read continuously until we find the first byte
-            while (BaseStream.Position < BaseStream.Length && ReadByte() != search[0])
+            if (search == null || search.Length == 0)
             {
-                // do nothing
+                return false;
             }
 
-            // ensure we haven't reached the end of the stream
-            if (BaseStream.Position >= BaseStream.Length)
+            long start = BaseStream.Position;
+            long lastStart = BaseStream.Length - search.Length;
+            for (long candidate = start; candidate <= lastStart; candidate++)
             {
-                return;
-            }
-
-            // ensure we have found the entire byte sequence
-            for (int index = 1; index < search.Length; ++index)
-            {
-                if (ReadByte() != search[index])
+                BaseStream.Position = candidate;
+                bool match = true;
+                for (int index = 0; index < search.Length; index++)
                 {
-                    // if the sequence doesn't match fully, try seeking for it again
-                    Seek(search);
-                    break;
+                    if (ReadByte() != search[index])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                {
+                    // Preserve the legacy reader contract: the stream points
+                    // immediately after the search key.
+                    BaseStream.Position = candidate + search.Length;
+                    return true;
                 }
             }
+
+            BaseStream.Position = BaseStream.Length;
+            return false;
         }
     }
 }
