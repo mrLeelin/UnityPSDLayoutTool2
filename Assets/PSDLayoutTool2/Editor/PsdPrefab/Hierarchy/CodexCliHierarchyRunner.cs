@@ -19,6 +19,7 @@ namespace PsdLayoutTool2
         private readonly IHierarchyProcessAdapter processAdapter;
         private readonly Func<string> executableResolver;
         private readonly string packageRoot;
+        private readonly Action<string> packageDirectoryCreator;
 
         public CodexCliHierarchyRunner()
             : this(new SystemHierarchyProcessAdapter(), () => "codex",
@@ -30,12 +31,22 @@ namespace PsdLayoutTool2
             IHierarchyProcessAdapter processAdapter,
             Func<string> executableResolver,
             string packageRoot)
+            : this(processAdapter, executableResolver, packageRoot, path => Directory.CreateDirectory(path))
+        {
+        }
+
+        public CodexCliHierarchyRunner(
+            IHierarchyProcessAdapter processAdapter,
+            Func<string> executableResolver,
+            string packageRoot,
+            Action<string> packageDirectoryCreator)
         {
             this.processAdapter = processAdapter ?? throw new ArgumentNullException("processAdapter");
             this.executableResolver = executableResolver ?? throw new ArgumentNullException("executableResolver");
             this.packageRoot = string.IsNullOrWhiteSpace(packageRoot)
                 ? throw new ArgumentException("Package root is required.", "packageRoot")
                 : packageRoot;
+            this.packageDirectoryCreator = packageDirectoryCreator ?? throw new ArgumentNullException("packageDirectoryCreator");
         }
 
         public async Task<PsdHierarchyAiRunResult> RunAsync(
@@ -68,24 +79,22 @@ namespace PsdLayoutTool2
 
             using (operationLock)
             {
-                if (Directory.Exists(packagePath))
-                {
-                    operationLock.Dispose();
-                    ReleaseLockFile(lockPath);
-                    return OwnershipRejected("Hierarchy operation package already exists; refusing stale output.", packagePath);
-                }
-
-                Directory.CreateDirectory(packagePath);
-
-                string requestPath = Path.Combine(packagePath, "request.json");
-                string focusPath = Path.Combine(packagePath, "focus.json");
-                string schemaPath = Path.Combine(packagePath, "plan.schema.json");
-                string promptPath = Path.Combine(packagePath, "prompt.txt");
-                string outputPath = Path.Combine(packagePath, "plan.json");
-                string prompt = BuildPrompt(runRequest.targetPrefabPath, requestPath, focusPath);
-
                 try
                 {
+                    if (Directory.Exists(packagePath))
+                    {
+                        return OwnershipRejected("Hierarchy operation package already exists; refusing stale output.", packagePath);
+                    }
+
+                    packageDirectoryCreator(packagePath);
+
+                    string requestPath = Path.Combine(packagePath, "request.json");
+                    string focusPath = Path.Combine(packagePath, "focus.json");
+                    string schemaPath = Path.Combine(packagePath, "plan.schema.json");
+                    string promptPath = Path.Combine(packagePath, "prompt.txt");
+                    string outputPath = Path.Combine(packagePath, "plan.json");
+                    string prompt = BuildPrompt(runRequest.targetPrefabPath, requestPath, focusPath);
+
                     File.WriteAllText(requestPath, PsdHierarchyPlanJson.SerializeRequest(runRequest.request), new UTF8Encoding(false));
                     string focusJson = SerializeFocus(runRequest);
                     if (focusJson.Length > PsdHierarchyContractLimits.MaxJsonCharacters ||
@@ -187,11 +196,13 @@ namespace PsdLayoutTool2
                 }
                 catch (PsdHierarchyProcessCancelledException exception)
                 {
-                    if (exception.waitForExitSucceeded)
+                    if (exception.processTreeKilled && exception.waitForExitSucceeded)
                     {
                         DeletePackage(packagePath);
+                        throw;
                     }
-                    throw;
+                    throw new PsdHierarchyProcessTerminationException(
+                        "Process tree termination was not confirmed; request package retained at " + packagePath + ".");
                 }
                 catch (OperationCanceledException)
                 {
@@ -394,12 +405,7 @@ namespace PsdLayoutTool2
                     {
                         try
                         {
-                            Task streams = Task.WhenAll(stdout, stderr);
-                            Task first = await Task.WhenAny(completion.Task, streams);
-                            if (first == streams)
-                            {
-                                await streams; // Propagate output quota errors early.
-                            }
+                            await PsdHierarchyProcessOutputMonitor.WaitAsync(completion.Task, stdout, stderr);
                             int exitCode = await completion.Task;
                             return new PsdHierarchyProcessResult
                             {
@@ -410,6 +416,7 @@ namespace PsdLayoutTool2
                         }
                         catch (PsdHierarchyOutputLimitException exception)
                         {
+                            linkedSource.Cancel();
                             ProcessTerminationResult termination = TerminateProcessTreeAndWait(process);
                             if (termination.waitForExitSucceeded) await ObserveStreams(stdout, stderr);
                             return new PsdHierarchyProcessResult
@@ -580,6 +587,21 @@ namespace PsdLayoutTool2
     /// <summary>Chunked reader used for stdout, stderr and imported JSON.</summary>
     public static class PsdHierarchyBoundedTextReader
     {
+        public static string Read(TextReader reader, int maximumCharacters)
+        {
+            if (reader == null) throw new ArgumentNullException("reader");
+            if (maximumCharacters < 0) throw new ArgumentOutOfRangeException("maximumCharacters");
+            var value = new StringBuilder(Math.Min(maximumCharacters, 4096));
+            var buffer = new char[4096];
+            while (true)
+            {
+                int read = reader.Read(buffer, 0, buffer.Length);
+                if (read == 0) return value.ToString();
+                EnsureCapacity(value.Length, read, maximumCharacters);
+                value.Append(buffer, 0, read);
+            }
+        }
+
         public static async Task<string> ReadAsync(
             TextReader reader,
             int maximumCharacters,
@@ -594,12 +616,43 @@ namespace PsdLayoutTool2
                 cancellationToken.ThrowIfCancellationRequested();
                 int read = await reader.ReadAsync(buffer, 0, buffer.Length);
                 if (read == 0) return value.ToString();
-                if (value.Length > maximumCharacters - read)
-                {
-                    throw new PsdHierarchyOutputLimitException("Text output exceeds the character quota.");
-                }
+                EnsureCapacity(value.Length, read, maximumCharacters);
                 value.Append(buffer, 0, read);
             }
+        }
+
+        private static void EnsureCapacity(int current, int incoming, int maximumCharacters)
+        {
+            if (current > maximumCharacters - incoming)
+                throw new PsdHierarchyOutputLimitException("Text output exceeds the character quota.");
+        }
+    }
+
+    /// <summary>
+    /// Completes as soon as the process exits or either stream faults. It never
+    /// waits for both streams before surfacing one stream's quota violation.
+    /// </summary>
+    public static class PsdHierarchyProcessOutputMonitor
+    {
+        public static async Task WaitAsync(Task<int> exit, Task<string> stdout, Task<string> stderr)
+        {
+            if (exit == null || stdout == null || stderr == null) throw new ArgumentNullException("tasks");
+            var remaining = new List<Task> { stdout, stderr };
+            while (remaining.Count > 0)
+            {
+                var candidates = new List<Task>(remaining) { exit };
+                Task completed = await Task.WhenAny(candidates);
+                if (completed == exit)
+                {
+                    await exit;
+                    return;
+                }
+
+                await completed; // Immediate quota/cancellation propagation.
+                remaining.Remove(completed);
+            }
+
+            await exit;
         }
     }
 }

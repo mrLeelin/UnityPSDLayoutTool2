@@ -197,7 +197,7 @@ namespace PsdLayoutTool2.Tests
         {
             PsdHierarchyRequest request = Request("101", "102", "103");
             var fake = new FakeRunner();
-            fake.ResultFactory = run => Success(PlanFor(run.request, run.request.nodes[0].stableId));
+            fake.ResultFactory = run => Success(PlanFor(run.request, run.modifiableStableIds.Single()));
             var reconciliation = new PsdHierarchyReconciliationResult { requiresReplan = true };
             reconciliation.focusedInvalidatedScopeStableIds.Add("101");
             reconciliation.unsortedNewStableIds.Add("103");
@@ -207,10 +207,12 @@ namespace PsdLayoutTool2.Tests
             await model.RefreshAsync(false, CancellationToken.None);
 
             Assert.That(fake.Requests.Count, Is.EqualTo(2));
-            Assert.That(fake.Requests.All(run => run.request.nodes.Count == 1), Is.True);
             CollectionAssert.AreEquivalent(new[] { "101", "103" },
-                fake.Requests.Select(run => run.request.nodes.Single().stableId));
-            Assert.That(fake.Requests.SelectMany(run => run.request.nodes).Any(node => node.stableId == "102"), Is.False);
+                fake.Requests.Select(run => run.modifiableStableIds.Single()));
+            Assert.That(fake.Requests.All(run => run.contextStableIds.Contains(run.modifiableStableIds.Single())), Is.True);
+            Assert.That(fake.Requests.Any(run => run.contextStableIds.Contains("102")), Is.True,
+                "Read-only sibling context is expected, but it is never a modifiable ID.");
+            Assert.That(fake.Requests.Any(run => run.modifiableStableIds.Contains("102")), Is.False);
             Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
             Assert.That(model.proposedPlan.renames.Any(rename => rename.stableId == "102"), Is.True,
                 "Unrelated baseline decisions survive byte-for-byte semantic merge.");
@@ -309,6 +311,81 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task ReconciliationIsDeepSnapshottedAtConstruction()
+        {
+            PsdHierarchyRequest request = Request("101", "102");
+            var reconciliation = new PsdHierarchyReconciliationResult { requiresReplan = true };
+            reconciliation.focusedInvalidatedScopeStableIds.Add("101");
+            reconciliation.pendingMissingStableIds.Add("999");
+            var fake = new FakeRunner { ResultFactory = run => Success(PlanFor(run.request, "101")) };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, Baseline(request), reconciliation, fake);
+
+            reconciliation.focusedInvalidatedScopeStableIds.Clear();
+            reconciliation.focusedInvalidatedScopeStableIds.Add("102");
+            reconciliation.pendingMissingStableIds.Clear();
+            reconciliation.unsortedNewStableIds.Add("102");
+            reconciliation.requiresReplan = false;
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            CollectionAssert.AreEquivalent(new[] { "101" }, fake.Requests.Single().modifiableStableIds);
+            Assert.That(model.pendingMissingStableIds, Does.Contain("999"));
+            Assert.That(model.canApply, Is.False);
+        }
+
+        [Test]
+        public async Task NewIdCanJoinNeighborGroupWithoutChangingReadonlyMemberOrder()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.groups.Add(new PsdHierarchyPlanGroup
+            {
+                key = "existing", parentKey = "", memberStableIds = new List<string> { "101", "102" },
+                displayName = "Existing", evidence = "old", confidence = 1
+            });
+            var reconciliation = new PsdHierarchyReconciliationResult { requiresReplan = true };
+            reconciliation.unsortedNewStableIds.Add("103");
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanWithGroup(run.request, "existing", "", "101", "102", "103"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            CollectionAssert.Contains(fake.Requests.Single().modifiableGroupKeys, "existing");
+            CollectionAssert.AreEqual(new[] { "101", "102", "103" },
+                model.proposedPlan.groups.Single(group => group.key == "existing").memberStableIds);
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+        }
+
+        [Test]
+        public async Task NewIdCannotMoveOrReorderReadonlyNeighborMembers()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.groups.Add(new PsdHierarchyPlanGroup
+            {
+                key = "existing", parentKey = "", memberStableIds = new List<string> { "101", "102" },
+                displayName = "Existing", evidence = "old", confidence = 1
+            });
+            var reconciliation = new PsdHierarchyReconciliationResult { requiresReplan = true };
+            reconciliation.unsortedNewStableIds.Add("103");
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanWithGroup(run.request, "existing", "", "102", "101", "103"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            Assert.That(model.canApply, Is.False);
+            Assert.That(model.validationErrors.Single(), Does.Contain("readonly").IgnoreCase);
+        }
+
+        [Test]
         public async Task MissingIdsRemainPendingUntilExplicitPreviewConfirmation()
         {
             PsdHierarchyRequest request = Request("101");
@@ -378,6 +455,19 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ManualPlanLoaderCompletesSynchronouslyForValidJson()
+        {
+            Directory.CreateDirectory(tempRoot);
+            PsdHierarchyRequest request = Request("101");
+            string path = Path.Combine(tempRoot, "valid.json");
+            File.WriteAllText(path, PlanJson(request));
+
+            PsdHierarchyPlan plan = PsdHierarchyManualPlanLoader.Load(path);
+
+            Assert.That(plan.sourcePsdGuid, Is.EqualTo(request.sourcePsdGuid));
+        }
+
+        [Test]
         public void BoundedTextReaderRejectsCharacterLimitPlusOne()
         {
             using (var reader = new StringReader(new string('x', 33)))
@@ -442,6 +532,55 @@ namespace PsdLayoutTool2.Tests
             Assert.That(async () => await running, Throws.InstanceOf<OperationCanceledException>());
             order.Add(Directory.Exists(Path.Combine(tempRoot, "op-1")) ? "package-retained" : "package-cleaned");
             CollectionAssert.AreEqual(new[] { "kill-tree", "wait-exit", "package-cleaned" }, order);
+        }
+
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        public async Task UnconfirmedTreeTerminationRetainsPackage(bool treeKilled, bool waited)
+        {
+            var entered = new TaskCompletionSource<bool>();
+            var adapter = new RecordingProcessAdapter(async (invocation, timeout, token) =>
+            {
+                entered.TrySetResult(true);
+                try { await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                throw new PsdHierarchyProcessCancelledException("adapter cancel", treeKilled, waited, token);
+            });
+            var source = new CancellationTokenSource();
+            Task<PsdHierarchyAiRunResult> running = Runner(adapter).RunAsync(RunRequest(Request("101")), source.Token);
+            await entered.Task;
+            source.Cancel();
+
+            PsdHierarchyProcessTerminationException exception = Assert.ThrowsAsync<PsdHierarchyProcessTerminationException>(
+                async () => await running);
+            Assert.That(exception.Message, Does.Contain("retained").IgnoreCase);
+            Assert.That(Directory.Exists(Path.Combine(tempRoot, "op-1")), Is.True);
+        }
+
+        [Test]
+        public async Task PackageDirectoryCreationFailureAlwaysReleasesOperationLock()
+        {
+            var adapter = new RecordingProcessAdapter(invocation => Completed(0));
+            var runner = new CodexCliHierarchyRunner(
+                adapter, () => "codex-test", tempRoot,
+                path => throw new IOException("injected create failure"));
+
+            PsdHierarchyAiRunResult result = await runner.RunAsync(RunRequest(Request("101")), CancellationToken.None);
+
+            Assert.That(result.succeeded, Is.False);
+            Assert.That(File.Exists(Path.Combine(tempRoot, ".op-1.lock")), Is.False);
+            Assert.That(adapter.Invocation, Is.Null);
+        }
+
+        [Test]
+        public void OutputMonitorReportsOneOverflowWithoutWaitingForOtherStream()
+        {
+            var never = new TaskCompletionSource<string>();
+            Task<string> overflow = Task.FromException<string>(new PsdHierarchyOutputLimitException("cap+1"));
+            var exit = new TaskCompletionSource<int>();
+
+            Assert.ThrowsAsync<PsdHierarchyOutputLimitException>(async () =>
+                await PsdHierarchyProcessOutputMonitor.WaitAsync(exit.Task, overflow, never.Task));
         }
 
         private CodexCliHierarchyRunner Runner(IHierarchyProcessAdapter adapter)
@@ -511,6 +650,25 @@ namespace PsdLayoutTool2.Tests
                 name = "Planned " + stableId,
                 evidence = "focused",
                 confidence = 0.9d
+            });
+            return plan;
+        }
+
+        private static PsdHierarchyPlan PlanWithGroup(
+            PsdHierarchyRequest request,
+            string key,
+            string parentKey,
+            params string[] members)
+        {
+            PsdHierarchyPlan plan = IdentityPlan(request);
+            plan.groups.Add(new PsdHierarchyPlanGroup
+            {
+                key = key,
+                parentKey = parentKey,
+                memberStableIds = new List<string>(members),
+                displayName = key,
+                evidence = "focused",
+                confidence = .9
             });
             return plan;
         }

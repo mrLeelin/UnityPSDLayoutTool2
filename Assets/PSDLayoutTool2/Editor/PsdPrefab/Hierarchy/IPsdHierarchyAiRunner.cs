@@ -84,6 +84,11 @@ namespace PsdLayoutTool2
         public bool waitForExitSucceeded { get; private set; }
     }
 
+    public sealed class PsdHierarchyProcessTerminationException : InvalidOperationException
+    {
+        public PsdHierarchyProcessTerminationException(string message) : base(message) { }
+    }
+
     /// <summary>
     /// Injected boundary around System.Diagnostics.Process. Tests can simulate
     /// timeout, cancellation and CLI failures without spawning another process.
