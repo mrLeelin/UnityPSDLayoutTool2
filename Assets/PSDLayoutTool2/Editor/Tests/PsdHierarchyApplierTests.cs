@@ -2,6 +2,8 @@ namespace PsdLayoutTool2.Tests
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
+    using System.Text;
     using NUnit.Framework;
     using TMPro;
     using UnityEditor;
@@ -24,65 +26,189 @@ namespace PsdLayoutTool2.Tests
         [TearDown]
         public void TearDown()
         {
-            UnityEngine.Object.DestroyImmediate(rootObject);
+            PsdImporter.EndGeneratedUiNodeRegistry();
+            if (rootObject != null)
+            {
+                Transform top = rootObject.transform.root;
+                UnityEngine.Object.DestroyImmediate(top.gameObject);
+            }
         }
 
         [Test]
-        public void ApplyReusesStableGroupsAndSupportsNestedGroupsAndRenames()
+        public void SameKeyReusesSameObjectAcrossDisplayRenameAndSupportsNestedGroups()
         {
             RectTransform first = Leaf("First", 0, new Vector2(-100f, 20f));
             RectTransform second = Leaf("Second", 1, new Vector2(10f, 20f));
             RectTransform third = Leaf("Third", 2, new Vector2(120f, 20f));
             Dictionary<string, RectTransform> registry = Registry(first, second, third);
-            PsdHierarchyPlan plan = Plan(
+            PsdHierarchyPlan initial = Plan(
                 Group("outer", "", "Outer", "101"),
                 Group("inner", "outer", "Inner", "102", "103"));
-            plan.renames.Add(new PsdHierarchyPlanRename { stableId = "101", name = "Renamed" });
 
-            PsdHierarchyApplier.Apply(root, plan, registry);
-            PsdHierarchyApplier.Apply(root, plan, registry);
+            PsdHierarchyApplyResult firstApply = PsdHierarchyApplier.Apply(root, initial, registry, EmptyGroups());
+            RectTransform outer = firstApply.groupsByKey["outer"];
+            RectTransform inner = firstApply.groupsByKey["inner"];
+            PsdHierarchyPlan renamed = Plan(
+                Group("outer", "", "Outer Renamed", "101"),
+                Group("inner", "outer", "Inner Renamed", "102", "103"));
+            renamed.renames.Add(new PsdHierarchyPlanRename { stableId = "101", name = "Leaf Renamed" });
 
-            Assert.That(first.name, Is.EqualTo("Renamed"));
-            Assert.That(root.Find("Outer"), Is.Not.Null);
-            Assert.That(root.Find("Outer/Inner"), Is.Not.Null);
-            Assert.That(CountNamed(root, "Outer"), Is.EqualTo(1));
-            Assert.That(CountNamed(root, "Inner"), Is.EqualTo(1));
+            PsdHierarchyApplyResult secondApply = PsdHierarchyApplier.Apply(root, renamed, registry, firstApply.groupsByKey);
+
+            Assert.That(secondApply.groupsByKey["outer"], Is.SameAs(outer));
+            Assert.That(secondApply.groupsByKey["inner"], Is.SameAs(inner));
+            Assert.That(secondApply.createdGroupKeys, Is.Empty);
+            Assert.That(outer.name, Is.EqualTo("Outer Renamed"));
+            Assert.That(inner.name, Is.EqualTo("Inner Renamed"));
+            Assert.That(first.name, Is.EqualTo("Leaf Renamed"));
         }
 
         [Test]
-        public void ApplyPreservesGeometryVisualStateComponentOrderReferencesAndLeafOrder()
+        public void SameDisplayNameProjectRectIsNeverClaimedWithoutExplicitKeyMapping()
         {
+            RectTransform projectRect = new GameObject("Visuals", typeof(RectTransform)).GetComponent<RectTransform>();
+            projectRect.SetParent(root, false);
+            RectTransform leaf = Leaf("Leaf", 1, Vector2.zero);
+
+            PsdHierarchyApplyResult result = PsdHierarchyApplier.Apply(
+                root, Plan(Group("visuals", "", "Visuals", "101")), Registry(leaf), EmptyGroups());
+
+            Assert.That(result.groupsByKey["visuals"], Is.Not.SameAs(projectRect));
+            Assert.That(projectRect.parent, Is.SameAs(root));
+            Assert.That(root.GetComponentsInChildren<RectTransform>(true).Count(value => value.name == "Visuals"), Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ApplyPreservesFullRectVisualComponentsMaterialsNineSliceReferencesAndOrder()
+        {
+            GameObject canvasObject = new GameObject("Canvas", typeof(RectTransform), typeof(Canvas));
+            root.SetParent(canvasObject.transform, false);
+            root.localRotation = Quaternion.Euler(0f, 0f, 13f);
+            root.localScale = new Vector3(0.7f, 1.3f, 1f);
             RectTransform first = Leaf("First", 0, new Vector2(-120f, 35f));
             RectTransform second = Leaf("Second", 1, new Vector2(45f, -20f));
             first.anchorMin = new Vector2(0.2f, 0.3f);
-            first.anchorMax = new Vector2(0.2f, 0.3f);
+            first.anchorMax = new Vector2(0.8f, 0.75f);
             first.pivot = new Vector2(0.1f, 0.9f);
-            first.sizeDelta = new Vector2(91f, 47f);
+            first.offsetMin = new Vector2(17f, 19f);
+            first.offsetMax = new Vector2(-23f, -29f);
+            first.anchoredPosition3D = new Vector3(first.anchoredPosition.x, first.anchoredPosition.y, 6f);
             first.localRotation = Quaternion.Euler(0f, 0f, 7f);
             first.localScale = new Vector3(1.2f, 0.8f, 1f);
+            first.gameObject.SetActive(false);
+
+            Texture2D texture = new Texture2D(10, 10);
+            Sprite sprite = Sprite.Create(texture, new Rect(0, 0, 10, 10), new Vector2(0.5f, 0.5f), 100f, 0,
+                SpriteMeshType.FullRect, new Vector4(1f, 2f, 3f, 4f));
+            Material imageMaterial = new Material(Shader.Find("UI/Default"));
             Image image = first.gameObject.AddComponent<Image>();
+            image.sprite = sprite;
             image.type = Image.Type.Sliced;
+            image.fillMethod = Image.FillMethod.Radial180;
+            image.fillAmount = 0.42f;
             image.fillCenter = false;
-            Material material = new Material(Shader.Find("UI/Default"));
-            image.material = material;
+            image.preserveAspect = false;
+            image.material = imageMaterial;
             TextMeshProUGUI text = second.gameObject.AddComponent<TextMeshProUGUI>();
             text.text = "kept";
-            text.fontMaterial = material;
+            Material sharedTextMaterial = new Material(Shader.Find("UI/Default"));
+            text.fontSharedMaterial = sharedTextMaterial;
             PsdHierarchyReferenceProbe probe = rootObject.AddComponent<PsdHierarchyReferenceProbe>();
             probe.target = first.gameObject;
 
             Dictionary<string, RectTransform> registry = Registry(first, second);
             PsdHierarchyApplySnapshot before = PsdHierarchyApplyVerifier.Capture(root, registry);
-            PsdHierarchyApplier.Apply(root, Plan(Group("visuals", "", "Visuals", "101", "102")), registry);
+            Component[] firstComponents = first.GetComponents<Component>();
+            PsdHierarchyApplier.Apply(root, Plan(Group("visuals", "", "Visuals", "101", "102")), registry, EmptyGroups());
 
             Assert.DoesNotThrow(() => PsdHierarchyApplyVerifier.VerifyUnchanged(before, root, registry));
             Assert.That(probe.target, Is.SameAs(first.gameObject));
-            Assert.That(LeafNames(root), Is.EqualTo(new[] { "First", "Second" }));
+            Assert.That(first.GetComponents<Component>(), Is.EqualTo(firstComponents));
+            Assert.That(image.sprite.border, Is.EqualTo(new Vector4(1f, 2f, 3f, 4f)));
             Assert.That(image.type, Is.EqualTo(Image.Type.Sliced));
+            Assert.That(image.fillMethod, Is.EqualTo(Image.FillMethod.Radial180));
+            Assert.That(image.fillAmount, Is.EqualTo(0.42f));
             Assert.That(image.fillCenter, Is.False);
-            Assert.That(image.material, Is.SameAs(material));
-            Assert.That(text.fontMaterial, Is.SameAs(material));
-            UnityEngine.Object.DestroyImmediate(material);
+            Assert.That(image.preserveAspect, Is.False);
+            Assert.That(image.material, Is.SameAs(imageMaterial));
+            Assert.That(text.fontSharedMaterial, Is.SameAs(sharedTextMaterial));
+            Assert.That(first.gameObject.activeSelf, Is.False);
+            UnityEngine.Object.DestroyImmediate(imageMaterial);
+            UnityEngine.Object.DestroyImmediate(sharedTextMaterial);
+            UnityEngine.Object.DestroyImmediate(sprite);
+            UnityEngine.Object.DestroyImmediate(texture);
+        }
+
+        [Test]
+        public void VerifierIncludesZeroIdAndProjectOwnedVisuals()
+        {
+            RectTransform generated = Leaf("Generated", 0, Vector2.zero);
+            generated.gameObject.AddComponent<Image>();
+            RectTransform zeroId = Leaf("Zero", 1, Vector2.zero);
+            zeroId.gameObject.AddComponent<Image>();
+            Dictionary<string, RectTransform> registry = Registry(generated);
+            PsdHierarchyApplySnapshot before = PsdHierarchyApplyVerifier.Capture(root, registry);
+            RectTransform foreignParent = new GameObject("Foreign", typeof(RectTransform)).GetComponent<RectTransform>();
+            foreignParent.SetParent(root, false);
+            zeroId.SetParent(foreignParent, false);
+
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplyVerifier.VerifyUnchanged(before, root, registry));
+        }
+
+        [TestCase(PsdHierarchyApplyStage.MemberMoved)]
+        [TestCase(PsdHierarchyApplyStage.BeforeVerification)]
+        public void AnyMidApplyOrVerifierFailureRollsBackCompleteGraph(PsdHierarchyApplyStage failureStage)
+        {
+            RectTransform first = Leaf("First", 0, Vector2.zero);
+            first.gameObject.AddComponent<Image>();
+            RectTransform zeroId = Leaf("Zero", 1, Vector2.zero);
+            zeroId.gameObject.AddComponent<Image>();
+            string before = GraphSignature(root);
+            int injected = 0;
+
+            Assert.Throws<InvalidOperationException>(() => PsdHierarchyApplier.Apply(
+                root,
+                Plan(Group("g", "", "Changed", "101")),
+                Registry(first),
+                EmptyGroups(),
+                stage =>
+                {
+                    if (stage != failureStage || injected++ != 0) return;
+                    if (stage == PsdHierarchyApplyStage.BeforeVerification)
+                    {
+                        zeroId.SetSiblingIndex(0);
+                        return;
+                    }
+                    throw new InvalidOperationException("injected middle failure");
+                }));
+
+            Assert.That(GraphSignature(root), Is.EqualTo(before));
+            Assert.That(root.GetComponentsInChildren<RectTransform>(true).Any(value => value.name == "Changed"), Is.False);
+        }
+
+        [Test]
+        public void RegistryEnforcesDurableOneToOneIdentityAndLifecycleClear()
+        {
+            RectTransform first = Leaf("First", 0, Vector2.zero);
+            RectTransform second = Leaf("Second", 1, Vector2.zero);
+            PsdImporter.BeginGeneratedUiNodeRegistry(true);
+            PsdImporter.RegisterGeneratedUiNode(0U, first);
+            Assert.That(PsdImporter.CaptureGeneratedUiNodeRegistry(), Is.Empty);
+            PsdImporter.RegisterGeneratedUiNode(101U, first);
+            Assert.Throws<InvalidOperationException>(() => PsdImporter.RegisterGeneratedUiNode(101U, second));
+            Assert.Throws<InvalidOperationException>(() => PsdImporter.RegisterGeneratedUiNode(102U, first));
+            PsdImporter.EndGeneratedUiNodeRegistry();
+            Assert.That(PsdImporter.CaptureGeneratedUiNodeRegistry(), Is.Empty);
+        }
+
+        [Test]
+        public void RegistryRejectsDifferentStableIdsPointingToSameLeaf()
+        {
+            RectTransform first = Leaf("First", 0, Vector2.zero);
+            var invalid = new Dictionary<string, RectTransform> { { "101", first }, { "102", first } };
+
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root, Plan(Group("g", "", "Group", "101")), invalid, EmptyGroups()));
         }
 
         [TestCase(typeof(Canvas))]
@@ -94,9 +220,8 @@ namespace PsdLayoutTool2.Tests
         {
             RectTransform first = Leaf("First", 0, Vector2.zero);
             first.gameObject.AddComponent(componentType);
-
-            Assert.Throws<PsdHierarchyApplyException>(() =>
-                PsdHierarchyApplier.Apply(root, Plan(Group("g", "", "Group", "101")), Registry(first)));
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root, Plan(Group("g", "", "Group", "101")), Registry(first), EmptyGroups()));
         }
 
         [Test]
@@ -104,9 +229,8 @@ namespace PsdLayoutTool2.Tests
         {
             RectTransform first = Leaf("First", 0, Vector2.zero);
             first.gameObject.AddComponent<PsdHierarchyReferenceProbe>();
-
-            Assert.Throws<PsdHierarchyApplyException>(() =>
-                PsdHierarchyApplier.Apply(root, Plan(Group("g", "", "Group", "101")), Registry(first)));
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root, Plan(Group("g", "", "Group", "101")), Registry(first), EmptyGroups()));
         }
 
         [Test]
@@ -118,14 +242,13 @@ namespace PsdLayoutTool2.Tests
             GameObject source = new GameObject("Nested", typeof(RectTransform));
             PrefabUtility.SaveAsPrefabAsset(source, path);
             UnityEngine.Object.DestroyImmediate(source);
-            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-            GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+            GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(path));
             instance.transform.SetParent(root, false);
             try
             {
-                Assert.Throws<PsdHierarchyApplyException>(() =>
-                    PsdHierarchyApplier.Apply(root, Plan(Group("g", "", "Group", "101")),
-                        new Dictionary<string, RectTransform> { { "101", instance.GetComponent<RectTransform>() } }));
+                Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                    root, Plan(Group("g", "", "Group", "101")),
+                    new Dictionary<string, RectTransform> { { "101", instance.GetComponent<RectTransform>() } }, EmptyGroups()));
             }
             finally
             {
@@ -136,8 +259,7 @@ namespace PsdLayoutTool2.Tests
 
         private RectTransform Leaf(string name, int sibling, Vector2 position)
         {
-            GameObject item = new GameObject(name, typeof(RectTransform));
-            RectTransform rect = item.GetComponent<RectTransform>();
+            RectTransform rect = new GameObject(name, typeof(RectTransform)).GetComponent<RectTransform>();
             rect.SetParent(root, false);
             rect.SetSiblingIndex(sibling);
             rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
@@ -150,11 +272,13 @@ namespace PsdLayoutTool2.Tests
         private static Dictionary<string, RectTransform> Registry(params RectTransform[] values)
         {
             var result = new Dictionary<string, RectTransform>(StringComparer.Ordinal);
-            for (int index = 0; index < values.Length; index++)
-            {
-                result.Add((101 + index).ToString(), values[index]);
-            }
+            for (int index = 0; index < values.Length; index++) result.Add((101 + index).ToString(), values[index]);
             return result;
+        }
+
+        private static Dictionary<string, RectTransform> EmptyGroups()
+        {
+            return new Dictionary<string, RectTransform>(StringComparer.Ordinal);
         }
 
         private static PsdHierarchyPlan Plan(params PsdHierarchyPlanGroup[] groups)
@@ -175,27 +299,25 @@ namespace PsdLayoutTool2.Tests
             };
         }
 
-        private static int CountNamed(Transform transform, string name)
+        private static string GraphSignature(RectTransform scope)
         {
-            int count = transform.name == name ? 1 : 0;
-            for (int index = 0; index < transform.childCount; index++) count += CountNamed(transform.GetChild(index), name);
-            return count;
-        }
-
-        private static string[] LeafNames(Transform transform)
-        {
-            var result = new List<string>();
-            CollectLeaves(transform, result);
-            return result.ToArray();
-        }
-
-        private static void CollectLeaves(Transform transform, List<string> names)
-        {
-            for (int index = 0; index < transform.childCount; index++)
+            var result = new StringBuilder();
+            foreach (Transform transform in scope.GetComponentsInChildren<Transform>(true))
             {
-                Transform child = transform.GetChild(index);
-                if (child.childCount == 0) names.Add(child.name); else CollectLeaves(child, names);
+                RectTransform rect = transform as RectTransform;
+                result.Append(transform.GetInstanceID()).Append('|')
+                    .Append(transform.parent == null ? 0 : transform.parent.GetInstanceID()).Append('|')
+                    .Append(transform.GetSiblingIndex()).Append('|').Append(transform.name).Append('|')
+                    .Append(transform.localPosition).Append('|').Append(transform.localRotation).Append('|').Append(transform.localScale);
+                if (rect != null)
+                {
+                    result.Append('|').Append(rect.anchorMin).Append('|').Append(rect.anchorMax).Append('|').Append(rect.pivot)
+                        .Append('|').Append(rect.anchoredPosition3D).Append('|').Append(rect.sizeDelta)
+                        .Append('|').Append(rect.offsetMin).Append('|').Append(rect.offsetMax);
+                }
+                result.AppendLine();
             }
+            return result.ToString();
         }
     }
 

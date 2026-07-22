@@ -777,9 +777,7 @@
                 importRootGameObject = null;
                 currentGroupGameObject = null;
                 currentGroupLayoutContext = default(UiLayoutContext);
-                currentGeneratedUiNodesByStableId = UseUnityUI
-                    ? new Dictionary<string, RectTransform>(StringComparer.Ordinal)
-                    : null;
+                BeginGeneratedUiNodeRegistry(UseUnityUI);
 
                 if ((LayoutInScene || CreatePrefab) && hasVisibleRuntimeObjects)
                 {
@@ -861,7 +859,7 @@
                 EditorUtility.ClearProgressBar();
                 ClearCurrentImportSelection();
                 currentLayerInfos = null;
-                currentGeneratedUiNodesByStableId = null;
+                EndGeneratedUiNodeRegistry();
                 PsdLogger.EndImportSession(sessionResult);
             }
         }
@@ -4704,12 +4702,18 @@
         /// </summary>
         private static void RegisterGeneratedUiNode(Layer layer, RectTransform transform)
         {
-            if (layer == null || transform == null || currentGeneratedUiNodesByStableId == null || layer.Id == 0U)
+            if (layer == null)
             {
                 return;
             }
 
-            string stableId = layer.Id.ToString(CultureInfo.InvariantCulture);
+            RegisterGeneratedUiNode(layer.Id, transform);
+        }
+
+        internal static void RegisterGeneratedUiNode(uint layerId, RectTransform transform)
+        {
+            if (transform == null || currentGeneratedUiNodesByStableId == null || layerId == 0U) return;
+            string stableId = layerId.ToString(CultureInfo.InvariantCulture);
             RectTransform existing;
             if (currentGeneratedUiNodesByStableId.TryGetValue(stableId, out existing) && existing != transform)
             {
@@ -4717,7 +4721,26 @@
                     "Duplicate durable PSD layer ID '" + stableId + "' generated more than one primary UI object.");
             }
 
+            if (currentGeneratedUiNodesByStableId.Any(pair =>
+                    !string.Equals(pair.Key, stableId, StringComparison.Ordinal) && pair.Value == transform))
+            {
+                throw new InvalidOperationException(
+                    "Different durable PSD layer IDs cannot map to the same generated UI object.");
+            }
+
             currentGeneratedUiNodesByStableId[stableId] = transform;
+        }
+
+        internal static void BeginGeneratedUiNodeRegistry(bool enabled)
+        {
+            currentGeneratedUiNodesByStableId = enabled
+                ? new Dictionary<string, RectTransform>(StringComparer.Ordinal)
+                : null;
+        }
+
+        internal static void EndGeneratedUiNodeRegistry()
+        {
+            currentGeneratedUiNodesByStableId = null;
         }
 
         /// <summary>
