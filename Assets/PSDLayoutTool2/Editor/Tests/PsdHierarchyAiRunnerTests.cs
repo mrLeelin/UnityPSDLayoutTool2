@@ -455,7 +455,7 @@ namespace PsdLayoutTool2.Tests
             PsdHierarchyRequest request = Request("101", "102", "103");
             PsdHierarchyPlan baseline = Baseline(request);
             baseline.groups.Add(Group("owned", "101", "102"));
-            var reconciliation = Invalidated("101");
+            var reconciliation = Invalidated("101", "102");
             var fake = new FakeRunner { ResultFactory = run => Success(IdentityPlan(run.request)) };
             var model = new PsdHierarchyOrganizerPreviewModel(
                 "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
@@ -478,7 +478,7 @@ namespace PsdLayoutTool2.Tests
                 ResultFactory = run => Success(PlanWithGroup(run.request, "new-key", "", "101", "102"))
             };
             var model = new PsdHierarchyOrganizerPreviewModel(
-                "Assets/UI/Target.prefab", request, baseline, Invalidated("101"), fake);
+                "Assets/UI/Target.prefab", request, baseline, Invalidated("101", "102"), fake);
 
             await model.RefreshAsync(false, CancellationToken.None);
 
@@ -503,7 +503,7 @@ namespace PsdLayoutTool2.Tests
                 }
             };
             var model = new PsdHierarchyOrganizerPreviewModel(
-                "Assets/UI/Target.prefab", request, baseline, Invalidated("101"), fake);
+                "Assets/UI/Target.prefab", request, baseline, Invalidated("101", "102"), fake);
 
             await model.RefreshAsync(false, CancellationToken.None);
 
@@ -554,6 +554,117 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(model.canApply, Is.False);
             Assert.That(model.validationErrors.Single(), Does.Contain("without adding a modifiable ID").IgnoreCase);
+        }
+
+        [Test]
+        public async Task SecondScopeOmissionPreservesHybridCreatedByFirstScope()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.groups.Add(Group("a", "101"));
+            PsdHierarchyPlanGroup groupB = Group("b", "102");
+            baseline.groups.Add(groupB);
+            var reconciliation = Invalidated("101", "102");
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => run.modifiableStableIds.Contains("101")
+                    ? Success(PlanWithBaselineGroup(run.request, groupB, "102", "101"))
+                    : Success(IdentityPlan(run.request))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            Assert.That(fake.Requests.Count, Is.EqualTo(2));
+            CollectionAssert.Contains(fake.Requests[1].hybridGroupKeys, "b");
+            CollectionAssert.AreEqual(new[] { "102", "101" },
+                model.proposedPlan.groups.Single(group => group.key == "b").memberStableIds);
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+        }
+
+        [Test]
+        public async Task HybridMayExplicitlyRemoveAllCurrentScopeMembersOnly()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.groups.Add(Group("a", "101"));
+            PsdHierarchyPlanGroup groupB = Group("b", "102");
+            baseline.groups.Add(groupB);
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => run.modifiableStableIds.Contains("101")
+                    ? Success(PlanWithBaselineGroup(run.request, groupB, "102", "101"))
+                    : Success(PlanWithBaselineGroup(run.request, groupB, "101"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, Invalidated("101", "102"), fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            CollectionAssert.AreEqual(new[] { "101" },
+                model.proposedPlan.groups.Single(group => group.key == "b").memberStableIds);
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+        }
+
+        [Test]
+        public async Task DissolvingOwnedParentReparentsOmittedDependentDescendants()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103", "104");
+            PsdHierarchyPlan baseline = Baseline(request);
+            PsdHierarchyPlanGroup grandchild = Group("grandchild", "103");
+            grandchild.parentKey = "child";
+            PsdHierarchyPlanGroup child = Group("child", "102");
+            child.parentKey = "parent";
+            baseline.groups.Add(grandchild); // Deliberately reverse hierarchy order.
+            baseline.groups.Add(child);
+            baseline.groups.Add(Group("parent", "101"));
+            var fake = new FakeRunner { ResultFactory = run => Success(IdentityPlan(run.request)) };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, Invalidated("101"), fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            CollectionAssert.AreEquivalent(new[] { "child", "grandchild" },
+                fake.Requests.Single().structuralDependentGroupKeys);
+            Assert.That(model.proposedPlan.groups.Any(group => group.key == "parent"), Is.False);
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == "child").parentKey, Is.Empty);
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == "grandchild").parentKey, Is.EqualTo("child"));
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+        }
+
+        [Test]
+        public async Task RekeyedOwnedParentMayMoveReadonlyDependentChild()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103", "104");
+            PsdHierarchyPlan baseline = Baseline(request);
+            PsdHierarchyPlanGroup grandchild = Group("grandchild", "103");
+            grandchild.parentKey = "child";
+            PsdHierarchyPlanGroup child = Group("child", "102");
+            child.parentKey = "parent";
+            baseline.groups.Add(grandchild);
+            baseline.groups.Add(child);
+            baseline.groups.Add(Group("parent", "101"));
+            var fake = new FakeRunner
+            {
+                ResultFactory = run =>
+                {
+                    PsdHierarchyPlan plan = PlanWithGroup(run.request, "new-parent", "", "101");
+                    PsdHierarchyPlanGroup movedChild = Group("child", "102");
+                    movedChild.parentKey = "new-parent";
+                    plan.groups.Add(movedChild);
+                    return Success(plan);
+                }
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, Invalidated("101"), fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            Assert.That(model.proposedPlan.groups.Any(group => group.key == "parent"), Is.False);
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == "child").parentKey, Is.EqualTo("new-parent"));
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == "grandchild").parentKey, Is.EqualTo("child"));
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
         }
 
         [Test]
@@ -902,10 +1013,10 @@ namespace PsdLayoutTool2.Tests
             };
         }
 
-        private static PsdHierarchyReconciliationResult Invalidated(string stableId)
+        private static PsdHierarchyReconciliationResult Invalidated(params string[] stableIds)
         {
             var result = new PsdHierarchyReconciliationResult { requiresReplan = true };
-            result.focusedInvalidatedScopeStableIds.Add(stableId);
+            result.focusedInvalidatedScopeStableIds.AddRange(stableIds);
             return result;
         }
 

@@ -317,7 +317,9 @@ namespace PsdLayoutTool2
                 contextStableIds = request.contextStableIds ?? new List<string>(),
                 modifiableGroupKeys = request.modifiableGroupKeys ?? new List<string>(),
                 scopeOwnedGroupKeys = request.scopeOwnedGroupKeys ?? new List<string>(),
+                hybridGroupKeys = request.hybridGroupKeys ?? new List<string>(),
                 readonlyNeighborGroupKeys = request.readonlyNeighborGroupKeys ?? new List<string>(),
+                structuralDependentGroupKeys = request.structuralDependentGroupKeys ?? new List<string>(),
                 existingGroupKeys = request.existingGroupKeys ?? new List<string>(),
                 baselineGroups = request.baselineGroups ?? new List<PsdHierarchyPlanGroup>()
             }, Formatting.None);

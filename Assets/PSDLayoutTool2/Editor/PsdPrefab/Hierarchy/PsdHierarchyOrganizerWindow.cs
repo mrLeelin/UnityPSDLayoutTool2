@@ -70,21 +70,8 @@ namespace PsdLayoutTool2
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     HashSet<string> contextIds = BuildContextIds(scope);
-                    var scopeOwnedGroupKeys = new HashSet<string>(working.groups
-                        .Where(group => group != null && group.memberStableIds.Any(scope.Contains))
-                        .Select(group => group.key), StringComparer.Ordinal);
-                    var readonlyNeighborGroupKeys = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (PsdHierarchyPlanGroup neighborGroup in working.groups.Where(group =>
-                                 group != null && !scopeOwnedGroupKeys.Contains(group.key) &&
-                                 group.memberStableIds.Any(contextIds.Contains)))
-                    {
-                        readonlyNeighborGroupKeys.Add(neighborGroup.key);
-                        contextIds.UnionWith(neighborGroup.memberStableIds);
-                    }
+                    FocusedGroupContext groupContext = BuildFocusedGroupContext(working, scope, contextIds);
                     PsdHierarchyRequest scopedRequest = CloneScopedRequest(fullRequest, contextIds, scope);
-                    List<PsdHierarchyPlanGroup> baselineGraph = BuildBaselineGroupGraph(working, contextIds);
-                    var modifiableGroupKeys = new HashSet<string>(scopeOwnedGroupKeys, StringComparer.Ordinal);
-                    modifiableGroupKeys.UnionWith(readonlyNeighborGroupKeys);
                     var runRequest = new PsdHierarchyAiRunRequest
                     {
                         operationId = Guid.NewGuid().ToString("N"),
@@ -93,10 +80,12 @@ namespace PsdLayoutTool2
                         timeout = TimeSpan.FromMinutes(2),
                         modifiableStableIds = scope.OrderBy(value => value, StringComparer.Ordinal).ToList(),
                         contextStableIds = contextIds.OrderBy(value => value, StringComparer.Ordinal).ToList(),
-                        baselineGroups = baselineGraph,
-                        modifiableGroupKeys = modifiableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
-                        scopeOwnedGroupKeys = scopeOwnedGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
-                        readonlyNeighborGroupKeys = readonlyNeighborGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        baselineGroups = groupContext.baselineGroups,
+                        modifiableGroupKeys = groupContext.modifiableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        scopeOwnedGroupKeys = groupContext.scopeOwnedGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        hybridGroupKeys = groupContext.hybridGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        readonlyNeighborGroupKeys = groupContext.readonlyNeighborGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        structuralDependentGroupKeys = groupContext.structuralDependentGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
                         existingGroupKeys = working.groups.Where(group => group != null)
                             .Select(group => group.key).OrderBy(key => key, StringComparer.Ordinal).ToList()
                     };
@@ -210,8 +199,9 @@ namespace PsdLayoutTool2
                 string seed = unassigned.OrderBy(value => value, StringComparer.Ordinal).First();
                 var scope = new HashSet<string>(StringComparer.Ordinal) { seed };
 
-                // Existing groups are atomic decisions. If one member changes,
-                // include that whole old group so unaffected groups remain exact.
+                // Coalesce only invalidated seeds that already share a group.
+                // Unchanged members are deliberately not promoted into scope:
+                // they make that group hybrid and remain readonly.
                 bool expanded;
                 do
                 {
@@ -221,7 +211,7 @@ namespace PsdLayoutTool2
                         if (group != null && group.memberStableIds.Any(scope.Contains))
                         {
                             int before = scope.Count;
-                            scope.UnionWith(group.memberStableIds.Where(PsdStableLayerIdUtility.IsPersistable));
+                            scope.UnionWith(group.memberStableIds.Where(unassigned.Contains));
                             expanded |= before != scope.Count;
                         }
                     }
@@ -272,24 +262,109 @@ namespace PsdLayoutTool2
             return context;
         }
 
-        private static List<PsdHierarchyPlanGroup> BuildBaselineGroupGraph(PsdHierarchyPlan plan, HashSet<string> scope)
+        private static FocusedGroupContext BuildFocusedGroupContext(
+            PsdHierarchyPlan plan,
+            HashSet<string> scope,
+            HashSet<string> contextIds)
         {
-            var byKey = (plan.groups ?? new List<PsdHierarchyPlanGroup>())
-                .Where(group => group != null)
-                .ToDictionary(group => group.key, StringComparer.Ordinal);
-            var keys = new HashSet<string>(byKey.Values
-                .Where(group => group.memberStableIds.Any(scope.Contains))
+            PsdHierarchyPlanGroup[] groups = (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null).ToArray();
+            var byKey = groups.ToDictionary(group => group.key, StringComparer.Ordinal);
+            var selectedKeys = new HashSet<string>(groups
+                .Where(group => (group.memberStableIds ?? new List<string>()).Any(contextIds.Contains))
                 .Select(group => group.key), StringComparer.Ordinal);
-            foreach (string initial in keys.ToArray())
+            var ownedKeys = new HashSet<string>(groups.Where(group =>
+                    (group.memberStableIds ?? new List<string>()).Count > 0 &&
+                    (group.memberStableIds ?? new List<string>()).All(scope.Contains))
+                .Select(group => group.key), StringComparer.Ordinal);
+
+            // Work from immutable snapshots during each pass. This makes group
+            // ordering irrelevant and includes every ancestor and descendant of
+            // an owned group before classification or request serialization.
+            bool changed;
+            do
             {
-                string key = initial;
-                while (byKey.ContainsKey(key) && !string.IsNullOrEmpty(byKey[key].parentKey))
+                changed = false;
+                string[] selectedSnapshot = selectedKeys.ToArray();
+                foreach (string key in selectedSnapshot)
                 {
-                    key = byKey[key].parentKey;
-                    if (!keys.Add(key)) break;
+                    PsdHierarchyPlanGroup group;
+                    if (!byKey.TryGetValue(key, out group)) continue;
+                    string parentKey = group.parentKey ?? string.Empty;
+                    if (!string.IsNullOrEmpty(parentKey) && byKey.ContainsKey(parentKey))
+                        changed |= selectedKeys.Add(parentKey);
+                }
+
+                string[] ownedOrSelectedSnapshot = selectedKeys.Union(ownedKeys).ToArray();
+                foreach (PsdHierarchyPlanGroup group in groups)
+                {
+                    if (ownedOrSelectedSnapshot.Contains(group.parentKey ?? string.Empty, StringComparer.Ordinal))
+                        changed |= selectedKeys.Add(group.key);
+                }
+
+                int beforeContext = contextIds.Count;
+                foreach (PsdHierarchyPlanGroup group in groups.Where(group => selectedKeys.Contains(group.key)).ToArray())
+                    contextIds.UnionWith(group.memberStableIds ?? new List<string>());
+                changed |= beforeContext != contextIds.Count;
+
+                foreach (PsdHierarchyPlanGroup group in groups)
+                {
+                    if ((group.memberStableIds ?? new List<string>()).Any(contextIds.Contains))
+                        changed |= selectedKeys.Add(group.key);
                 }
             }
-            return keys.Where(byKey.ContainsKey).Select(key => CloneGroup(byKey[key])).ToList();
+            while (changed);
+
+            var hybridKeys = new HashSet<string>(groups.Where(group =>
+                    (group.memberStableIds ?? new List<string>()).Any(scope.Contains) &&
+                    (group.memberStableIds ?? new List<string>()).Any(id => !scope.Contains(id)))
+                .Select(group => group.key), StringComparer.Ordinal);
+            ownedKeys.ExceptWith(hybridKeys);
+
+            var structuralKeys = new HashSet<string>(StringComparer.Ordinal);
+            var frontier = new HashSet<string>(ownedKeys, StringComparer.Ordinal);
+            while (frontier.Count > 0)
+            {
+                string[] parents = frontier.ToArray();
+                frontier.Clear();
+                foreach (PsdHierarchyPlanGroup group in groups.Where(group =>
+                             parents.Contains(group.parentKey ?? string.Empty, StringComparer.Ordinal)).ToArray())
+                {
+                    if (!ownedKeys.Contains(group.key) && !hybridKeys.Contains(group.key) &&
+                        structuralKeys.Add(group.key))
+                        frontier.Add(group.key);
+                }
+            }
+
+            var readonlyKeys = new HashSet<string>(selectedKeys, StringComparer.Ordinal);
+            readonlyKeys.ExceptWith(ownedKeys);
+            readonlyKeys.ExceptWith(hybridKeys);
+            readonlyKeys.ExceptWith(structuralKeys);
+            var modifiableKeys = new HashSet<string>(ownedKeys, StringComparer.Ordinal);
+            modifiableKeys.UnionWith(hybridKeys);
+            modifiableKeys.UnionWith(readonlyKeys);
+            modifiableKeys.UnionWith(structuralKeys);
+
+            return new FocusedGroupContext
+            {
+                baselineGroups = selectedKeys.Where(byKey.ContainsKey)
+                    .OrderBy(key => key, StringComparer.Ordinal).Select(key => CloneGroup(byKey[key])).ToList(),
+                modifiableGroupKeys = modifiableKeys,
+                scopeOwnedGroupKeys = ownedKeys,
+                hybridGroupKeys = hybridKeys,
+                readonlyNeighborGroupKeys = readonlyKeys,
+                structuralDependentGroupKeys = structuralKeys
+            };
+        }
+
+        private sealed class FocusedGroupContext
+        {
+            public List<PsdHierarchyPlanGroup> baselineGroups = new List<PsdHierarchyPlanGroup>();
+            public HashSet<string> modifiableGroupKeys = new HashSet<string>(StringComparer.Ordinal);
+            public HashSet<string> scopeOwnedGroupKeys = new HashSet<string>(StringComparer.Ordinal);
+            public HashSet<string> hybridGroupKeys = new HashSet<string>(StringComparer.Ordinal);
+            public HashSet<string> readonlyNeighborGroupKeys = new HashSet<string>(StringComparer.Ordinal);
+            public HashSet<string> structuralDependentGroupKeys = new HashSet<string>(StringComparer.Ordinal);
         }
 
         private static void MergeScope(
@@ -297,18 +372,49 @@ namespace PsdLayoutTool2
             PsdHierarchyPlan partial,
             PsdHierarchyAiRunRequest runRequest)
         {
-            var replaceAuthorizedKeys = new HashSet<string>(
+            var scopeOwnedKeys = new HashSet<string>(
                 runRequest.scopeOwnedGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            var replaceAuthorizedKeys = new HashSet<string>(scopeOwnedKeys, StringComparer.Ordinal);
             var returnedKeys = new HashSet<string>((partial.groups ?? new List<PsdHierarchyPlanGroup>())
                 .Where(group => group != null).Select(group => group.key));
+            replaceAuthorizedKeys.UnionWith((runRequest.hybridGroupKeys ?? new List<string>())
+                .Where(returnedKeys.Contains));
             replaceAuthorizedKeys.UnionWith((runRequest.readonlyNeighborGroupKeys ?? new List<string>())
                 .Where(returnedKeys.Contains));
+            replaceAuthorizedKeys.UnionWith((runRequest.structuralDependentGroupKeys ?? new List<string>())
+                .Where(returnedKeys.Contains));
+
+            var removedParentByKey = target.groups
+                .Where(group => group != null && scopeOwnedKeys.Contains(group.key))
+                .ToDictionary(group => group.key, group => group.parentKey ?? string.Empty, StringComparer.Ordinal);
             target.groups.RemoveAll(group => group != null && replaceAuthorizedKeys.Contains(group.key));
+
+            // Omitted dependent groups survive an owned-parent dissolve. Resolve
+            // the complete removed chain, so the result is deterministic even
+            // when parent/child/grandchild groups were stored out of order.
+            foreach (PsdHierarchyPlanGroup group in target.groups.Where(group => group != null).ToArray())
+                group.parentKey = ResolveSurvivingParent(group.parentKey, removedParentByKey);
+
             var scope = new HashSet<string>(
                 runRequest.modifiableStableIds ?? new List<string>(), StringComparer.Ordinal);
             target.renames.RemoveAll(rename => rename != null && scope.Contains(rename.stableId));
             target.groups.AddRange((partial.groups ?? new List<PsdHierarchyPlanGroup>()).Select(CloneGroup));
             target.renames.AddRange((partial.renames ?? new List<PsdHierarchyPlanRename>()).Select(CloneRename));
+        }
+
+        private static string ResolveSurvivingParent(
+            string parentKey,
+            IDictionary<string, string> removedParentByKey)
+        {
+            string current = parentKey ?? string.Empty;
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            while (!string.IsNullOrEmpty(current) && removedParentByKey.ContainsKey(current))
+            {
+                if (!visited.Add(current))
+                    throw new PsdHierarchyPlanValidationException("Removed hierarchy contains a parent cycle.");
+                current = removedParentByKey[current] ?? string.Empty;
+            }
+            return current;
         }
 
         private static void RemoveConfirmedMissing(PsdHierarchyPlan plan, IEnumerable<string> missingStableIds)
@@ -528,13 +634,22 @@ namespace PsdLayoutTool2
                 runRequest.modifiableGroupKeys ?? new List<string>(), StringComparer.Ordinal);
             var scopeOwnedGroupKeys = new HashSet<string>(
                 runRequest.scopeOwnedGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            var hybridGroupKeys = new HashSet<string>(
+                runRequest.hybridGroupKeys ?? new List<string>(), StringComparer.Ordinal);
             var readonlyNeighborGroupKeys = new HashSet<string>(
                 runRequest.readonlyNeighborGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            var structuralDependentGroupKeys = new HashSet<string>(
+                runRequest.structuralDependentGroupKeys ?? new List<string>(), StringComparer.Ordinal);
             var existingGroupKeys = new HashSet<string>(
                 runRequest.existingGroupKeys ?? new List<string>(), StringComparer.Ordinal);
-            if (scopeOwnedGroupKeys.Overlaps(readonlyNeighborGroupKeys) ||
-                !scopeOwnedGroupKeys.IsSubsetOf(modifiableGroupKeys) ||
-                !readonlyNeighborGroupKeys.IsSubsetOf(modifiableGroupKeys))
+            var categorizedGroupKeys = new HashSet<string>(scopeOwnedGroupKeys, StringComparer.Ordinal);
+            categorizedGroupKeys.UnionWith(hybridGroupKeys);
+            categorizedGroupKeys.UnionWith(readonlyNeighborGroupKeys);
+            categorizedGroupKeys.UnionWith(structuralDependentGroupKeys);
+            int categorizedCount = scopeOwnedGroupKeys.Count + hybridGroupKeys.Count +
+                                   readonlyNeighborGroupKeys.Count + structuralDependentGroupKeys.Count;
+            if (categorizedGroupKeys.Count != categorizedCount ||
+                !categorizedGroupKeys.SetEquals(modifiableGroupKeys))
                 throw new PsdHierarchyPlanValidationException("Focused group ownership metadata is inconsistent.");
             foreach (string groupKey in modifiableGroupKeys)
             {
@@ -563,23 +678,30 @@ namespace PsdLayoutTool2
                 if (baselineByKey.TryGetValue(group.key, out baselineGroup))
                 {
                     List<string> baselineMembers = baselineGroup.memberStableIds ?? new List<string>();
+                    bool hybrid = hybridGroupKeys.Contains(group.key);
+                    bool readonlyNeighbor = readonlyNeighborGroupKeys.Contains(group.key);
+                    bool structuralDependent = structuralDependentGroupKeys.Contains(group.key);
+                    bool protectsReadonlyState = hybrid || readonlyNeighbor || structuralDependent;
                     List<string> readonlyBefore = baselineMembers.Where(id => !allowedIds.Contains(id)).ToList();
                     List<string> readonlyAfter = (group.memberStableIds ?? new List<string>())
                         .Where(id => !allowedIds.Contains(id)).ToList();
-                    if (!readonlyBefore.SequenceEqual(readonlyAfter, StringComparer.Ordinal))
+                    if (protectsReadonlyState && !readonlyBefore.SequenceEqual(readonlyAfter, StringComparer.Ordinal))
                         throw new PsdHierarchyPlanValidationException(
                             "Focused plan changed readonly membership/order in group '" + group.key + "'.");
-                    bool readonlyNeighbor = readonlyNeighborGroupKeys.Contains(group.key);
-                    if (readonlyNeighbor &&
+                    if ((hybrid || readonlyNeighbor) &&
                         !string.Equals(group.parentKey ?? string.Empty, baselineGroup.parentKey ?? string.Empty, StringComparison.Ordinal))
                         throw new PsdHierarchyPlanValidationException(
                             "Focused plan moved readonly group '" + group.key + "'.");
-                    if (readonlyNeighbor &&
+                    if (protectsReadonlyState &&
                         (!string.Equals(group.displayName ?? string.Empty, baselineGroup.displayName ?? string.Empty, StringComparison.Ordinal) ||
                          !string.Equals(group.evidence ?? string.Empty, baselineGroup.evidence ?? string.Empty, StringComparison.Ordinal) ||
                          group.confidence != baselineGroup.confidence))
                         throw new PsdHierarchyPlanValidationException(
                             "Focused plan changed readonly group metadata for '" + group.key + "'.");
+                    if (structuralDependent &&
+                        !baselineMembers.SequenceEqual(group.memberStableIds ?? new List<string>(), StringComparer.Ordinal))
+                        throw new PsdHierarchyPlanValidationException(
+                            "Focused plan changed structural dependent members for '" + group.key + "'.");
                     if (readonlyNeighbor &&
                         !(group.memberStableIds ?? new List<string>()).Any(allowedIds.Contains))
                         throw new PsdHierarchyPlanValidationException(
@@ -619,7 +741,7 @@ namespace PsdLayoutTool2
                                               (group.memberStableIds ?? new List<string>()).Any(allowedIds.Contains)) ||
                                       (partial.renames ?? new List<PsdHierarchyPlanRename>())
                                           .Any(rename => rename != null && allowedIds.Contains(rename.stableId));
-            if (!hasFocusedDecision && scopeOwnedGroupKeys.Count == 0)
+            if (!hasFocusedDecision && scopeOwnedGroupKeys.Count == 0 && hybridGroupKeys.Count == 0)
                 throw new PsdHierarchyPlanValidationException(
                     "Focused replan returned no decision for its modifiable IDs.");
         }

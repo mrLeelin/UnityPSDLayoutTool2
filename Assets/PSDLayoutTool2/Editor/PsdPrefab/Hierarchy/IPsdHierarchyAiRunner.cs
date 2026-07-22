@@ -27,7 +27,9 @@ namespace PsdLayoutTool2
         public List<string> contextStableIds = new List<string>();
         public List<string> modifiableGroupKeys = new List<string>();
         public List<string> scopeOwnedGroupKeys = new List<string>();
+        public List<string> hybridGroupKeys = new List<string>();
         public List<string> readonlyNeighborGroupKeys = new List<string>();
+        public List<string> structuralDependentGroupKeys = new List<string>();
         public List<string> existingGroupKeys = new List<string>();
         public List<PsdHierarchyPlanGroup> baselineGroups = new List<PsdHierarchyPlanGroup>();
     }
