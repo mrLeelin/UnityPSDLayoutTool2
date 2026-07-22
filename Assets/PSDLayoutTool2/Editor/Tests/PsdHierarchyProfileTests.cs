@@ -293,6 +293,117 @@ namespace PsdLayoutTool2.Tests
             Assert.That(profile.CheckSchema().canApply, Is.False);
         }
 
+        [Test]
+        public void TruthFingerprintsUseSha256AndChangeWithTheirRealInputs()
+        {
+            PsdPrefabNodeModel original = Node("101", "A", 0, new Rect(0, 0, 10, 10),
+                PsdHierarchyFingerprints.Asset(new[] { new KeyValuePair<short, byte[]>(0, new byte[] { 1, 2, 3 }) }));
+            PsdPrefabNodeModel changedContent = Node("101", "A", 0, new Rect(0, 0, 10, 10),
+                PsdHierarchyFingerprints.Asset(new[] { new KeyValuePair<short, byte[]>(0, new byte[] { 1, 2, 4 }) }));
+            PsdPrefabNodeModel changedStructure = Node("101", "A", 1, new Rect(0, 0, 10, 10), original.assetFingerprint);
+            PsdPrefabNodeModel changedGeometry = Node("101", "A", 0, new Rect(0, 0, 11, 10), original.assetFingerprint);
+
+            string asset = original.assetFingerprint;
+            string content = PsdHierarchyFingerprints.Content(original);
+            string structure = PsdHierarchyFingerprints.Structure(original);
+            string geometry = PsdHierarchyFingerprints.Geometry(original);
+            string document = PsdHierarchyFingerprints.Document(Document(original));
+
+            Assert.That(new[] { asset, content, structure, geometry, document }.All(value => value.Length == 64), Is.True);
+            Assert.That(PsdHierarchyFingerprints.Content(changedContent), Is.Not.EqualTo(content));
+            Assert.That(PsdHierarchyFingerprints.Structure(changedStructure), Is.Not.EqualTo(structure));
+            Assert.That(PsdHierarchyFingerprints.Geometry(changedGeometry), Is.Not.EqualTo(geometry));
+            Assert.That(PsdHierarchyFingerprints.Document(Document(original)), Is.EqualTo(document));
+            Assert.That(PsdHierarchyFingerprints.Document(Document(changedContent)), Is.Not.EqualTo(document));
+        }
+
+        [Test]
+        public void ContentOnlyReconcileAdvancesAcceptedSourceFingerprint()
+        {
+            PsdPrefabDocumentModel original = Document(Node("101", "A", 0, Rect.zero, "pixels-a"));
+            original.sourceFingerprint = PsdHierarchyFingerprints.Document(original);
+            PsdHierarchyProfile profile = Profile(original, "101");
+            PsdPrefabDocumentModel changed = Document(Node("101", "Renamed", 0, Rect.zero, "pixels-b"));
+            changed.sourceFingerprint = PsdHierarchyFingerprints.Document(changed);
+
+            PsdHierarchyReconciliationResult first = profile.Reconcile(changed);
+            PsdHierarchyReconciliationResult repeated = profile.Reconcile(changed);
+
+            Assert.That(first.contentOnlyStableIds, Is.EqualTo(new[] { "101" }));
+            Assert.That(profile.sourceFingerprint, Is.EqualTo(changed.sourceFingerprint));
+            Assert.That(profile.IsStale("guid-123", changed.sourceFingerprint), Is.False);
+            Assert.That(repeated.contentOnlyStableIds, Is.Empty);
+        }
+
+        [Test]
+        public void PendingGeometryDoesNotAdvanceAcceptedSourceFingerprint()
+        {
+            PsdPrefabDocumentModel original = Document(Node("101", "A", 0, new Rect(0, 0, 10, 10), "pixels"));
+            original.sourceFingerprint = PsdHierarchyFingerprints.Document(original);
+            PsdHierarchyProfile profile = Profile(original, "101");
+            PsdPrefabDocumentModel changed = Document(Node("101", "A", 0, new Rect(0, 0, 20, 10), "pixels"));
+            changed.sourceFingerprint = PsdHierarchyFingerprints.Document(changed);
+
+            profile.Reconcile(changed);
+
+            Assert.That(profile.sourceFingerprint, Is.EqualTo(original.sourceFingerprint));
+            Assert.That(profile.IsStale("guid-123", changed.sourceFingerprint), Is.True);
+        }
+
+        [Test]
+        public void NullSerializedCollectionsAreNormalizedWithoutNullReference()
+        {
+            PsdHierarchyProfile profile = Profile(Document(Node("101", "A", 0, Rect.zero, "a")), "101");
+            profile.nodes = null;
+            profile.groups = null;
+            profile.renames = null;
+            var corruptedDocument = new PsdPrefabDocumentModel { nodes = null };
+
+            Assert.DoesNotThrow(() => profile.Reconcile(corruptedDocument));
+            Assert.That(profile.nodes, Is.Not.Null);
+            Assert.That(profile.groups, Is.Not.Null);
+            Assert.That(profile.renames, Is.Not.Null);
+        }
+
+        [Test]
+        public void ScriptableProfileSurvivesRealAssetDatabaseRoundTrip()
+        {
+            const string folder = "Assets/__PsdHierarchyProfileTests";
+            const string path = folder + "/RoundTrip.asset";
+            PsdHierarchyProfile loaded = null;
+            try
+            {
+                AssetDatabase.DeleteAsset(folder);
+                AssetDatabase.CreateFolder("Assets", "__PsdHierarchyProfileTests");
+                PsdPrefabDocumentModel document = Document(Node("101", "A", 0, Rect.zero, "pixels"));
+                document.sourceFingerprint = PsdHierarchyFingerprints.Document(document);
+                PsdHierarchyProfile profile = Profile(document, "101");
+                AssetDatabase.CreateAsset(profile, path);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+
+                loaded = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(path);
+                Assert.That(loaded, Is.Not.Null);
+                Assert.That(loaded.sourcePsdGuid, Is.EqualTo("guid-123"));
+                Assert.That(loaded.sourceFingerprint, Is.EqualTo(document.sourceFingerprint));
+                Assert.That(loaded.groups[0].stableLayerIds, Is.EqualTo(new[] { "101" }));
+                Assert.That(loaded.CheckSchema().status, Is.EqualTo(PsdHierarchyProfileSchemaStatus.Current));
+            }
+            finally
+            {
+                if (loaded != null)
+                {
+                    Resources.UnloadAsset(loaded);
+                }
+
+                AssetDatabase.DeleteAsset(folder);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+            }
+
+            Assert.That(AssetDatabase.IsValidFolder(folder), Is.False);
+        }
+
         private static PsdHierarchyProfile Profile(PsdPrefabDocumentModel document, params string[] members)
         {
             return PsdHierarchyProfile.Create(

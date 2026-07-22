@@ -115,8 +115,8 @@ namespace PsdLayoutTool2
 
             PsdHierarchyProfile profile = CreateInstance<PsdHierarchyProfile>();
             profile.sourcePsdGuid = sourcePsdGuid ?? string.Empty;
-            profile.sourceFingerprint = document.sourceFingerprint ?? string.Empty;
-            profile.nodes = document.nodes
+            profile.sourceFingerprint = ResolveDocumentFingerprint(document);
+            profile.nodes = (document.nodes ?? new List<PsdPrefabNodeModel>())
                 .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal)
                 .Select(group => Snapshot(group.First()))
@@ -211,12 +211,13 @@ namespace PsdLayoutTool2
             NormalizePersistedCollections();
             var result = new PsdHierarchyReconciliationResult();
             Dictionary<string, PsdHierarchyProfileNode> previous = nodes.ToDictionary(node => node.stableId, StringComparer.Ordinal);
-            Dictionary<string, PsdPrefabNodeModel> current = document.nodes
+            Dictionary<string, PsdPrefabNodeModel> current = (document.nodes ?? new List<PsdPrefabNodeModel>())
                 .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
-            foreach (PsdPrefabNodeModel unstable in document.nodes.Where(node => node != null && !PsdStableLayerIdUtility.IsPersistable(node.stableId)))
+            foreach (PsdPrefabNodeModel unstable in (document.nodes ?? new List<PsdPrefabNodeModel>())
+                         .Where(node => node != null && !PsdStableLayerIdUtility.IsPersistable(node.stableId)))
             {
                 AddUnique(result.unsortedUnstableIds, unstable.stableId);
             }
@@ -269,6 +270,15 @@ namespace PsdLayoutTool2
             }
 
             result.requiresReplan = result.focusedInvalidatedScopeStableIds.Count > 0;
+            bool sourceCanAdvance = !result.requiresReplan &&
+                                    result.geometryValidationStableIds.Count == 0 &&
+                                    result.pendingMissingStableIds.Count == 0 &&
+                                    result.unsortedUnstableIds.Count == 0;
+            if (sourceCanAdvance)
+            {
+                sourceFingerprint = ResolveDocumentFingerprint(document);
+            }
+
             return result;
         }
 
@@ -301,12 +311,13 @@ namespace PsdLayoutTool2
 
         private void NormalizePersistedCollections()
         {
-            nodes = nodes.Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
+            nodes = (nodes ?? new List<PsdHierarchyProfileNode>())
+                .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal).Select(group => group.First()).ToList();
             var normalizedGroups = new List<PsdHierarchyProfileGroup>();
             var ownedStableIds = new HashSet<string>(StringComparer.Ordinal);
             var usedGroupKeys = new HashSet<string>(StringComparer.Ordinal);
-            foreach (PsdHierarchyProfileGroup group in groups.Where(value => value != null))
+            foreach (PsdHierarchyProfileGroup group in (groups ?? new List<PsdHierarchyProfileGroup>()).Where(value => value != null))
             {
                 List<string> members = DurableDistinct(group.stableLayerIds)
                     .Where(ownedStableIds.Add)
@@ -322,7 +333,8 @@ namespace PsdLayoutTool2
                 normalizedGroups.Add(group);
             }
             groups = normalizedGroups;
-            renames = renames.Where(rename => rename != null && PsdStableLayerIdUtility.IsPersistable(rename.stableId))
+            renames = (renames ?? new List<PsdHierarchyProfileRename>())
+                .Where(rename => rename != null && PsdStableLayerIdUtility.IsPersistable(rename.stableId))
                 .GroupBy(rename => rename.stableId, StringComparer.Ordinal).Select(group => group.First()).ToList();
         }
 
@@ -381,6 +393,13 @@ namespace PsdLayoutTool2
             {
                 values.Add(value);
             }
+        }
+
+        private static string ResolveDocumentFingerprint(PsdPrefabDocumentModel document)
+        {
+            return !string.IsNullOrEmpty(document.sourceFingerprint)
+                ? document.sourceFingerprint
+                : PsdHierarchyFingerprints.Document(document);
         }
     }
 }

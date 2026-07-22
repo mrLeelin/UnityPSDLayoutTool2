@@ -2,7 +2,9 @@ namespace PsdLayoutTool2
 {
     using System.Collections.Generic;
     using System.Globalization;
+    using System.IO;
     using System.Linq;
+    using System.Security.Cryptography;
     using System.Text;
     using UnityEngine;
 
@@ -20,27 +22,29 @@ namespace PsdLayoutTool2
         /// </summary>
         public static string Asset(IEnumerable<KeyValuePair<short, byte[]>> channels)
         {
-            unchecked
+            using (SHA256 algorithm = SHA256.Create())
+            using (var sink = new CryptoStream(Stream.Null, algorithm, CryptoStreamMode.Write))
             {
-                uint hash = 2166136261u;
                 foreach (KeyValuePair<short, byte[]> channel in
                          (channels ?? Enumerable.Empty<KeyValuePair<short, byte[]>>()).OrderBy(value => value.Key))
                 {
-                    HashByte(ref hash, (byte)(channel.Key >> 8));
-                    HashByte(ref hash, (byte)channel.Key);
                     byte[] bytes = channel.Value ?? new byte[0];
                     int length = bytes.Length;
-                    HashByte(ref hash, (byte)(length >> 24));
-                    HashByte(ref hash, (byte)(length >> 16));
-                    HashByte(ref hash, (byte)(length >> 8));
-                    HashByte(ref hash, (byte)length);
-                    foreach (byte value in bytes)
+                    byte[] header =
                     {
-                        HashByte(ref hash, value);
-                    }
+                        (byte)(channel.Key >> 8),
+                        (byte)channel.Key,
+                        (byte)(length >> 24),
+                        (byte)(length >> 16),
+                        (byte)(length >> 8),
+                        (byte)length
+                    };
+                    sink.Write(header, 0, header.Length);
+                    sink.Write(bytes, 0, bytes.Length);
                 }
 
-                return hash.ToString("x8", CultureInfo.InvariantCulture);
+                sink.FlushFinalBlock();
+                return ToHex(algorithm.Hash);
             }
         }
 
@@ -81,7 +85,7 @@ namespace PsdLayoutTool2
                 Append(value, Float(node.nineSlice.bottom));
             }
 
-            return PsdStableLayerIdUtility.ComputeFnv1a(value.ToString());
+            return ComputeSha256(value.ToString());
         }
 
         public static string Structure(PsdPrefabNodeModel node)
@@ -89,7 +93,7 @@ namespace PsdLayoutTool2
             string value = (node.stableId ?? string.Empty) + "|" +
                            (node.parentStableId ?? string.Empty) + "|" +
                            node.siblingIndex.ToString(CultureInfo.InvariantCulture) + "|" + node.kind;
-            return PsdStableLayerIdUtility.ComputeFnv1a(value);
+            return ComputeSha256(value);
         }
 
         public static string Geometry(PsdPrefabNodeModel node)
@@ -97,7 +101,7 @@ namespace PsdLayoutTool2
             Rect bounds = node.bounds;
             string value = (node.stableId ?? string.Empty) + "|" + Float(bounds.x) + "|" + Float(bounds.y) + "|" +
                            Float(bounds.width) + "|" + Float(bounds.height);
-            return PsdStableLayerIdUtility.ComputeFnv1a(value);
+            return ComputeSha256(value);
         }
 
         /// <summary>
@@ -126,7 +130,7 @@ namespace PsdLayoutTool2
                 Append(value, nodeValue);
             }
 
-            return PsdStableLayerIdUtility.ComputeFnv1a(value.ToString());
+            return ComputeSha256(value.ToString());
         }
 
         private static void Append(StringBuilder target, string value)
@@ -148,13 +152,23 @@ namespace PsdLayoutTool2
             return Float(color.r) + "," + Float(color.g) + "," + Float(color.b) + "," + Float(color.a);
         }
 
-        private static void HashByte(ref uint hash, byte value)
+        private static string ComputeSha256(string value)
         {
-            unchecked
+            using (SHA256 algorithm = SHA256.Create())
             {
-                hash ^= value;
-                hash *= 16777619u;
+                return ToHex(algorithm.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty)));
             }
+        }
+
+        private static string ToHex(byte[] bytes)
+        {
+            var value = new StringBuilder((bytes == null ? 0 : bytes.Length) * 2);
+            foreach (byte item in bytes ?? new byte[0])
+            {
+                value.Append(item.ToString("x2", CultureInfo.InvariantCulture));
+            }
+
+            return value.ToString();
         }
     }
 }
