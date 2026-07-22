@@ -19,6 +19,7 @@ namespace PsdLayoutTool2
     public sealed class PsdHierarchyProfileGroup
     {
         public string key;
+        public string parentKey;
         public string displayName;
         public List<string> stableLayerIds = new List<string>();
         public byte[] GetPlanBytes()
@@ -35,6 +36,9 @@ namespace PsdLayoutTool2
             Append(value, PsdHierarchyProfile.IsValidGroupKey(key)
                 ? key
                 : PsdHierarchyProfile.BuildGeneratedGroupKey(durableMembers));
+            // parentKey is preserved exactly from the already validated plan.
+            // Profile normalization must not repair broken nesting silently.
+            Append(value, parentKey);
             foreach (string stableId in durableMembers)
             {
                 Append(value, stableId);
@@ -145,6 +149,7 @@ namespace PsdLayoutTool2
                 var group = new PsdHierarchyProfileGroup
                 {
                     key = key,
+                    parentKey = source.parentKey ?? string.Empty,
                     displayName = source.displayName ?? string.Empty,
                     stableLayerIds = members
                 };

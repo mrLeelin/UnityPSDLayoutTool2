@@ -33,7 +33,13 @@ namespace PsdLayoutTool2
                 Fail("Unsupported request schema version.");
             }
 
-            ValidateStructuredQuotas(plan, request);
+            ValidatePlanContract(plan);
+            ValidateRequestContract(request);
+
+            if (!string.Equals(plan.sourcePsdGuid, request.sourcePsdGuid, StringComparison.Ordinal))
+            {
+                Fail("Plan source PSD GUID does not match the current PSD context.");
+            }
 
             PsdHierarchyPlanFingerprintStatus fingerprintStatus = EvaluateFingerprints(plan, request);
             if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresReplan)
@@ -89,69 +95,216 @@ namespace PsdLayoutTool2
             return PsdHierarchyPlanFingerprintStatus.Valid;
         }
 
-        private static void ValidateStructuredQuotas(PsdHierarchyPlan plan, PsdHierarchyRequest request)
+        /// <summary>
+        /// Revalidates an in-memory request before serialization or use. This is
+        /// intentionally independent of ContextBuilder because tests, merge code,
+        /// or future callers can construct contract objects programmatically.
+        /// </summary>
+        public static void ValidateRequestContract(PsdHierarchyRequest request)
         {
-            List<PsdHierarchyPlanGroup> groups = plan.groups ?? new List<PsdHierarchyPlanGroup>();
-            List<PsdHierarchyPlanRename> renames = plan.renames ?? new List<PsdHierarchyPlanRename>();
-            List<PsdHierarchyRequestNode> nodes = request.nodes ?? new List<PsdHierarchyRequestNode>();
-            List<PsdHierarchyPrefabNodeMetadata> prefab = request.currentPrefabHierarchy ??
-                                                           new List<PsdHierarchyPrefabNodeMetadata>();
-            List<PsdHierarchyPreviewReference> previews = request.previews ?? new List<PsdHierarchyPreviewReference>();
-
-            if (groups.Count > PsdHierarchyContractLimits.MaxGroups)
+            if (request == null)
             {
-                Fail("Plan exceeds the group limit.");
+                throw new ArgumentNullException("request");
             }
 
-            if (renames.Count > PsdHierarchyContractLimits.MaxRenames)
+            if (request.schemaVersion != PsdHierarchyRequest.CurrentSchemaVersion)
             {
-                Fail("Plan exceeds the rename limit.");
+                Fail("Unsupported request schema version.");
             }
 
-            if (nodes.Count > PsdHierarchyContractLimits.MaxContextNodes)
+            RequireString(request.sourcePsdGuid, PsdHierarchyContractLimits.MaxSourceGuidLength, false, "Request source PSD GUID");
+            RequireString(request.sourceFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, true, "Request source fingerprint");
+            RequireString(request.contentFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, false, "Request content fingerprint");
+            RequireString(request.structureFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, false, "Request structure fingerprint");
+            RequireString(request.geometryFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, false, "Request geometry fingerprint");
+            if (request.documentWidth < 0 || request.documentWidth > PsdHierarchyContractLimits.MaxDocumentDimension ||
+                request.documentHeight < 0 || request.documentHeight > PsdHierarchyContractLimits.MaxDocumentDimension)
             {
-                Fail("Request exceeds the context node limit.");
+                Fail("Request document dimensions are outside the allowed range.");
             }
 
-            if (prefab.Count > PsdHierarchyContractLimits.MaxPrefabMetadataNodes)
+            if (request.nodes == null || request.nodes.Count > PsdHierarchyContractLimits.MaxContextNodes)
             {
-                Fail("Request exceeds the Prefab metadata node limit.");
+                Fail("Request nodes are missing or exceed the context node limit.");
             }
 
-            if (previews.Count > PsdHierarchyContractLimits.MaxPreviews)
+            if (request.currentPrefabHierarchy == null ||
+                request.currentPrefabHierarchy.Count > PsdHierarchyContractLimits.MaxPrefabMetadataNodes)
             {
-                Fail("Request exceeds the preview limit.");
+                Fail("Request Prefab metadata is missing or exceeds the node limit.");
+            }
+
+            if (request.previews == null || request.previews.Count > PsdHierarchyContractLimits.MaxPreviews)
+            {
+                Fail("Request previews are missing or exceed the preview limit.");
+            }
+
+            foreach (PsdHierarchyRequestNode node in request.nodes)
+            {
+                if (node == null)
+                {
+                    Fail("Request contains a null node.");
+                }
+
+                RequireString(node.stableId, PsdHierarchyContractLimits.MaxIdentifierLength, false, "Request node stable ID");
+                RequireString(node.parentStableId, PsdHierarchyContractLimits.MaxIdentifierLength, true, "Request node parent ID");
+                RequireString(node.originalName, PsdHierarchyContractLimits.MaxNameLength, true, "Request node name");
+                RequireString(node.kind, PsdHierarchyContractLimits.MaxNameLength, false, "Request node kind");
+                RequireString(node.protectedBoundaryStableId, PsdHierarchyContractLimits.MaxIdentifierLength, true,
+                    "Request node protected boundary ID");
+                if (node.siblingIndex < 0 || node.siblingIndex > PsdHierarchyContractLimits.MaxContextNodes)
+                {
+                    Fail("Request node sibling index is outside the allowed range.");
+                }
+
+                ValidateRectangle(node.rectangle, "Request node rectangle");
+            }
+
+            int totalComponentTypes = 0;
+            foreach (PsdHierarchyPrefabNodeMetadata metadata in request.currentPrefabHierarchy)
+            {
+                if (metadata == null)
+                {
+                    Fail("Request contains null Prefab metadata.");
+                }
+
+                RequireString(metadata.stableId, PsdHierarchyContractLimits.MaxIdentifierLength, true, "Prefab stable ID");
+                RequireString(metadata.parentStableId, PsdHierarchyContractLimits.MaxIdentifierLength, true, "Prefab parent ID");
+                RequireString(metadata.hierarchyPath, PsdHierarchyContractLimits.MaxHierarchyPathLength, true, "Prefab hierarchy path");
+                RequireString(metadata.protectedBoundaryStableId, PsdHierarchyContractLimits.MaxIdentifierLength, true,
+                    "Prefab protected boundary ID");
+                if (metadata.siblingIndex < 0 || metadata.siblingIndex > PsdHierarchyContractLimits.MaxContextNodes)
+                {
+                    Fail("Prefab metadata sibling index is outside the allowed range.");
+                }
+
+                if (metadata.componentTypes == null ||
+                    metadata.componentTypes.Count > PsdHierarchyContractLimits.MaxComponentTypesPerNode)
+                {
+                    Fail("Request Prefab metadata component types are missing or exceed the per-node limit.");
+                }
+
+                totalComponentTypes += metadata.componentTypes.Count;
+                if (totalComponentTypes > PsdHierarchyContractLimits.MaxTotalComponentTypes)
+                {
+                    Fail("Request exceeds the total component type limit.");
+                }
+
+                foreach (string componentType in metadata.componentTypes)
+                {
+                    RequireString(componentType, PsdHierarchyContractLimits.MaxNameLength, false, "Prefab component type");
+                }
+            }
+
+            foreach (PsdHierarchyPreviewReference preview in request.previews)
+            {
+                if (preview == null)
+                {
+                    Fail("Request contains a null preview reference.");
+                }
+
+                RequireString(preview.key, PsdHierarchyContractLimits.MaxIdentifierLength, false, "Preview key");
+                RequireString(preview.kind, PsdHierarchyContractLimits.MaxPreviewKindLength, false, "Preview kind");
+                ValidateRectangle(preview.crop, "Preview crop");
+            }
+        }
+
+        private static void ValidatePlanContract(PsdHierarchyPlan plan)
+        {
+            RequireString(plan.sourcePsdGuid, PsdHierarchyContractLimits.MaxSourceGuidLength, false, "Plan source PSD GUID");
+            RequireString(plan.sourceFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, true, "Plan source fingerprint");
+            RequireString(plan.contentFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, false, "Plan content fingerprint");
+            RequireString(plan.structureFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, false, "Plan structure fingerprint");
+            RequireString(plan.geometryFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, false, "Plan geometry fingerprint");
+            if (plan.groups == null || plan.groups.Count > PsdHierarchyContractLimits.MaxGroups)
+            {
+                Fail("Plan groups are missing or exceed the group limit.");
+            }
+
+            if (plan.renames == null || plan.renames.Count > PsdHierarchyContractLimits.MaxRenames)
+            {
+                Fail("Plan renames are missing or exceed the rename limit.");
             }
 
             int totalMemberships = 0;
-            foreach (PsdHierarchyPlanGroup group in groups)
+            foreach (PsdHierarchyPlanGroup group in plan.groups)
             {
-                int memberCount = group == null || group.memberStableIds == null ? 0 : group.memberStableIds.Count;
-                if (memberCount > PsdHierarchyContractLimits.MaxMembersPerGroup)
+                if (group == null)
                 {
-                    Fail("Plan group exceeds the member limit.");
+                    Fail("Plan contains a null group.");
                 }
 
-                totalMemberships += memberCount;
+                RequireString(group.key, PsdHierarchyContractLimits.MaxIdentifierLength, false, "Plan group key");
+                RequireString(group.parentKey, PsdHierarchyContractLimits.MaxIdentifierLength, true, "Plan group parent key");
+                RequireString(group.displayName, PsdHierarchyContractLimits.MaxNameLength, true, "Plan group display name");
+                RequireString(group.evidence, PsdHierarchyContractLimits.MaxEvidenceLength, true, "Plan group evidence");
+                ValidateConfidence(group.confidence, "Plan group confidence");
+                if (group.memberStableIds == null ||
+                    group.memberStableIds.Count > PsdHierarchyContractLimits.MaxMembersPerGroup)
+                {
+                    Fail("Plan group members are missing or exceed the member limit.");
+                }
+
+                totalMemberships += group.memberStableIds.Count;
                 if (totalMemberships > PsdHierarchyContractLimits.MaxTotalMemberships)
                 {
                     Fail("Plan exceeds the total membership limit.");
                 }
+
+                foreach (string memberId in group.memberStableIds)
+                {
+                    RequireString(memberId, PsdHierarchyContractLimits.MaxIdentifierLength, false, "Plan member stable ID");
+                }
             }
 
-            foreach (PsdHierarchyPrefabNodeMetadata metadata in prefab)
+            foreach (PsdHierarchyPlanRename rename in plan.renames)
             {
-                if (metadata != null && metadata.componentTypes != null &&
-                    metadata.componentTypes.Count > PsdHierarchyContractLimits.MaxComponentTypesPerNode)
+                if (rename == null)
                 {
-                    Fail("Request Prefab metadata exceeds the component type limit.");
+                    Fail("Plan contains a null rename.");
                 }
 
-                if (metadata != null && (metadata.hierarchyPath ?? string.Empty).Length >
-                    PsdHierarchyContractLimits.MaxHierarchyPathLength)
-                {
-                    Fail("Request Prefab hierarchy path exceeds the length limit.");
-                }
+                RequireString(rename.stableId, PsdHierarchyContractLimits.MaxIdentifierLength, false, "Rename stable ID");
+                RequireString(rename.name, PsdHierarchyContractLimits.MaxNameLength, false, "Rename name");
+                RequireString(rename.evidence, PsdHierarchyContractLimits.MaxEvidenceLength, true, "Rename evidence");
+                ValidateConfidence(rename.confidence, "Rename confidence");
+            }
+        }
+
+        private static void RequireString(string value, int maximumLength, bool allowEmpty, string label)
+        {
+            if (value == null || (!allowEmpty && value.Length == 0) || value.Length > maximumLength)
+            {
+                Fail(label + " is missing or exceeds the length limit.");
+            }
+        }
+
+        private static void ValidateConfidence(double value, string label)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value) || value < 0d || value > 1d)
+            {
+                Fail(label + " must be finite and between 0 and 1.");
+            }
+        }
+
+        private static void ValidateRectangle(PsdHierarchyRectangle value, string label)
+        {
+            ValidateCoordinate(value.x, label);
+            ValidateCoordinate(value.y, label);
+            ValidateCoordinate(value.width, label);
+            ValidateCoordinate(value.height, label);
+            if (value.width < 0f || value.height < 0f)
+            {
+                Fail(label + " cannot have negative size.");
+            }
+        }
+
+        private static void ValidateCoordinate(float value, string label)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value) ||
+                Math.Abs(value) > PsdHierarchyContractLimits.MaxCoordinateMagnitude)
+            {
+                Fail(label + " contains a non-finite or out-of-range value.");
             }
         }
 
@@ -439,6 +592,13 @@ namespace PsdLayoutTool2
                 if (string.IsNullOrWhiteSpace(rename.name))
                 {
                     Fail("Plan contains an empty rename suggestion for ID '" + rename.stableId + "'.");
+                }
+
+                PsdHierarchyRequestNode node = nodes[rename.stableId];
+                if (node.isProtectedBoundary || node.hasProjectComponents ||
+                    !string.IsNullOrEmpty(node.protectedBoundaryStableId))
+                {
+                    Fail("Plan cannot rename protected or project-owned node '" + rename.stableId + "'.");
                 }
             }
         }

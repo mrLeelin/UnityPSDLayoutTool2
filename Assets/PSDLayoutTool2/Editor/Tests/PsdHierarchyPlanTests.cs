@@ -2,6 +2,8 @@ namespace PsdLayoutTool2.Tests
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
+    using System.Text;
     using Newtonsoft.Json;
     using NUnit.Framework;
     using UnityEngine;
@@ -228,7 +230,7 @@ namespace PsdLayoutTool2.Tests
                 }
             };
 
-            PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(document, prefab);
+            PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(document, prefab, null, "psd-guid-123");
             string json = PsdHierarchyPlanJson.SerializeRequest(request);
 
             Assert.That(request.nodes[0].rectangle.width, Is.EqualTo(30));
@@ -284,6 +286,16 @@ namespace PsdLayoutTool2.Tests
             request.currentPrefabHierarchy.Add(PrefabNode("101", false, false));
             request.currentPrefabHierarchy.Add(PrefabNode("101", true, true));
             PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(PlanJson("\"groups\":[],\"renames\":[]", request.sourceFingerprint));
+
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+        }
+
+        [Test]
+        public void SameTopologyFromDifferentPsdGuidIsRejected()
+        {
+            PsdHierarchyRequest request = Request(Node("101", 0));
+            PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(PlanJson("\"groups\":[],\"renames\":[]", request.sourceFingerprint));
+            plan.sourcePsdGuid = "other-psd-guid";
 
             Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
         }
@@ -445,11 +457,108 @@ namespace PsdLayoutTool2.Tests
             Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
         }
 
+        [Test]
+        public void ProgrammaticPlanCannotBypassStringAndConfidenceChecks()
+        {
+            PsdHierarchyRequest request = Request(Node("101", 0));
+            PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(PlanJson(
+                "\"groups\":[" + Group("safe", "", "101") + "],\"renames\":[]", request.sourceFingerprint));
+
+            plan.groups[0].evidence = new string('e', PsdHierarchyContractLimits.MaxEvidenceLength + 1);
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+            plan.groups[0].evidence = "safe";
+
+            foreach (double value in new[] { double.NaN, double.PositiveInfinity, -0.01d, 1.01d })
+            {
+                plan.groups[0].confidence = value;
+                Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+            }
+        }
+
+        [Test]
+        public void ProgrammaticRenameCannotBypassStringConfidenceOrProtectedNodeChecks()
+        {
+            PsdHierarchyRequest request = Request(Node("101", 0));
+            PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(PlanJson(
+                "\"groups\":[],\"renames\":[{\"stableId\":\"101\",\"name\":\"Safe\",\"evidence\":\"x\",\"confidence\":0.5}]",
+                request.sourceFingerprint));
+
+            plan.renames[0].name = new string('n', PsdHierarchyContractLimits.MaxNameLength + 1);
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+            plan.renames[0].name = "Safe";
+            plan.renames[0].confidence = double.NegativeInfinity;
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+
+            plan.renames[0].confidence = 0.5;
+            request.nodes[0].isProtectedBoundary = true;
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+            request.nodes[0].isProtectedBoundary = false;
+            request.nodes[0].hasProjectComponents = true;
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+        }
+
+        [Test]
+        public void ProgrammaticRequestCannotBypassStringsOrFiniteGeometryChecks()
+        {
+            PsdHierarchyRequest request = Request(Node("101", 0));
+            PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(PlanJson("\"groups\":[],\"renames\":[]", request.sourceFingerprint));
+
+            request.nodes[0].originalName = new string('n', PsdHierarchyContractLimits.MaxNameLength + 1);
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+            request.nodes[0].originalName = "Safe";
+            PsdHierarchyRectangle rectangle = request.nodes[0].rectangle;
+            rectangle.width = float.NaN;
+            request.nodes[0].rectangle = rectangle;
+            Assert.Throws<PsdHierarchyPlanValidationException>(() => PsdHierarchyPlanValidator.Validate(plan, request));
+        }
+
+        [Test]
+        public void NullPrefabAndPreviewEnumerationsCountTowardLimitsAndStopAtLimitPlusOne()
+        {
+            int prefabMoves = 0;
+            int previewMoves = 0;
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(
+                DocumentModel(0),
+                NullSequence<PsdHierarchyPrefabNodeMetadata>(PsdHierarchyContractLimits.MaxPrefabMetadataNodes + 1,
+                    () => prefabMoves++)));
+            Assert.That(prefabMoves, Is.EqualTo(PsdHierarchyContractLimits.MaxPrefabMetadataNodes + 1));
+
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(
+                DocumentModel(0),
+                new PsdHierarchyPrefabNodeMetadata[0],
+                NullSequence<PsdHierarchyPreviewReference>(PsdHierarchyContractLimits.MaxPreviews + 1,
+                    () => previewMoves++)));
+            Assert.That(previewMoves, Is.EqualTo(PsdHierarchyContractLimits.MaxPreviews + 1));
+        }
+
+        [Test]
+        public void SerializeRequestAcceptsExactCharacterBudgetAndRejectsOneMoreCharacter()
+        {
+            PsdHierarchyRequest request = RequestForJsonBudget(false, PsdHierarchyContractLimits.MaxJsonCharacters);
+            string json = PsdHierarchyPlanJson.SerializeRequest(request);
+            Assert.That(json.Length, Is.EqualTo(PsdHierarchyContractLimits.MaxJsonCharacters));
+
+            AppendOneNameCharacter(request, 'x');
+            Assert.Throws<PsdHierarchyPlanFormatException>(() => PsdHierarchyPlanJson.SerializeRequest(request));
+        }
+
+        [Test]
+        public void SerializeRequestAcceptsExactUtf8BudgetAndRejectsOneMoreByte()
+        {
+            PsdHierarchyRequest request = RequestForJsonBudget(true, PsdHierarchyContractLimits.MaxJsonUtf8Bytes);
+            string json = PsdHierarchyPlanJson.SerializeRequest(request);
+            Assert.That(Encoding.UTF8.GetByteCount(json), Is.EqualTo(PsdHierarchyContractLimits.MaxJsonUtf8Bytes));
+
+            AppendOneNameCharacter(request, 'x');
+            Assert.Throws<PsdHierarchyPlanFormatException>(() => PsdHierarchyPlanJson.SerializeRequest(request));
+        }
+
         private static PsdHierarchyRequest Request(params PsdHierarchyRequestNode[] nodes)
         {
             return new PsdHierarchyRequest
             {
                 schemaVersion = PsdHierarchyRequest.CurrentSchemaVersion,
+                sourcePsdGuid = "psd-guid-123",
                 sourceFingerprint = "source-v1",
                 contentFingerprint = "content-v1",
                 structureFingerprint = "structure-v1",
@@ -474,7 +583,7 @@ namespace PsdLayoutTool2.Tests
 
         private static string PlanJson(string body, string fingerprint)
         {
-            return "{\"schemaVersion\":1,\"sourceFingerprint\":" + JsonConvert.ToString(fingerprint) +
+            return "{\"schemaVersion\":1,\"sourcePsdGuid\":\"psd-guid-123\",\"sourceFingerprint\":" + JsonConvert.ToString(fingerprint) +
                    ",\"contentFingerprint\":\"content-v1\",\"structureFingerprint\":\"structure-v1\",\"geometryFingerprint\":\"geometry-v1\"," + body + "}";
         }
 
@@ -591,6 +700,80 @@ namespace PsdLayoutTool2.Tests
             }
 
             return renames;
+        }
+
+        private static IEnumerable<T> NullSequence<T>(int count, Action onMove)
+            where T : class
+        {
+            for (int index = 0; index < count; index++)
+            {
+                onMove();
+                yield return null;
+            }
+
+            Assert.Fail("Builder enumerated beyond the expected limit+1 stop point.");
+        }
+
+        private static PsdHierarchyRequest RequestForJsonBudget(bool useMultibyte, int targetSize)
+        {
+            PsdHierarchyRequest request = Request();
+            for (int index = 0; index < PsdHierarchyContractLimits.MaxContextNodes; index++)
+            {
+                PsdHierarchyRequestNode node = Node((index + 10001).ToString(), index);
+                node.originalName = string.Empty;
+                request.nodes.Add(node);
+            }
+
+            string raw = SerializeRaw(request);
+            int currentSize = useMultibyte ? Encoding.UTF8.GetByteCount(raw) : raw.Length;
+            int remaining = targetSize - currentSize;
+            Assert.That(remaining, Is.GreaterThanOrEqualTo(0), "Budget is smaller than an empty max-node request.");
+
+            char fill = useMultibyte ? '中' : 'x';
+            int fillCost = useMultibyte ? 3 : 1;
+            foreach (PsdHierarchyRequestNode node in request.nodes)
+            {
+                int count = Math.Min(PsdHierarchyContractLimits.MaxNameLength, remaining / fillCost);
+                node.originalName = new string(fill, count);
+                remaining -= count * fillCost;
+                if (remaining == 0)
+                {
+                    break;
+                }
+            }
+
+            if (remaining > 0)
+            {
+                foreach (PsdHierarchyRequestNode node in request.nodes)
+                {
+                    int available = PsdHierarchyContractLimits.MaxNameLength - node.originalName.Length;
+                    int count = Math.Min(available, remaining);
+                    node.originalName += new string('x', count);
+                    remaining -= count;
+                    if (remaining == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            Assert.That(remaining, Is.Zero, "Structured request fields cannot reach the configured JSON budget.");
+            return request;
+        }
+
+        private static string SerializeRaw(PsdHierarchyRequest request)
+        {
+            return JsonConvert.SerializeObject(request, Formatting.None, new JsonSerializerSettings
+            {
+                NullValueHandling = NullValueHandling.Ignore,
+                Culture = System.Globalization.CultureInfo.InvariantCulture
+            });
+        }
+
+        private static void AppendOneNameCharacter(PsdHierarchyRequest request, char value)
+        {
+            PsdHierarchyRequestNode node = request.nodes.First(item => item.originalName.Length < PsdHierarchyContractLimits.MaxNameLength);
+            node.originalName += value;
         }
     }
 }

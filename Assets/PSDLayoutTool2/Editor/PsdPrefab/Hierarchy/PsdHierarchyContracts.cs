@@ -11,7 +11,7 @@ namespace PsdLayoutTool2
     public static class PsdHierarchyContractLimits
     {
         public const int MaxJsonCharacters = 2000000;
-        public const int MaxJsonUtf8Bytes = 4000000;
+        public const int MaxJsonUtf8Bytes = 3500000;
         public const int MaxGroups = 512;
         public const int MaxRenames = 2048;
         public const int MaxMembersPerGroup = 512;
@@ -19,6 +19,7 @@ namespace PsdLayoutTool2
         public const int MaxContextNodes = 4096;
         public const int MaxPrefabMetadataNodes = 8192;
         public const int MaxComponentTypesPerNode = 64;
+        public const int MaxTotalComponentTypes = 65536;
         public const int MaxPreviews = 128;
         public const int MaxIdentifierLength = 256;
         public const int MaxNameLength = 512;
@@ -26,6 +27,9 @@ namespace PsdLayoutTool2
         public const int MaxFingerprintLength = 128;
         public const int MaxHierarchyPathLength = 1024;
         public const int MaxPreviewKindLength = 128;
+        public const int MaxSourceGuidLength = 128;
+        public const int MaxDocumentDimension = 100000;
+        public const float MaxCoordinateMagnitude = 10000000f;
     }
 
     /// <summary>
@@ -39,6 +43,7 @@ namespace PsdLayoutTool2
         public const int CurrentSchemaVersion = 1;
 
         public int schemaVersion = CurrentSchemaVersion;
+        public string sourcePsdGuid;
         public string sourceFingerprint;
         public string contentFingerprint;
         public string structureFingerprint;
@@ -112,6 +117,7 @@ namespace PsdLayoutTool2
         public const int CurrentSchemaVersion = 1;
 
         public int schemaVersion;
+        public string sourcePsdGuid;
         public string sourceFingerprint;
         public string contentFingerprint;
         public string structureFingerprint;

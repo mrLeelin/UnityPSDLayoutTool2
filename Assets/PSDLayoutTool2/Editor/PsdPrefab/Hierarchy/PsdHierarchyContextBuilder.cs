@@ -17,7 +17,8 @@ namespace PsdLayoutTool2
         public static PsdHierarchyRequest Build(
             PsdPrefabDocumentModel document,
             IEnumerable<PsdHierarchyPrefabNodeMetadata> prefabHierarchy,
-            IEnumerable<PsdHierarchyPreviewReference> previews = null)
+            IEnumerable<PsdHierarchyPreviewReference> previews = null,
+            string sourcePsdGuid = "")
         {
             if (document == null)
             {
@@ -37,6 +38,7 @@ namespace PsdLayoutTool2
             var request = new PsdHierarchyRequest
             {
                 schemaVersion = PsdHierarchyRequest.CurrentSchemaVersion,
+                sourcePsdGuid = sourcePsdGuid ?? string.Empty,
                 sourceFingerprint = document.sourceFingerprint ?? string.Empty,
                 contentFingerprint = ComputeDocumentFacet(sourceNodes, PsdHierarchyFingerprints.Content, null),
                 structureFingerprint = ComputeDocumentFacet(sourceNodes, PsdHierarchyFingerprints.Structure, null),
@@ -49,6 +51,9 @@ namespace PsdLayoutTool2
                 currentPrefabHierarchy = prefabNodes,
                 previews = previewList
             };
+
+            EnsureLength(request.sourcePsdGuid, PsdHierarchyContractLimits.MaxSourceGuidLength, "source PSD GUID");
+            EnsureLength(request.sourceFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, "source fingerprint");
 
             foreach (PsdPrefabNodeModel source in sourceNodes)
             {
@@ -91,9 +96,11 @@ namespace PsdLayoutTool2
             IEnumerable<PsdHierarchyPrefabNodeMetadata> source)
         {
             var result = new List<PsdHierarchyPrefabNodeMetadata>();
+            int observedCount = 0;
             foreach (PsdHierarchyPrefabNodeMetadata node in source ?? Enumerable.Empty<PsdHierarchyPrefabNodeMetadata>())
             {
-                if (result.Count >= PsdHierarchyContractLimits.MaxPrefabMetadataNodes)
+                observedCount++;
+                if (observedCount > PsdHierarchyContractLimits.MaxPrefabMetadataNodes)
                 {
                     throw new ArgumentException("Hierarchy context exceeds the Prefab metadata node limit.", "source");
                 }
@@ -132,9 +139,11 @@ namespace PsdLayoutTool2
             IEnumerable<PsdHierarchyPreviewReference> source)
         {
             var result = new List<PsdHierarchyPreviewReference>();
+            int observedCount = 0;
             foreach (PsdHierarchyPreviewReference preview in source ?? Enumerable.Empty<PsdHierarchyPreviewReference>())
             {
-                if (result.Count >= PsdHierarchyContractLimits.MaxPreviews)
+                observedCount++;
+                if (observedCount > PsdHierarchyContractLimits.MaxPreviews)
                 {
                     throw new ArgumentException("Hierarchy context exceeds the preview limit.", "source");
                 }

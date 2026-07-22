@@ -228,6 +228,78 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void NestedParentKeySurvivesCreateAndIncrementalReconcile()
+        {
+            PsdPrefabDocumentModel document = Document(
+                Node("101", "A", 0, Rect.zero, "a"),
+                Node("102", "B", 1, Rect.zero, "b"));
+            PsdHierarchyProfile profile = PsdHierarchyProfile.Create(
+                document,
+                new[]
+                {
+                    new PsdHierarchyProfileGroup { key = "root-group", stableLayerIds = new List<string> { "101" } },
+                    new PsdHierarchyProfileGroup { key = "child-group", parentKey = "root-group", stableLayerIds = new List<string> { "102" } }
+                },
+                null,
+                "guid-123");
+            byte[] childPlan = profile.groups[1].GetPlanBytes();
+
+            profile.Reconcile(document);
+            profile.Reconcile(document);
+
+            Assert.That(profile.groups[1].parentKey, Is.EqualTo("root-group"));
+            Assert.That(profile.groups[1].GetPlanBytes(), Is.EqualTo(childPlan));
+            Assert.That(System.Text.Encoding.UTF8.GetString(childPlan), Does.Contain("root-group"));
+        }
+
+        [Test]
+        public void NestedParentKeySurvivesAssetDatabaseRoundTrip()
+        {
+            string path = AssetDatabase.GenerateUniqueAssetPath(
+                "Assets/__PsdHierarchyNestedProfileTest_" + System.Guid.NewGuid().ToString("N") + ".asset");
+            PsdHierarchyProfile profile = null;
+            PsdHierarchyProfile loaded = null;
+            try
+            {
+                PsdPrefabDocumentModel document = Document(
+                    Node("101", "A", 0, Rect.zero, "a"),
+                    Node("102", "B", 1, Rect.zero, "b"));
+                profile = PsdHierarchyProfile.Create(
+                    document,
+                    new[]
+                    {
+                        new PsdHierarchyProfileGroup { key = "root-group", stableLayerIds = new List<string> { "101" } },
+                        new PsdHierarchyProfileGroup { key = "child-group", parentKey = "root-group", stableLayerIds = new List<string> { "102" } }
+                    },
+                    null,
+                    "guid-123");
+                AssetDatabase.CreateAsset(profile, path);
+                AssetDatabase.SaveAssetIfDirty(profile);
+                Resources.UnloadAsset(profile);
+                profile = null;
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+                loaded = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(path);
+
+                Assert.That(loaded.groups[1].parentKey, Is.EqualTo("root-group"));
+                Assert.That(System.Text.Encoding.UTF8.GetString(loaded.groups[1].GetPlanBytes()), Does.Contain("root-group"));
+            }
+            finally
+            {
+                if (loaded != null)
+                {
+                    Resources.UnloadAsset(loaded);
+                }
+
+                if (profile != null && AssetDatabase.Contains(profile))
+                {
+                    Resources.UnloadAsset(profile);
+                }
+
+                AssetDatabase.DeleteAsset(path);
+            }
+        }
+
+        [Test]
         public void ConflictingGroupKeysAreRepairedDeterministically()
         {
             PsdPrefabDocumentModel document = Document(

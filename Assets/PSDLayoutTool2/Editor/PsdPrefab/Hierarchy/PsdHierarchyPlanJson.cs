@@ -17,7 +17,7 @@ namespace PsdLayoutTool2
     public static class PsdHierarchyPlanJson
     {
         private static readonly HashSet<string> PlanProperties = Allowed(
-            "schemaVersion", "sourceFingerprint", "contentFingerprint", "structureFingerprint", "geometryFingerprint",
+            "schemaVersion", "sourcePsdGuid", "sourceFingerprint", "contentFingerprint", "structureFingerprint", "geometryFingerprint",
             "groups", "renames");
         private static readonly HashSet<string> GroupProperties = Allowed(
             "key", "parentKey", "memberStableIds", "displayName", "evidence", "confidence");
@@ -31,15 +31,7 @@ namespace PsdLayoutTool2
                 throw new PsdHierarchyPlanFormatException("Hierarchy plan JSON is empty.");
             }
 
-            if (json.Length > PsdHierarchyContractLimits.MaxJsonCharacters)
-            {
-                throw new PsdHierarchyPlanFormatException("Hierarchy plan exceeds the JSON character limit.");
-            }
-
-            if (Encoding.UTF8.GetByteCount(json) > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
-            {
-                throw new PsdHierarchyPlanFormatException("Hierarchy plan exceeds the UTF-8 byte limit.");
-            }
+            EnsureJsonBudget(json, "Hierarchy plan");
 
             try
             {
@@ -71,6 +63,7 @@ namespace PsdLayoutTool2
                 var plan = new PsdHierarchyPlan
                 {
                     schemaVersion = schemaVersion,
+                    sourcePsdGuid = RequireString(root, "sourcePsdGuid", "plan", PsdHierarchyContractLimits.MaxSourceGuidLength),
                     sourceFingerprint = RequireString(root, "sourceFingerprint", "plan", PsdHierarchyContractLimits.MaxFingerprintLength),
                     contentFingerprint = RequireString(root, "contentFingerprint", "plan", PsdHierarchyContractLimits.MaxFingerprintLength),
                     structureFingerprint = RequireString(root, "structureFingerprint", "plan", PsdHierarchyContractLimits.MaxFingerprintLength),
@@ -138,11 +131,35 @@ namespace PsdLayoutTool2
                 throw new ArgumentNullException("request");
             }
 
-            return JsonConvert.SerializeObject(request, Formatting.None, new JsonSerializerSettings
+            try
+            {
+                PsdHierarchyPlanValidator.ValidateRequestContract(request);
+            }
+            catch (PsdHierarchyPlanValidationException exception)
+            {
+                throw new PsdHierarchyPlanFormatException("Hierarchy request is invalid: " + exception.Message, exception);
+            }
+
+            string json = JsonConvert.SerializeObject(request, Formatting.None, new JsonSerializerSettings
             {
                 NullValueHandling = NullValueHandling.Ignore,
                 Culture = CultureInfo.InvariantCulture
             });
+            EnsureJsonBudget(json, "Hierarchy request");
+            return json;
+        }
+
+        private static void EnsureJsonBudget(string json, string label)
+        {
+            if (json.Length > PsdHierarchyContractLimits.MaxJsonCharacters)
+            {
+                throw new PsdHierarchyPlanFormatException(label + " exceeds the JSON character limit.");
+            }
+
+            if (Encoding.UTF8.GetByteCount(json) > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
+            {
+                throw new PsdHierarchyPlanFormatException(label + " exceeds the UTF-8 byte limit.");
+            }
         }
 
         private static HashSet<string> Allowed(params string[] names)
