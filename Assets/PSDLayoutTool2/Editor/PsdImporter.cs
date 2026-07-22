@@ -668,6 +668,18 @@
                     PsdLogger.Info("Prefab path: " + prefabRelativePath);
                 }
 
+                // Resolve Profile ownership before conflict analysis or any
+                // stale-file deletion. A known Profile with a missing target is
+                // an error, never permission to fall back to whole-tree save.
+                PsdHierarchyProfile boundHierarchyProfile = null;
+                if (CreatePrefab && UseUnityUI && !string.IsNullOrEmpty(prefabRelativePath))
+                {
+                    string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+                    string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabRelativePath, sourceGuid);
+                    boundHierarchyProfile = PsdPrefabTransactionalSave.ResolveBoundProfileForImport(
+                        profilePath, prefabRelativePath);
+                }
+
                 if (CreatePrefab)
                 {
                     if (IsTargetPrefabOpenInPrefabMode(prefabRelativePath))
@@ -769,6 +781,10 @@
 
                 if (effectiveSelection != null)
                 {
+                    if (boundHierarchyProfile != null &&
+                        effectiveSelection.PathsToDelete.Contains(NormalizePath(conflictAnalysis.PrefabFullPath)))
+                        throw new InvalidOperationException(
+                            "Cannot delete a Prefab that is bound to an incremental hierarchy Profile.");
                     PsdLogger.Step("Delete selected stale files: " + effectiveSelection.PathsToDelete.Count);
                     DeleteSelectedFiles(effectiveSelection.PathsToDelete, outputFullPath, conflictAnalysis.PrefabFullPath);
                 }
@@ -1348,19 +1364,17 @@
             GameObject candidateRoot,
             IReadOnlyDictionary<string, RectTransform> candidateRegistry)
         {
-            if (!UseUnityUI || string.IsNullOrEmpty(prefabPath) ||
-                AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null)
+            if (!UseUnityUI || string.IsNullOrEmpty(prefabPath))
                 return false;
 
             string sourceGuid = AssetDatabase.AssetPathToGUID(sourcePsdPath);
             string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
-            PsdHierarchyProfile persisted = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
+            PsdHierarchyProfile persisted = PsdPrefabTransactionalSave.ResolveBoundProfileForImport(profilePath, prefabPath);
             if (persisted == null) return false;
             if (!persisted.CheckSchema().canApply)
                 throw new InvalidOperationException("Hierarchy Profile schema is stale or unsupported: " + profilePath);
             if (!string.Equals(persisted.sourcePsdGuid, sourceGuid, StringComparison.Ordinal))
                 throw new InvalidOperationException("Hierarchy Profile belongs to a different PSD: " + profilePath);
-            PsdPrefabTransactionalSave.ValidateProfileTargetBinding(persisted, prefabPath);
 
             PsdHierarchyProfile working = UnityEngine.Object.Instantiate(persisted);
             GameObject existingContents = null;

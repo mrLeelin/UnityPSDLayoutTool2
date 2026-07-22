@@ -6,6 +6,7 @@ namespace PsdLayoutTool2.Tests
     using System.Linq;
     using NUnit.Framework;
     using TMPro;
+    using UnityEditor.Events;
     using UnityEditor;
     using UnityEditor.SceneManagement;
     using UnityEngine;
@@ -399,10 +400,171 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void RetainedLegacyUiComponentsSyncOwnedFieldsButPreserveButtonOnClick()
+        {
+            GameObject source = Root("Root");
+            RectTransform retained = Child(source, "Legacy", null);
+            Text oldText = retained.gameObject.AddComponent<Text>();
+            Outline oldOutline = retained.gameObject.AddComponent<Outline>();
+            Shadow oldShadow = retained.gameObject.AddComponent<Shadow>();
+            AspectRatioFitter oldAspect = retained.gameObject.AddComponent<AspectRatioFitter>();
+            Button oldButton = retained.gameObject.AddComponent<Button>();
+            PsdPrefabIncrementalCustomProbe handler = retained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
+            UnityEventTools.AddPersistentListener(oldButton.onClick, handler.HandleClick);
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            PsdHierarchyProfileNode record = Node("101", LocalId(TargetPath, "Legacy"), "Root/Legacy");
+            record.importerOwnedComponentTypes = new List<string>
+            {
+                typeof(Text).FullName, typeof(Outline).FullName, typeof(Shadow).FullName,
+                typeof(AspectRatioFitter).FullName, typeof(Button).FullName
+            };
+            PsdHierarchyProfile profile = Profile(record);
+            GameObject candidate = Root("Root");
+            RectTransform candidateRect = Child(candidate, "Legacy", null);
+            Text text = candidateRect.gameObject.AddComponent<Text>();
+            text.text = "增量旧版文本";
+            text.fontSize = 31;
+            text.fontStyle = FontStyle.BoldAndItalic;
+            text.alignment = TextAnchor.LowerRight;
+            text.color = Color.green;
+            text.raycastTarget = false;
+            Outline outline = candidateRect.gameObject.AddComponent<Outline>();
+            outline.effectColor = Color.red;
+            outline.effectDistance = new Vector2(3f, -4f);
+            outline.useGraphicAlpha = false;
+            Shadow shadow = candidateRect.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = Color.blue;
+            shadow.effectDistance = new Vector2(-2f, 5f);
+            AspectRatioFitter aspect = candidateRect.gameObject.AddComponent<AspectRatioFitter>();
+            aspect.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            aspect.aspectRatio = 1.75f;
+            Button button = candidateRect.gameObject.AddComponent<Button>();
+            button.targetGraphic = text;
+            button.transition = Selectable.Transition.ColorTint;
+            button.interactable = false;
+            button.navigation = new Navigation { mode = Navigation.Mode.None, wrapAround = true };
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateRect } }, profile, EmptyPlan());
+                RectTransform actual = result.generatedByStableId["101"];
+                Assert.That(actual.GetComponent<Text>().text, Is.EqualTo("增量旧版文本"));
+                Assert.That(actual.GetComponent<Text>().fontSize, Is.EqualTo(31));
+                Assert.That(actual.GetComponent<Outline>().effectDistance, Is.EqualTo(new Vector2(3f, -4f)));
+                Assert.That(actual.GetComponent<Shadow>().effectColor, Is.EqualTo(Color.blue));
+                Assert.That(actual.GetComponent<AspectRatioFitter>().aspectRatio, Is.EqualTo(1.75f));
+                Assert.That(actual.GetComponent<Button>().targetGraphic, Is.SameAs(actual.GetComponent<Text>()));
+                Assert.That(actual.GetComponent<Button>().interactable, Is.False);
+                Assert.That(actual.GetComponent<Button>().onClick.GetPersistentEventCount(), Is.EqualTo(1));
+                Assert.That(record.importerOwnedComponentTypes, Does.Contain(typeof(Button).FullName));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void MissingPreviouslyOwnedComponentRemovesOnlyWhenUnreferencedAndFailsClosedForBusinessEvent()
+        {
+            GameObject source = Root("Root");
+            RectTransform retained = Child(source, "Legacy", null);
+            retained.gameObject.AddComponent<Outline>();
+            Button button = retained.gameObject.AddComponent<Button>();
+            PsdPrefabIncrementalCustomProbe handler = retained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
+            UnityEventTools.AddPersistentListener(button.onClick, handler.HandleClick);
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            PsdHierarchyProfileNode record = Node("101", LocalId(TargetPath, "Legacy"), "Root/Legacy");
+            record.importerOwnedComponentTypes = new List<string> { typeof(Outline).FullName, typeof(Button).FullName };
+            PsdHierarchyProfile profile = Profile(record);
+            GameObject candidate = Root("Root");
+            RectTransform candidateRect = Child(candidate, "Legacy", null);
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                Assert.Throws<PsdPrefabIncrementalMergeException>(() => PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateRect } }, profile, EmptyPlan()));
+                Assert.That(loaded.transform.Find("Legacy").GetComponent<Button>(), Is.Not.Null);
+                Assert.That(loaded.transform.Find("Legacy").GetComponent<Outline>(), Is.Not.Null,
+                    "Failure must roll back earlier safe component removals.");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void NewNodeCreatesOnlyAllowlistedComponentsAndSafeStaleOwnedEffectIsRemoved()
+        {
+            GameObject source = Root("Root");
+            RectTransform old = Child(source, "Old", null);
+            old.gameObject.AddComponent<Outline>();
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            PsdHierarchyProfileNode oldRecord = Node("101", LocalId(TargetPath, "Old"), "Root/Old");
+            oldRecord.importerOwnedComponentTypes = new List<string> { typeof(Outline).FullName };
+            PsdHierarchyProfileNode newRecord = Node("102", 0L, string.Empty);
+            newRecord.pendingCreation = true;
+            PsdHierarchyProfile profile = Profile(oldRecord, newRecord);
+            GameObject candidate = Root("Root");
+            RectTransform oldCandidate = Child(candidate, "Old", null);
+            RectTransform fresh = Child(candidate, "Fresh", null);
+            fresh.gameObject.AddComponent<Text>().text = "新节点";
+            fresh.gameObject.AddComponent<Shadow>();
+            fresh.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", oldCandidate }, { "102", fresh } },
+                    profile, EmptyPlan());
+                Assert.That(result.generatedByStableId["101"].GetComponent<Outline>(), Is.Null);
+                Assert.That(result.generatedByStableId["102"].GetComponent<Text>(), Is.Not.Null);
+                Assert.That(result.generatedByStableId["102"].GetComponent<Shadow>(), Is.Not.Null);
+                Assert.That(result.generatedByStableId["102"].GetComponent<PsdPrefabIncrementalCustomProbe>(), Is.Null);
+                Assert.That(newRecord.importerOwnedComponentTypes,
+                    Is.EquivalentTo(new[] { typeof(Text).FullName, typeof(Shadow).FullName }));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void ProfileExistsWithMissingTargetFailsClosedWhileAbsentProfileKeepsLegacyEligibility()
+        {
+            PsdHierarchyProfile profile = Profile();
+            profile.targetPrefabPath = TargetPath;
+            profile.targetPrefabGuid = "missing-guid";
+            AssetDatabase.CreateAsset(profile, ProfilePath);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                PsdPrefabTransactionalSave.ResolveBoundProfileForImport(ProfilePath, TargetPath));
+            Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath), Is.Null);
+            Assert.That(PsdPrefabTransactionalSave.ResolveBoundProfileForImport(
+                Folder + "/Absent.asset", TargetPath), Is.Null);
+        }
+
+        [Test]
         public void SuccessfulTransactionPreservesTargetGuidAndLocalIdAndWritesProfileIdentityAfterPrefabSave()
         {
             CreateTargetAndProfile(out long originalLocalId, out string targetGuid);
             PsdHierarchyProfile working = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath));
+            working.nodes[0].importerOwnedComponentTypes.Add(typeof(Image).FullName);
             GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
             loaded.transform.Find("Old").name = "Fresh";
             try
@@ -426,6 +588,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(saved.nodes[0].lastKnownPath, Is.EqualTo("Root/Fresh"));
             Assert.That(saved.targetPrefabPath, Is.EqualTo(TargetPath));
             Assert.That(saved.targetPrefabGuid, Is.EqualTo(targetGuid));
+            Assert.That(saved.nodes[0].importerOwnedComponentTypes, Is.EqualTo(new[] { typeof(Image).FullName }));
             Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(TemporaryPath), Is.Null);
             Assert.That(File.Exists(FullPath(TemporaryPath) + ".meta"), Is.False);
         }
@@ -651,5 +814,6 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdPrefabIncrementalCustomProbe : MonoBehaviour
     {
         public int value;
+        public void HandleClick() { value++; }
     }
 }

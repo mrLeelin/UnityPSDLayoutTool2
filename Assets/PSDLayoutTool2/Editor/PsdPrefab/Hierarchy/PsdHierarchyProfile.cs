@@ -28,6 +28,7 @@ namespace PsdLayoutTool2
         public long localFileId;
         public string lastKnownPath;
         public bool pendingCreation;
+        public List<string> importerOwnedComponentTypes = new List<string>();
     }
 
     [Serializable]

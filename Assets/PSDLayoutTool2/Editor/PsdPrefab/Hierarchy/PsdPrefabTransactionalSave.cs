@@ -51,6 +51,17 @@ namespace PsdLayoutTool2
                 throw new InvalidOperationException("Hierarchy Profile target path or GUID does not match the configured Prefab.");
         }
 
+        public static PsdHierarchyProfile ResolveBoundProfileForImport(string profilePath, string prefabPath)
+        {
+            PsdHierarchyProfile profile = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
+            if (profile == null) return null;
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null)
+                throw new InvalidOperationException(
+                    "Hierarchy Profile exists but its exact target Prefab is missing or cannot be loaded: " + prefabPath);
+            ValidateProfileTargetBinding(profile, prefabPath);
+            return profile;
+        }
+
         public static void Save(
             string prefabPath,
             GameObject loadedContents,
@@ -251,6 +262,9 @@ namespace PsdLayoutTool2
                 Append(value, node.pendingCreation ? "1" : "0");
                 Append(value, node.localFileId.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 Append(value, node.lastKnownPath);
+                foreach (string componentType in (node.importerOwnedComponentTypes ?? new List<string>())
+                             .OrderBy(type => type, StringComparer.Ordinal))
+                    Append(value, componentType);
             }
             foreach (PsdHierarchyProfileGroup group in (profile.groups ?? new List<PsdHierarchyProfileGroup>())
                          .Where(group => group != null).OrderBy(group => group.key, StringComparer.Ordinal))

@@ -79,7 +79,11 @@ namespace PsdLayoutTool2
                     hierarchyPath = HierarchyPath(pair.Key, root.transform),
                     componentTypes = pair.Key.GetComponents<Component>()
                         .Select(component => component == null ? "<missing>" : component.GetType().AssemblyQualifiedName).ToList(),
-                    hasProjectComponents = HasProjectComponents(pair.Key as RectTransform),
+                    hasProjectComponents = HasProjectComponents(
+                        pair.Key as RectTransform,
+                        (profile.nodes ?? new List<PsdHierarchyProfileNode>())
+                        .First(node => node != null && string.Equals(node.stableId, pair.Value, StringComparison.Ordinal))
+                        .importerOwnedComponentTypes),
                     isProtectedBoundary = IsProtectedBoundary(pair.Key.gameObject),
                     protectedBoundaryStableId = IsProtectedBoundary(pair.Key.gameObject) ? pair.Value : protectedBoundaryStableId
                 });
@@ -168,6 +172,7 @@ namespace PsdLayoutTool2
             }
 
             Dictionary<RectTransform, string> candidateIds = candidateByStableId.ToDictionary(pair => pair.Value, pair => pair.Key);
+            var created = new List<RectTransform>();
             foreach (KeyValuePair<string, RectTransform> pair in candidateByStableId
                          .OrderBy(pair => Depth(pair.Value)))
             {
@@ -179,22 +184,46 @@ namespace PsdLayoutTool2
                         candidateIds, result.generatedByStableId);
                     target = CreateGeneratedObject(pair.Value, parent);
                     result.generatedByStableId.Add(pair.Key, target);
+                    created.Add(target);
                 }
-                CopyImporterOwnedValues(pair.Value, target);
             }
+            try
+            {
+                var targetByCandidate = candidateByStableId.ToDictionary(
+                    pair => pair.Value, pair => result.generatedByStableId[pair.Key]);
+                foreach (KeyValuePair<string, RectTransform> pair in candidateByStableId)
+                {
+                    PsdHierarchyProfileNode record = recordsByStableId[pair.Key];
+                    ValidateComponentSynchronization(existingContents.transform, pair.Value,
+                        result.generatedByStableId[pair.Key], record, targetByCandidate);
+                }
+                foreach (KeyValuePair<string, RectTransform> pair in candidateByStableId)
+                {
+                    PsdHierarchyProfileNode record = recordsByStableId[pair.Key];
+                    SynchronizeImporterOwnedComponents(existingContents.transform, pair.Value,
+                        result.generatedByStableId[pair.Key], record, targetByCandidate);
+                    CopyImporterOwnedValues(pair.Value, result.generatedByStableId[pair.Key]);
+                }
 
-            foreach (string stableId in result.generatedByStableId.Keys
-                         .Where(id => !candidateByStableId.ContainsKey(id)).OrderBy(id => id, StringComparer.Ordinal))
-                result.pendingMissingStableIds.Add(stableId);
+                foreach (string stableId in result.generatedByStableId.Keys
+                             .Where(id => !candidateByStableId.ContainsKey(id)).OrderBy(id => id, StringComparer.Ordinal))
+                    result.pendingMissingStableIds.Add(stableId);
 
-            RectTransform existingRoot = existingContents.transform as RectTransform;
-            if (existingRoot == null)
-                throw new PsdPrefabIncrementalMergeException("Incremental hierarchy merge requires a RectTransform root.");
-            PsdHierarchyApplyResult apply = PsdHierarchyApplier.Apply(
-                existingRoot, plan, result.generatedByStableId, result.groupsByKey);
-            result.groupsByKey.Clear();
-            foreach (KeyValuePair<string, RectTransform> pair in apply.groupsByKey) result.groupsByKey.Add(pair.Key, pair.Value);
-            return result;
+                RectTransform existingRoot = existingContents.transform as RectTransform;
+                if (existingRoot == null)
+                    throw new PsdPrefabIncrementalMergeException("Incremental hierarchy merge requires a RectTransform root.");
+                PsdHierarchyApplyResult apply = PsdHierarchyApplier.Apply(
+                    existingRoot, plan, result.generatedByStableId, result.groupsByKey);
+                result.groupsByKey.Clear();
+                foreach (KeyValuePair<string, RectTransform> pair in apply.groupsByKey) result.groupsByKey.Add(pair.Key, pair.Value);
+                return result;
+            }
+            catch
+            {
+                for (int index = created.Count - 1; index >= 0; index--)
+                    if (created[index] != null) UnityEngine.Object.DestroyImmediate(created[index].gameObject);
+                throw;
+            }
         }
 
         private static RectTransform AdoptDeterministically(
@@ -206,13 +235,13 @@ namespace PsdLayoutTool2
                 throw new PsdPrefabIncrementalMergeException("First adoption requires RectTransform roots.");
             int[] indexPath = SiblingIndexPath(candidate, candidateRoot);
             RectTransform exact = FollowSiblingIndexPath(existingRoot, indexPath);
-            if (exact != null && IsAdoptionEvidenceEqual(candidate, exact) && !HasProjectComponents(exact))
+            if (exact != null && IsAdoptionEvidenceEqual(candidate, exact) && !HasUnexpectedProjectComponents(exact, candidate))
                 return exact;
 
             // Names and resource references are useful diagnostics, but never
             // sufficient when source hierarchy/sibling evidence does not agree.
             int visualMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
-                .Where(value => value != existingRoot && !HasProjectComponents(value))
+                .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
                 .Count(value => IsVisualEvidenceEqual(candidate, value));
             throw new PsdPrefabIncrementalMergeException(visualMatches > 1
                 ? "First adoption is ambiguous: multiple same-name/resource objects match '" + candidate.name + "'."
@@ -242,18 +271,62 @@ namespace PsdLayoutTool2
             TextMeshProUGUI sourceText = source.GetComponent<TextMeshProUGUI>();
             TextMeshProUGUI targetText = target.GetComponent<TextMeshProUGUI>();
             if ((sourceText == null) != (targetText == null)) return false;
-            return sourceText == null || (sourceText.font == targetText.font &&
-                                          sourceText.fontSharedMaterial == targetText.fontSharedMaterial &&
-                                          string.Equals(sourceText.text, targetText.text, StringComparison.Ordinal) &&
-                                          sourceText.fontStyle == targetText.fontStyle);
+            if (sourceText != null && (sourceText.font != targetText.font ||
+                                       sourceText.fontSharedMaterial != targetText.fontSharedMaterial ||
+                                       !string.Equals(sourceText.text, targetText.text, StringComparison.Ordinal) ||
+                                       sourceText.fontStyle != targetText.fontStyle)) return false;
+            return LegacyEvidenceEqual(source, target);
         }
 
-        private static bool HasProjectComponents(RectTransform target)
+        private static bool LegacyEvidenceEqual(RectTransform source, RectTransform target)
         {
+            Text sourceText = source.GetComponent<Text>();
+            Text targetText = target.GetComponent<Text>();
+            if ((sourceText == null) != (targetText == null)) return false;
+            if (sourceText != null && (!string.Equals(sourceText.text, targetText.text, StringComparison.Ordinal) ||
+                                       sourceText.font != targetText.font || sourceText.material != targetText.material ||
+                                       sourceText.fontStyle != targetText.fontStyle || sourceText.fontSize != targetText.fontSize ||
+                                       sourceText.alignment != targetText.alignment || sourceText.color != targetText.color)) return false;
+            foreach (Type effectType in new[] { typeof(Shadow), typeof(Outline) })
+            {
+                Shadow sourceEffect = GetExactComponent(source, effectType) as Shadow;
+                Shadow targetEffect = GetExactComponent(target, effectType) as Shadow;
+                if ((sourceEffect == null) != (targetEffect == null)) return false;
+                if (sourceEffect != null && (sourceEffect.effectColor != targetEffect.effectColor ||
+                                             sourceEffect.effectDistance != targetEffect.effectDistance ||
+                                             sourceEffect.useGraphicAlpha != targetEffect.useGraphicAlpha)) return false;
+            }
+            AspectRatioFitter sourceAspect = source.GetComponent<AspectRatioFitter>();
+            AspectRatioFitter targetAspect = target.GetComponent<AspectRatioFitter>();
+            if ((sourceAspect == null) != (targetAspect == null)) return false;
+            if (sourceAspect != null && (sourceAspect.aspectMode != targetAspect.aspectMode ||
+                                         sourceAspect.aspectRatio != targetAspect.aspectRatio)) return false;
+            Button sourceButton = source.GetComponent<Button>();
+            Button targetButton = target.GetComponent<Button>();
+            return (sourceButton == null) == (targetButton == null) &&
+                   (sourceButton == null || (sourceButton.transition == targetButton.transition &&
+                                             sourceButton.interactable == targetButton.interactable &&
+                                             targetButton.onClick.GetPersistentEventCount() == 0));
+        }
+
+        private static bool HasProjectComponents(RectTransform target, IEnumerable<string> importerOwnedTypes)
+        {
+            var owned = new HashSet<string>(importerOwnedTypes ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
             return target.GetComponents<Component>().Any(component =>
                 !(component is RectTransform) && !(component is CanvasRenderer) &&
-                !(component is Image) && !(component is TextMeshProUGUI) &&
-                !(component is BaseMeshEffect) && !(component is AspectRatioFitter));
+                (!IsImporterOwnedType(component.GetType()) || !owned.Contains(ComponentTypeName(component.GetType()))));
+        }
+
+        private static bool HasUnexpectedProjectComponents(RectTransform target, RectTransform candidate)
+        {
+            var candidateTypes = new HashSet<string>(CandidateOwnedTypeNames(candidate), StringComparer.Ordinal);
+            Button targetButton = target.GetComponent<Button>();
+            Button candidateButton = candidate.GetComponent<Button>();
+            if (targetButton != null && candidateButton != null &&
+                targetButton.onClick.GetPersistentEventCount() > candidateButton.onClick.GetPersistentEventCount()) return true;
+            return target.GetComponents<Component>().Any(component =>
+                !(component is RectTransform) && !(component is CanvasRenderer) &&
+                (!IsImporterOwnedType(component.GetType()) || !candidateTypes.Contains(ComponentTypeName(component.GetType()))));
         }
 
         private static bool IsProtectedBoundary(GameObject target)
@@ -339,23 +412,240 @@ namespace PsdLayoutTool2
             if (parent == null) throw new PsdPrefabIncrementalMergeException("A new generated object has no target parent.");
             var target = new GameObject(candidate.name, typeof(RectTransform)).GetComponent<RectTransform>();
             target.SetParent(parent, false);
-            if (candidate.GetComponent<CanvasRenderer>() != null) target.gameObject.AddComponent<CanvasRenderer>();
-            if (candidate.GetComponent<Image>() != null) target.gameObject.AddComponent<Image>();
-            if (candidate.GetComponent<TextMeshProUGUI>() != null) target.gameObject.AddComponent<TextMeshProUGUI>();
+            foreach (Component component in candidate.GetComponents<Component>())
+            {
+                Type type = component.GetType();
+                if (IsImporterOwnedType(type) && GetExactComponent(target, type) == null)
+                    target.gameObject.AddComponent(type);
+            }
             return target;
+        }
+
+        private static void ValidateComponentSynchronization(
+            Transform root,
+            RectTransform source,
+            RectTransform target,
+            PsdHierarchyProfileNode record,
+            IReadOnlyDictionary<RectTransform, RectTransform> targetByCandidate)
+        {
+            List<string> current = CandidateOwnedTypeNames(source);
+            var previous = new HashSet<string>((record.importerOwnedComponentTypes ?? new List<string>())
+                .Where(IsImporterOwnedTypeName), StringComparer.Ordinal);
+            foreach (string stale in previous.Where(type => !current.Contains(type)))
+            {
+                Component component = target.GetComponents<Component>()
+                    .FirstOrDefault(value => value != null && string.Equals(ComponentTypeName(value.GetType()), stale, StringComparison.Ordinal));
+                if (component != null) ValidateSafeComponentRemoval(root, component);
+            }
+            if (previous.Count > 0)
+            {
+                foreach (string added in current.Where(type => !previous.Contains(type)))
+                {
+                    Type type = ResolveImporterOwnedType(added);
+                    if (type != null && GetExactComponent(target, type) != null)
+                        throw new PsdPrefabIncrementalMergeException(
+                            "Cannot claim a project-owned component as importer-owned: " + added);
+                }
+            }
+            Button sourceButton = source.GetComponent<Button>();
+            if (sourceButton != null)
+            {
+                ResolveMappedGraphic(sourceButton.targetGraphic, targetByCandidate);
+                ValidateNavigationMappings(sourceButton.navigation, targetByCandidate);
+            }
+        }
+
+        private static void SynchronizeImporterOwnedComponents(
+            Transform root,
+            RectTransform source,
+            RectTransform target,
+            PsdHierarchyProfileNode record,
+            IReadOnlyDictionary<RectTransform, RectTransform> targetByCandidate)
+        {
+            List<string> current = CandidateOwnedTypeNames(source);
+            var previous = new HashSet<string>((record.importerOwnedComponentTypes ?? new List<string>())
+                .Where(IsImporterOwnedTypeName), StringComparer.Ordinal);
+            foreach (string stale in previous.Where(type => !current.Contains(type)).ToArray())
+            {
+                Type type = ResolveImporterOwnedType(stale);
+                Component component = type == null ? null : GetExactComponent(target, type);
+                if (component != null) UnityEngine.Object.DestroyImmediate(component);
+            }
+            foreach (Component sourceComponent in source.GetComponents<Component>())
+            {
+                Type type = sourceComponent.GetType();
+                if (IsImporterOwnedType(type) && GetExactComponent(target, type) == null)
+                    target.gameObject.AddComponent(type);
+            }
+            CopyLegacyText(source.GetComponent<Text>(), target.GetComponent<Text>());
+            CopyShadow(GetExactComponent(source, typeof(Shadow)) as Shadow,
+                GetExactComponent(target, typeof(Shadow)) as Shadow);
+            CopyShadow(source.GetComponent<Outline>(), target.GetComponent<Outline>());
+            CopyAspect(source.GetComponent<AspectRatioFitter>(), target.GetComponent<AspectRatioFitter>());
+            CopyButton(source.GetComponent<Button>(), target.GetComponent<Button>(), targetByCandidate);
+            record.importerOwnedComponentTypes = current;
+        }
+
+        private static List<string> CandidateOwnedTypeNames(RectTransform source)
+        {
+            return source.GetComponents<Component>().Where(component => component != null && IsImporterOwnedType(component.GetType()))
+                .Select(component => ComponentTypeName(component.GetType())).Distinct(StringComparer.Ordinal).ToList();
+        }
+
+        private static bool IsImporterOwnedType(Type type)
+        {
+            return type == typeof(Image) || type == typeof(TextMeshProUGUI) || type == typeof(Text) ||
+                   type == typeof(Outline) || type == typeof(Shadow) || type == typeof(AspectRatioFitter) ||
+                   type == typeof(Button);
+        }
+
+        private static bool IsImporterOwnedTypeName(string name)
+        {
+            return ResolveImporterOwnedType(name) != null;
+        }
+
+        private static Type ResolveImporterOwnedType(string name)
+        {
+            return new[] { typeof(Image), typeof(TextMeshProUGUI), typeof(Text), typeof(Outline), typeof(Shadow),
+                typeof(AspectRatioFitter), typeof(Button) }
+                .FirstOrDefault(type => string.Equals(ComponentTypeName(type), name, StringComparison.Ordinal));
+        }
+
+        private static string ComponentTypeName(Type type)
+        {
+            return type == null ? string.Empty : type.FullName;
+        }
+
+        private static Component GetExactComponent(Component target, Type type)
+        {
+            return target == null ? null : target.GetComponents<Component>()
+                .FirstOrDefault(component => component != null && component.GetType() == type);
+        }
+
+        private static void ValidateSafeComponentRemoval(Transform root, Component target)
+        {
+            Button button = target as Button;
+            if (button != null && button.onClick.GetPersistentEventCount() > 0)
+                throw new PsdPrefabIncrementalMergeException(
+                    "Cannot remove importer-owned Button because it contains project onClick events.");
+            foreach (Component owner in root.GetComponentsInChildren<Component>(true))
+            {
+                if (owner == null || owner == target) continue;
+                var serialized = new SerializedObject(owner);
+                SerializedProperty property = serialized.GetIterator();
+                bool enterChildren = true;
+                while (property.Next(enterChildren))
+                {
+                    enterChildren = false;
+                    if (property.propertyType == SerializedPropertyType.ObjectReference &&
+                        property.objectReferenceValue == target)
+                        throw new PsdPrefabIncrementalMergeException(
+                            "Cannot remove importer-owned component because project serialized data still references it.");
+                }
+            }
+        }
+
+        private static void CopyLegacyText(Text source, Text target)
+        {
+            if (source == null || target == null) return;
+            target.text = source.text;
+            target.font = source.font;
+            target.fontStyle = source.fontStyle;
+            target.fontSize = source.fontSize;
+            target.lineSpacing = source.lineSpacing;
+            target.supportRichText = source.supportRichText;
+            target.alignment = source.alignment;
+            target.alignByGeometry = source.alignByGeometry;
+            target.horizontalOverflow = source.horizontalOverflow;
+            target.verticalOverflow = source.verticalOverflow;
+            target.resizeTextForBestFit = source.resizeTextForBestFit;
+            target.resizeTextMinSize = source.resizeTextMinSize;
+            target.resizeTextMaxSize = source.resizeTextMaxSize;
+            target.color = source.color;
+            target.material = source.material;
+            target.raycastTarget = source.raycastTarget;
+            target.maskable = source.maskable;
+        }
+
+        private static void CopyShadow(Shadow source, Shadow target)
+        {
+            if (source == null || target == null) return;
+            target.effectColor = source.effectColor;
+            target.effectDistance = source.effectDistance;
+            target.useGraphicAlpha = source.useGraphicAlpha;
+        }
+
+        private static void CopyAspect(AspectRatioFitter source, AspectRatioFitter target)
+        {
+            if (source == null || target == null) return;
+            target.aspectMode = source.aspectMode;
+            target.aspectRatio = source.aspectRatio;
+        }
+
+        private static void CopyButton(
+            Button source,
+            Button target,
+            IReadOnlyDictionary<RectTransform, RectTransform> targetByCandidate)
+        {
+            if (source == null || target == null) return;
+            target.targetGraphic = ResolveMappedGraphic(source.targetGraphic, targetByCandidate);
+            target.transition = source.transition;
+            target.colors = source.colors;
+            target.spriteState = source.spriteState;
+            target.interactable = source.interactable;
+            Navigation navigation = source.navigation;
+            navigation.selectOnUp = ResolveMappedSelectable(navigation.selectOnUp, targetByCandidate);
+            navigation.selectOnDown = ResolveMappedSelectable(navigation.selectOnDown, targetByCandidate);
+            navigation.selectOnLeft = ResolveMappedSelectable(navigation.selectOnLeft, targetByCandidate);
+            navigation.selectOnRight = ResolveMappedSelectable(navigation.selectOnRight, targetByCandidate);
+            target.navigation = navigation;
+            AnimationTriggers sourceTriggers = source.animationTriggers;
+            AnimationTriggers targetTriggers = target.animationTriggers;
+            targetTriggers.normalTrigger = sourceTriggers.normalTrigger;
+            targetTriggers.highlightedTrigger = sourceTriggers.highlightedTrigger;
+            targetTriggers.pressedTrigger = sourceTriggers.pressedTrigger;
+            targetTriggers.selectedTrigger = sourceTriggers.selectedTrigger;
+            targetTriggers.disabledTrigger = sourceTriggers.disabledTrigger;
+        }
+
+        private static void ValidateNavigationMappings(
+            Navigation navigation,
+            IReadOnlyDictionary<RectTransform, RectTransform> targetByCandidate)
+        {
+            ResolveMappedSelectable(navigation.selectOnUp, targetByCandidate);
+            ResolveMappedSelectable(navigation.selectOnDown, targetByCandidate);
+            ResolveMappedSelectable(navigation.selectOnLeft, targetByCandidate);
+            ResolveMappedSelectable(navigation.selectOnRight, targetByCandidate);
+        }
+
+        private static Graphic ResolveMappedGraphic(
+            Graphic source,
+            IReadOnlyDictionary<RectTransform, RectTransform> targetByCandidate)
+        {
+            if (source == null) return null;
+            RectTransform mapped;
+            if (!targetByCandidate.TryGetValue(source.transform as RectTransform, out mapped))
+                throw new PsdPrefabIncrementalMergeException("Button targetGraphic is outside the generated registry.");
+            Graphic result = mapped.GetComponent(source.GetType()) as Graphic;
+            if (result == null) throw new PsdPrefabIncrementalMergeException("Button targetGraphic type cannot be mapped.");
+            return result;
+        }
+
+        private static Selectable ResolveMappedSelectable(
+            Selectable source,
+            IReadOnlyDictionary<RectTransform, RectTransform> targetByCandidate)
+        {
+            if (source == null) return null;
+            RectTransform mapped;
+            if (!targetByCandidate.TryGetValue(source.transform as RectTransform, out mapped))
+                throw new PsdPrefabIncrementalMergeException("Button navigation references an object outside the generated registry.");
+            Selectable result = mapped.GetComponent(source.GetType()) as Selectable;
+            if (result == null) throw new PsdPrefabIncrementalMergeException("Button navigation type cannot be mapped.");
+            return result;
         }
 
         private static void CopyImporterOwnedValues(RectTransform source, RectTransform target)
         {
-            bool sourceHasImage = source.GetComponent<Image>() != null;
-            bool targetHasImage = target.GetComponent<Image>() != null;
-            bool sourceHasText = source.GetComponent<TextMeshProUGUI>() != null;
-            bool targetHasText = target.GetComponent<TextMeshProUGUI>() != null;
-            if ((targetHasImage || targetHasText) &&
-                (sourceHasImage != targetHasImage || sourceHasText != targetHasText))
-                throw new PsdPrefabIncrementalMergeException(
-                    "Generated visual component type changed for retained object '" + target.name + "'.");
-
             target.gameObject.name = source.gameObject.name;
             target.gameObject.SetActive(source.gameObject.activeSelf);
             target.anchorMin = source.anchorMin;
