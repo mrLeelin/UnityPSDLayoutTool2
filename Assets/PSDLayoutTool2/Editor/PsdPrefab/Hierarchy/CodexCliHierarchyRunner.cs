@@ -316,6 +316,8 @@ namespace PsdLayoutTool2
                 modifiableStableIds = request.modifiableStableIds ?? new List<string>(),
                 contextStableIds = request.contextStableIds ?? new List<string>(),
                 modifiableGroupKeys = request.modifiableGroupKeys ?? new List<string>(),
+                scopeOwnedGroupKeys = request.scopeOwnedGroupKeys ?? new List<string>(),
+                readonlyNeighborGroupKeys = request.readonlyNeighborGroupKeys ?? new List<string>(),
                 existingGroupKeys = request.existingGroupKeys ?? new List<string>(),
                 baselineGroups = request.baselineGroups ?? new List<PsdHierarchyPlanGroup>()
             }, Formatting.None);
@@ -528,31 +530,36 @@ namespace PsdLayoutTool2
                 }
 
                 result.killRequested = true;
-                var treeKill = typeof(Process).GetMethod("Kill", new[] { typeof(bool) });
-                if (treeKill != null)
+                if (PsdHierarchyProcessTreeStrategy.Select(Environment.OSVersion.Platform) ==
+                    PsdHierarchyProcessTreeTerminationStrategy.WindowsTaskkill)
                 {
-                    treeKill.Invoke(process, new object[] { true });
-                    result.processTreeKillConfirmed = true;
-                }
-                else if (Environment.OSVersion.Platform == PlatformID.Win32NT)
-                {
-                    using (var taskKill = Process.Start(new ProcessStartInfo
+                    try
                     {
-                        FileName = "taskkill.exe",
-                        Arguments = "/PID " + process.Id + " /T /F",
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }))
-                    {
-                        bool taskkillWaited = taskKill != null && taskKill.WaitForExit(5000);
-                        int taskkillExitCode = taskkillWaited ? taskKill.ExitCode : -1;
-                        result.processTreeKillConfirmed = PsdHierarchyTaskkillConfirmation.IsConfirmed(
-                            taskkillWaited, taskkillExitCode);
+                        using (var taskKill = Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "taskkill.exe",
+                            Arguments = "/PID " + process.Id + " /T /F",
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }))
+                        {
+                            bool taskkillWaited = taskKill != null && taskKill.WaitForExit(5000);
+                            int taskkillExitCode = taskkillWaited ? taskKill.ExitCode : -1;
+                            result.processTreeKillConfirmed = PsdHierarchyTaskkillConfirmation.IsConfirmed(
+                                taskkillWaited, taskkillExitCode);
+                        }
                     }
+                    catch (Exception)
+                    {
+                        // A failed taskkill attempt is never proof that the process tree exited.
+                    }
+
+                    if (!result.processTreeKillConfirmed)
+                        TryUnconfirmedKill(process);
                 }
                 else
                 {
-                    process.Kill();
+                    TryUnconfirmedKill(process);
                 }
 
                 result.waitForExitSucceeded = process.WaitForExit(5000);
@@ -564,6 +571,22 @@ namespace PsdLayoutTool2
                 catch (InvalidOperationException) { result.waitForExitSucceeded = true; }
             }
             return result;
+        }
+
+        private static void TryUnconfirmedKill(Process process)
+        {
+            try
+            {
+                var treeKill = typeof(Process).GetMethod("Kill", new[] { typeof(bool) });
+                if (treeKill != null)
+                    treeKill.Invoke(process, new object[] { true });
+                else
+                    process.Kill();
+            }
+            catch (Exception)
+            {
+                // Best effort only. This path never confirms full process-tree termination.
+            }
         }
 
         private static async Task ObserveStreams(params Task<string>[] streams)
@@ -657,6 +680,23 @@ namespace PsdLayoutTool2
             }
 
             await exit;
+        }
+    }
+
+    public enum PsdHierarchyProcessTreeTerminationStrategy
+    {
+        WindowsTaskkill,
+        NonWindowsUnconfirmedKill
+    }
+
+    /// <summary>Selects the only platform path whose tree termination can be confirmed.</summary>
+    public static class PsdHierarchyProcessTreeStrategy
+    {
+        public static PsdHierarchyProcessTreeTerminationStrategy Select(PlatformID platform)
+        {
+            return platform == PlatformID.Win32NT
+                ? PsdHierarchyProcessTreeTerminationStrategy.WindowsTaskkill
+                : PsdHierarchyProcessTreeTerminationStrategy.NonWindowsUnconfirmedKill;
         }
     }
 
