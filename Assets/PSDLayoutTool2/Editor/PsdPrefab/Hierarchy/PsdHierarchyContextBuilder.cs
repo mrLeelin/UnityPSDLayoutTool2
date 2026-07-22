@@ -14,6 +14,27 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdHierarchyContextBuilder
     {
+        public static string ComputeContentFingerprint(PsdPrefabDocumentModel document)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            return ComputeDocumentFacet(document.nodes ?? new List<PsdPrefabNodeModel>(), PsdHierarchyFingerprints.Content, null);
+        }
+
+        public static string ComputeStructureFingerprint(PsdPrefabDocumentModel document)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            return ComputeDocumentFacet(document.nodes ?? new List<PsdPrefabNodeModel>(), PsdHierarchyFingerprints.Structure, null);
+        }
+
+        public static string ComputeGeometryFingerprint(PsdPrefabDocumentModel document)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            return ComputeDocumentFacet(document.nodes ?? new List<PsdPrefabNodeModel>(), PsdHierarchyFingerprints.Geometry,
+                document.width.ToString(CultureInfo.InvariantCulture) + "|" +
+                document.height.ToString(CultureInfo.InvariantCulture) + "|" +
+                document.resolution.ToString("R", CultureInfo.InvariantCulture));
+        }
+
         public static PsdHierarchyRequest Build(
             PsdPrefabDocumentModel document,
             IEnumerable<PsdHierarchyPrefabNodeMetadata> prefabHierarchy,
@@ -47,12 +68,9 @@ namespace PsdLayoutTool2
                 schemaVersion = PsdHierarchyRequest.CurrentSchemaVersion,
                 sourcePsdGuid = sourcePsdGuid,
                 sourceFingerprint = document.sourceFingerprint ?? string.Empty,
-                contentFingerprint = ComputeDocumentFacet(sourceNodes, PsdHierarchyFingerprints.Content, null),
-                structureFingerprint = ComputeDocumentFacet(sourceNodes, PsdHierarchyFingerprints.Structure, null),
-                geometryFingerprint = ComputeDocumentFacet(sourceNodes, PsdHierarchyFingerprints.Geometry,
-                    document.width.ToString(CultureInfo.InvariantCulture) + "|" +
-                    document.height.ToString(CultureInfo.InvariantCulture) + "|" +
-                    document.resolution.ToString("R", CultureInfo.InvariantCulture)),
+                contentFingerprint = ComputeContentFingerprint(document),
+                structureFingerprint = ComputeStructureFingerprint(document),
+                geometryFingerprint = ComputeGeometryFingerprint(document),
                 documentWidth = document.width,
                 documentHeight = document.height,
                 currentPrefabHierarchy = prefabNodes,

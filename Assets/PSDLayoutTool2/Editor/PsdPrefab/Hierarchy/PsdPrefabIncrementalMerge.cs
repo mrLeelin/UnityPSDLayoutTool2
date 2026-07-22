@@ -30,6 +30,63 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdPrefabIncrementalMerge
     {
+        public static List<PsdHierarchyPrefabNodeMetadata> BuildProfilePrefabMetadata(
+            string prefabPath,
+            PsdHierarchyProfile profile)
+        {
+            if (profile == null) throw new ArgumentNullException("profile");
+            GameObject root = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (root == null) throw new PsdPrefabIncrementalMergeException("Existing target Prefab was not found.");
+            var byLocalId = new Dictionary<long, RectTransform>();
+            foreach (RectTransform rect in root.GetComponentsInChildren<RectTransform>(true))
+            {
+                string guid;
+                long localId;
+                if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(rect.gameObject, out guid, out localId) && localId > 0L)
+                    byLocalId[localId] = rect;
+            }
+            var stableIdByTransform = new Dictionary<Transform, string>();
+            foreach (PsdHierarchyProfileNode record in profile.nodes ?? new List<PsdHierarchyProfileNode>())
+            {
+                RectTransform rect;
+                if (record != null && record.ownership == PsdHierarchyNodeOwnership.Generated &&
+                    record.localFileId > 0L && byLocalId.TryGetValue(record.localFileId, out rect))
+                    stableIdByTransform[rect] = record.stableId;
+            }
+            var result = new List<PsdHierarchyPrefabNodeMetadata>();
+            foreach (KeyValuePair<Transform, string> pair in stableIdByTransform.OrderBy(pair => pair.Value, StringComparer.Ordinal))
+            {
+                string parentStableId = string.Empty;
+                string protectedBoundaryStableId = string.Empty;
+                for (Transform cursor = pair.Key.parent; cursor != null; cursor = cursor.parent)
+                {
+                    string ancestorId;
+                    if (stableIdByTransform.TryGetValue(cursor, out ancestorId))
+                    {
+                        if (string.IsNullOrEmpty(parentStableId)) parentStableId = ancestorId;
+                        if (IsProtectedBoundary(cursor.gameObject))
+                        {
+                            protectedBoundaryStableId = ancestorId;
+                            break;
+                        }
+                    }
+                }
+                result.Add(new PsdHierarchyPrefabNodeMetadata
+                {
+                    stableId = pair.Value,
+                    parentStableId = parentStableId,
+                    siblingIndex = pair.Key.GetSiblingIndex(),
+                    hierarchyPath = HierarchyPath(pair.Key, root.transform),
+                    componentTypes = pair.Key.GetComponents<Component>()
+                        .Select(component => component == null ? "<missing>" : component.GetType().AssemblyQualifiedName).ToList(),
+                    hasProjectComponents = HasProjectComponents(pair.Key as RectTransform),
+                    isProtectedBoundary = IsProtectedBoundary(pair.Key.gameObject),
+                    protectedBoundaryStableId = IsProtectedBoundary(pair.Key.gameObject) ? pair.Value : protectedBoundaryStableId
+                });
+            }
+            return result;
+        }
+
         public static PsdPrefabIncrementalMergeResult Merge(
             string prefabPath,
             GameObject existingContents,
@@ -197,6 +254,13 @@ namespace PsdLayoutTool2
                 !(component is RectTransform) && !(component is CanvasRenderer) &&
                 !(component is Image) && !(component is TextMeshProUGUI) &&
                 !(component is BaseMeshEffect) && !(component is AspectRatioFitter));
+        }
+
+        private static bool IsProtectedBoundary(GameObject target)
+        {
+            return target.GetComponent<Canvas>() != null || target.GetComponent<Mask>() != null ||
+                   target.GetComponent<RectMask2D>() != null || target.GetComponent<Selectable>() != null ||
+                   target.GetComponent<Animator>() != null;
         }
 
         private static int[] SiblingIndexPath(Transform target, Transform root)

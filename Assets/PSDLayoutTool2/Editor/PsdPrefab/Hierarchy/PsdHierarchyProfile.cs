@@ -122,6 +122,8 @@ namespace PsdLayoutTool2
         public string sourceContentFingerprint;
         public string sourceStructureFingerprint;
         public string sourceGeometryFingerprint;
+        public string targetPrefabGuid;
+        public string targetPrefabPath;
         public List<PsdHierarchyProfileNode> nodes = new List<PsdHierarchyProfileNode>();
         public List<PsdHierarchyProfileGroup> groups = new List<PsdHierarchyProfileGroup>();
         public List<PsdHierarchyProfileRename> renames = new List<PsdHierarchyProfileRename>();
@@ -140,9 +142,9 @@ namespace PsdLayoutTool2
             PsdHierarchyProfile profile = CreateInstance<PsdHierarchyProfile>();
             profile.sourcePsdGuid = sourcePsdGuid ?? string.Empty;
             profile.sourceFingerprint = ResolveDocumentFingerprint(document);
-            profile.sourceContentFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Content);
-            profile.sourceStructureFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Structure);
-            profile.sourceGeometryFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Geometry);
+            profile.sourceContentFingerprint = PsdHierarchyContextBuilder.ComputeContentFingerprint(document);
+            profile.sourceStructureFingerprint = PsdHierarchyContextBuilder.ComputeStructureFingerprint(document);
+            profile.sourceGeometryFingerprint = PsdHierarchyContextBuilder.ComputeGeometryFingerprint(document);
             profile.nodes = (document.nodes ?? new List<PsdPrefabNodeModel>())
                 .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal)
@@ -305,9 +307,9 @@ namespace PsdLayoutTool2
             if (sourceCanAdvance)
             {
                 sourceFingerprint = ResolveDocumentFingerprint(document);
-                sourceContentFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Content);
-                sourceStructureFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Structure);
-                sourceGeometryFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Geometry);
+                sourceContentFingerprint = PsdHierarchyContextBuilder.ComputeContentFingerprint(document);
+                sourceStructureFingerprint = PsdHierarchyContextBuilder.ComputeStructureFingerprint(document);
+                sourceGeometryFingerprint = PsdHierarchyContextBuilder.ComputeGeometryFingerprint(document);
             }
 
             return result;
@@ -319,7 +321,7 @@ namespace PsdLayoutTool2
         /// explicitly NotEmitted and is never matched against a business object.
         /// Missing historical records are intentionally left unchanged.
         /// </summary>
-        public void UpdateImporterOwnership(PsdPrefabDocumentModel document, IEnumerable<string> emittedStableIds)
+        public List<string> UpdateImporterOwnership(PsdPrefabDocumentModel document, IEnumerable<string> emittedStableIds)
         {
             if (document == null) throw new ArgumentNullException("document");
             var emitted = new HashSet<string>((emittedStableIds ?? Enumerable.Empty<string>())
@@ -327,19 +329,57 @@ namespace PsdLayoutTool2
             var current = new HashSet<string>((document.nodes ?? new List<PsdPrefabNodeModel>())
                 .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .Select(node => node.stableId), StringComparer.Ordinal);
+            var pending = new List<string>();
             foreach (PsdHierarchyProfileNode node in nodes ?? new List<PsdHierarchyProfileNode>())
             {
                 if (node == null || !current.Contains(node.stableId)) continue;
-                node.ownership = emitted.Contains(node.stableId)
-                    ? PsdHierarchyNodeOwnership.Generated
-                    : PsdHierarchyNodeOwnership.NotEmitted;
-                if (node.ownership == PsdHierarchyNodeOwnership.NotEmitted)
+                if (emitted.Contains(node.stableId))
                 {
+                    node.ownership = PsdHierarchyNodeOwnership.Generated;
+                    continue;
+                }
+                if (node.ownership == PsdHierarchyNodeOwnership.Generated)
+                {
+                    AddUnique(pending, node.stableId);
+                    continue;
+                }
+                if (node.ownership == PsdHierarchyNodeOwnership.Unknown)
+                {
+                    if (node.localFileId > 0L || node.pendingCreation)
+                        throw new InvalidOperationException(
+                            "Unknown ownership with persisted identity requires explicit migration: " + node.stableId);
+                    node.ownership = PsdHierarchyNodeOwnership.NotEmitted;
                     node.localFileId = 0L;
                     node.lastKnownPath = string.Empty;
-                    node.pendingCreation = false;
                 }
             }
+            return pending;
+        }
+
+        public void AcceptValidatedGeometry(PsdPrefabDocumentModel document, IEnumerable<string> validatedStableIds)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            var validated = new HashSet<string>(validatedStableIds ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+            Dictionary<string, PsdPrefabNodeModel> current = (document.nodes ?? new List<PsdPrefabNodeModel>())
+                .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
+                .ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            Dictionary<string, PsdHierarchyProfileNode> previous = (nodes ?? new List<PsdHierarchyProfileNode>())
+                .Where(node => node != null).ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            if (previous.Keys.Any(id => !current.ContainsKey(id)))
+                throw new InvalidOperationException("Validated geometry cannot advance while Profile records are missing.");
+            foreach (string stableId in validated)
+            {
+                PsdPrefabNodeModel currentNode;
+                PsdHierarchyProfileNode old;
+                if (!current.TryGetValue(stableId, out currentNode) || !previous.TryGetValue(stableId, out old) ||
+                    !string.Equals(old.structureFingerprint, PsdHierarchyFingerprints.Structure(currentNode), StringComparison.Ordinal))
+                    throw new InvalidOperationException("Validated geometry does not match the accepted Profile structure.");
+                old.geometryFingerprint = PsdHierarchyFingerprints.Geometry(currentNode);
+            }
+            sourceFingerprint = ResolveDocumentFingerprint(document);
+            sourceContentFingerprint = PsdHierarchyContextBuilder.ComputeContentFingerprint(document);
+            sourceStructureFingerprint = PsdHierarchyContextBuilder.ComputeStructureFingerprint(document);
+            sourceGeometryFingerprint = PsdHierarchyContextBuilder.ComputeGeometryFingerprint(document);
         }
 
         public static string BuildGeneratedGroupKey(IEnumerable<string> stableLayerIds)
@@ -462,17 +502,5 @@ namespace PsdLayoutTool2
                 : PsdHierarchyFingerprints.Document(document);
         }
 
-        private static string ResolveCategoryFingerprint(
-            PsdPrefabDocumentModel document,
-            Func<PsdPrefabNodeModel, string> fingerprint)
-        {
-            string canonical = string.Join("|", (document.nodes ?? new List<PsdPrefabNodeModel>())
-                .Where(node => node != null)
-                .OrderBy(node => node.stableId, StringComparer.Ordinal)
-                .ThenBy(node => node.siblingIndex)
-                .Select(node => (node.stableId ?? string.Empty) + ":" + fingerprint(node))
-                .ToArray());
-            return PsdStableLayerIdUtility.ComputeFnv1a(canonical);
-        }
     }
 }

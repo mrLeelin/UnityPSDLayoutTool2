@@ -364,6 +364,30 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void GeometryOnlyReuseRunsAllStructuralRulesWithoutCallingPlanner()
+        {
+            PsdHierarchyRequest request = Request(Node("101", 0), Node("102", 1));
+            PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(PlanJson(
+                "\"groups\":[" + Group("g", "", "101", "102") + "],\"renames\":[]", request.sourceFingerprint));
+            plan.geometryFingerprint = "previous-geometry";
+
+            Assert.DoesNotThrow(() => PsdHierarchyPlanValidator.ValidateGeometryReuse(plan, request));
+        }
+
+        [Test]
+        public void GeometryOnlyReuseStillRejectsInvalidContiguityAndProtectedBoundary()
+        {
+            PsdHierarchyRequest request = Request(Node("101", 0), Node("102", 1), Node("103", 2));
+            request.currentPrefabHierarchy.Add(PrefabNode("103", true, false));
+            PsdHierarchyPlan nonContiguous = PsdHierarchyPlanJson.Parse(PlanJson(
+                "\"groups\":[" + Group("g", "", "101", "103") + "],\"renames\":[]", request.sourceFingerprint));
+            nonContiguous.geometryFingerprint = "previous-geometry";
+
+            Assert.Throws<PsdHierarchyPlanValidationException>(() =>
+                PsdHierarchyPlanValidator.ValidateGeometryReuse(nonContiguous, request));
+        }
+
+        [Test]
         public void JsonCharacterQuotaAcceptsLimitAndRejectsLimitPlusOne()
         {
             string core = PlanJson("\"groups\":[],\"renames\":[]", "source-v1");

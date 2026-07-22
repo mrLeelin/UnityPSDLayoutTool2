@@ -38,6 +38,26 @@ namespace PsdLayoutTool2.Tests
                 TargetPath, "../escape"));
         }
 
+        [Test]
+        public void BoundProfileRejectsModeSwitchAndSameNameCopiedTargetGuid()
+        {
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            PrefabUtility.SaveAsPrefabAsset(source, SameNamePath);
+            UnityEngine.Object.DestroyImmediate(source);
+            PsdHierarchyProfile profile = Profile();
+            profile.targetPrefabPath = TargetPath;
+            profile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+
+            Assert.DoesNotThrow(() => PsdPrefabTransactionalSave.ValidateProfileTargetBinding(profile, TargetPath));
+            Assert.Throws<InvalidOperationException>(() =>
+                PsdPrefabTransactionalSave.ValidateProfileTargetBinding(profile, SameNamePath));
+            profile.targetPrefabPath = SameNamePath;
+            Assert.Throws<InvalidOperationException>(() =>
+                PsdPrefabTransactionalSave.ValidateProfileTargetBinding(profile, SameNamePath));
+            UnityEngine.Object.DestroyImmediate(profile);
+        }
+
         [TearDown]
         public void TearDown()
         {
@@ -391,7 +411,7 @@ namespace PsdLayoutTool2.Tests
                 PsdPrefabTransactionalSave.Save(
                     TargetPath, loaded, ProfilePath, working,
                     new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Fresh") as RectTransform } },
-                    new Dictionary<string, RectTransform>(), new[] { TemporaryPath }, null);
+                    new Dictionary<string, RectTransform>(), new[] { TemporaryPath }, null, true);
             }
             finally
             {
@@ -404,6 +424,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(LocalId(TargetPath, "Fresh"), Is.EqualTo(originalLocalId));
             Assert.That(saved.nodes[0].localFileId, Is.EqualTo(originalLocalId));
             Assert.That(saved.nodes[0].lastKnownPath, Is.EqualTo("Root/Fresh"));
+            Assert.That(saved.targetPrefabPath, Is.EqualTo(TargetPath));
+            Assert.That(saved.targetPrefabGuid, Is.EqualTo(targetGuid));
             Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(TemporaryPath), Is.Null);
             Assert.That(File.Exists(FullPath(TemporaryPath) + ".meta"), Is.False);
         }
@@ -426,7 +448,7 @@ namespace PsdLayoutTool2.Tests
                 PsdPrefabTransactionalSave.Save(
                     TargetPath, loaded, ProfilePath, working,
                     new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Fresh") as RectTransform } },
-                    new Dictionary<string, RectTransform>(), Array.Empty<string>(), null);
+                    new Dictionary<string, RectTransform>(), Array.Empty<string>(), null, true);
 
                 Assert.That(LocalId(TargetPath, "Fresh"), Is.EqualTo(originalLocalId));
                 Assert.That(instanceLeaf.localScale, Is.EqualTo(new Vector3(1.7f, 0.8f, 1f)));
@@ -470,7 +492,7 @@ namespace PsdLayoutTool2.Tests
                     TargetPath, loaded, ProfilePath, working,
                     new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Must Roll Back") as RectTransform } },
                     new Dictionary<string, RectTransform>(), new[] { TemporaryPath },
-                    stage => { if (stage == failureStage) throw new InvalidOperationException("injected"); }));
+                    stage => { if (stage == failureStage) throw new InvalidOperationException("injected"); }, true));
             }
             finally
             {
@@ -509,7 +531,7 @@ namespace PsdLayoutTool2.Tests
                     TargetPath, loaded, newProfilePath, working,
                     new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Old") as RectTransform } },
                     new Dictionary<string, RectTransform>(), new[] { TemporaryPath },
-                    stage => { if (stage == failureStage) throw new InvalidOperationException("injected"); }));
+                    stage => { if (stage == failureStage) throw new InvalidOperationException("injected"); }, true));
             }
             finally
             {
@@ -519,6 +541,7 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(File.Exists(FullPath(newProfilePath)), Is.False);
             Assert.That(File.Exists(FullPath(newProfilePath) + ".meta"), Is.False);
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(newProfilePath), Is.Null);
             Assert.That(File.Exists(FullPath(TemporaryPath)), Is.False);
             Assert.That(File.Exists(FullPath(TemporaryPath) + ".meta"), Is.False);
         }
@@ -543,7 +566,7 @@ namespace PsdLayoutTool2.Tests
                         corrupted.nodes[0].geometryFingerprint = "partial-corruption";
                         EditorUtility.SetDirty(corrupted);
                         AssetDatabase.SaveAssetIfDirty(corrupted);
-                    }));
+                    }, true));
             }
             finally
             {

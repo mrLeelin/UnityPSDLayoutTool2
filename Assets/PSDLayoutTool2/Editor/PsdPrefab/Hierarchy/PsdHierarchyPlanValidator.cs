@@ -13,6 +13,24 @@ namespace PsdLayoutTool2
     {
         public static void Validate(PsdHierarchyPlan plan, PsdHierarchyRequest request)
         {
+            ValidateInternal(plan, request, false);
+        }
+
+        /// <summary>
+        /// Reuses a previous plan after geometry-only drift while running every
+        /// identity, ownership, parent, protected-boundary, descendant closure,
+        /// contiguity and render-order rule. Only the fingerprint gate differs
+        /// from direct apply; no planner or model is invoked.
+        /// </summary>
+        public static void ValidateGeometryReuse(PsdHierarchyPlan plan, PsdHierarchyRequest request)
+        {
+            if (EvaluateFingerprints(plan, request) != PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation)
+                Fail("Geometry reuse requires geometry-only fingerprint drift.");
+            ValidateInternal(plan, request, true);
+        }
+
+        private static void ValidateInternal(PsdHierarchyPlan plan, PsdHierarchyRequest request, bool allowGeometryDrift)
+        {
             if (plan == null)
             {
                 throw new ArgumentNullException("plan");
@@ -47,7 +65,7 @@ namespace PsdLayoutTool2
                 Fail("Plan structure fingerprint does not match the current PSD context and requires replanning.");
             }
 
-            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation)
+            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation && !allowGeometryDrift)
             {
                 Fail("Plan geometry fingerprint changed and requires geometry validation before apply.");
             }

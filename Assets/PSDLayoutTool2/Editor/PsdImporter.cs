@@ -1360,6 +1360,7 @@
                 throw new InvalidOperationException("Hierarchy Profile schema is stale or unsupported: " + profilePath);
             if (!string.Equals(persisted.sourcePsdGuid, sourceGuid, StringComparison.Ordinal))
                 throw new InvalidOperationException("Hierarchy Profile belongs to a different PSD: " + profilePath);
+            PsdPrefabTransactionalSave.ValidateProfileTargetBinding(persisted, prefabPath);
 
             PsdHierarchyProfile working = UnityEngine.Object.Instantiate(persisted);
             GameObject existingContents = null;
@@ -1367,17 +1368,38 @@
             {
                 PsdHierarchyReconciliationResult reconciliation = working.Reconcile(sourceModel);
                 if (reconciliation.requiresReplan || reconciliation.unsortedNewStableIds.Count > 0 ||
-                    reconciliation.unsortedUnstableIds.Count > 0 ||
-                    reconciliation.geometryValidationStableIds.Count > 0)
+                    reconciliation.unsortedUnstableIds.Count > 0)
                     throw new InvalidOperationException(
                         "Hierarchy Profile requires focused preview/replanning before this PSD can be imported.");
 
                 // Ownership is determined by what this importer invocation
                 // actually emitted, never inferred from PSD visibility/name.
                 // Missing historical records are untouched and remain pending.
-                working.UpdateImporterOwnership(sourceModel, candidateRegistry.Keys);
+                foreach (string pendingEmission in working.UpdateImporterOwnership(sourceModel, candidateRegistry.Keys))
+                    if (!reconciliation.pendingMissingStableIds.Contains(pendingEmission))
+                        reconciliation.pendingMissingStableIds.Add(pendingEmission);
 
-                PsdHierarchyPlan plan = CreatePlanFromProfile(working, sourceModel, sourceGuid);
+                PsdHierarchyPlan plan = CreatePlanFromProfile(working, sourceGuid);
+                if (reconciliation.geometryValidationStableIds.Count > 0)
+                {
+                    if (reconciliation.pendingMissingStableIds.Count > 0)
+                        throw new InvalidOperationException(
+                            "Geometry validation cannot reuse a plan while generated nodes are pending; open focused preview.");
+                    try
+                    {
+                        PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(
+                            sourceModel,
+                            PsdPrefabIncrementalMerge.BuildProfilePrefabMetadata(prefabPath, working),
+                            sourceGuid);
+                        PsdHierarchyPlanValidator.ValidateGeometryReuse(plan, request);
+                        working.AcceptValidatedGeometry(sourceModel, reconciliation.geometryValidationStableIds);
+                    }
+                    catch (PsdHierarchyPlanValidationException exception)
+                    {
+                        throw new InvalidOperationException(
+                            "Geometry-only reuse failed deterministic hierarchy validation; open focused preview.", exception);
+                    }
+                }
 
                 existingContents = PrefabUtility.LoadPrefabContents(prefabPath);
                 PsdPrefabIncrementalMergeResult merge = PsdPrefabIncrementalMerge.Merge(
@@ -1385,7 +1407,7 @@
                 PsdPrefabTransactionalSave.Save(
                     prefabPath, existingContents, profilePath, working,
                     merge.generatedByStableId, merge.groupsByKey,
-                    Array.Empty<string>(), null);
+                    Array.Empty<string>(), null, false);
                 return true;
             }
             finally
@@ -1397,17 +1419,16 @@
 
         private static PsdHierarchyPlan CreatePlanFromProfile(
             PsdHierarchyProfile profile,
-            PsdPrefabDocumentModel sourceModel,
             string sourceGuid)
         {
             var plan = new PsdHierarchyPlan
             {
                 schemaVersion = PsdHierarchyPlan.CurrentSchemaVersion,
                 sourcePsdGuid = sourceGuid,
-                sourceFingerprint = sourceModel.sourceFingerprint,
-                contentFingerprint = string.Empty,
-                structureFingerprint = string.Empty,
-                geometryFingerprint = string.Empty
+                sourceFingerprint = profile.sourceFingerprint,
+                contentFingerprint = profile.sourceContentFingerprint,
+                structureFingerprint = profile.sourceStructureFingerprint,
+                geometryFingerprint = profile.sourceGeometryFingerprint
             };
             foreach (PsdHierarchyProfileGroup source in profile.groups ?? new List<PsdHierarchyProfileGroup>())
             {

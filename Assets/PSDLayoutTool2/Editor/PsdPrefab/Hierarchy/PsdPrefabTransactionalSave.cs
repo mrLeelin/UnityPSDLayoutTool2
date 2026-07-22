@@ -39,6 +39,18 @@ namespace PsdLayoutTool2
             return "Assets/PSDLayoutTool2Settings/HierarchyProfiles/" + sourcePsdGuid + ".asset";
         }
 
+        public static void ValidateProfileTargetBinding(PsdHierarchyProfile profile, string prefabPath)
+        {
+            if (profile == null) throw new ArgumentNullException("profile");
+            string normalizedPath = NormalizeAssetPath(prefabPath);
+            string guid = AssetDatabase.AssetPathToGUID(normalizedPath);
+            if (string.IsNullOrEmpty(profile.targetPrefabPath) || string.IsNullOrEmpty(profile.targetPrefabGuid))
+                throw new InvalidOperationException("Hierarchy Profile is not explicitly bound to a target Prefab.");
+            if (!string.Equals(NormalizeAssetPath(profile.targetPrefabPath), normalizedPath, StringComparison.Ordinal) ||
+                !string.Equals(profile.targetPrefabGuid, guid, StringComparison.Ordinal))
+                throw new InvalidOperationException("Hierarchy Profile target path or GUID does not match the configured Prefab.");
+        }
+
         public static void Save(
             string prefabPath,
             GameObject loadedContents,
@@ -47,7 +59,8 @@ namespace PsdLayoutTool2
             IReadOnlyDictionary<string, RectTransform> generatedByStableId,
             IReadOnlyDictionary<string, RectTransform> groupsByKey,
             IEnumerable<string> temporaryAssetPaths,
-            Action<PsdPrefabTransactionStage> failureInjector)
+            Action<PsdPrefabTransactionStage> failureInjector,
+            bool allowInitialTargetBinding = false)
         {
             if (string.IsNullOrEmpty(prefabPath)) throw new ArgumentException("Prefab path is required.", "prefabPath");
             if (loadedContents == null) throw new ArgumentNullException("loadedContents");
@@ -66,6 +79,16 @@ namespace PsdLayoutTool2
             AssetBackup prefabBackup = AssetBackup.Capture(prefabPath);
             AssetBackup profileBackup = AssetBackup.Capture(profilePath);
             string originalGuid = AssetDatabase.AssetPathToGUID(prefabPath);
+            bool wasBound = !string.IsNullOrEmpty(workingProfile.targetPrefabPath) ||
+                            !string.IsNullOrEmpty(workingProfile.targetPrefabGuid);
+            if (wasBound)
+            {
+                ValidateProfileTargetBinding(workingProfile, prefabPath);
+            }
+            else if (!allowInitialTargetBinding)
+            {
+                throw new InvalidOperationException("Only an explicit adoption/creation flow may bind a hierarchy Profile.");
+            }
             bool committed = false;
             try
             {
@@ -76,6 +99,9 @@ namespace PsdLayoutTool2
                 AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
                 VerifyTargetIdentity(prefabPath, originalGuid);
                 Invoke(failureInjector, PsdPrefabTransactionStage.AfterReimportVerification);
+
+                workingProfile.targetPrefabPath = NormalizeAssetPath(prefabPath);
+                workingProfile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(prefabPath);
 
                 // Identity is derived only after the Prefab save succeeded. It
                 // is written to the detached working clone, never the current
@@ -212,6 +238,8 @@ namespace PsdLayoutTool2
             Append(value, profile.sourceContentFingerprint);
             Append(value, profile.sourceStructureFingerprint);
             Append(value, profile.sourceGeometryFingerprint);
+            Append(value, profile.targetPrefabGuid);
+            Append(value, NormalizeAssetPath(profile.targetPrefabPath));
             foreach (PsdHierarchyProfileNode node in (profile.nodes ?? new List<PsdHierarchyProfileNode>())
                          .Where(node => node != null).OrderBy(node => node.stableId, StringComparer.Ordinal))
             {
@@ -297,6 +325,11 @@ namespace PsdLayoutTool2
             return Path.GetFullPath(Path.Combine(Application.dataPath, "..", assetPath));
         }
 
+        private static string NormalizeAssetPath(string path)
+        {
+            return (path ?? string.Empty).Replace('\\', '/').Trim();
+        }
+
         private static void DeleteFile(string path)
         {
             if (File.Exists(path)) File.Delete(path);
@@ -328,6 +361,16 @@ namespace PsdLayoutTool2
             public void Restore()
             {
                 string fullPath = ToFullPath(assetPath);
+                if (!assetExisted)
+                {
+                    // Delete through Unity first so its imported-object cache
+                    // cannot retain a ghost ScriptableObject after rollback.
+                    AssetDatabase.DeleteAsset(assetPath);
+                    DeleteFile(fullPath);
+                    DeleteFile(fullPath + ".meta");
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+                    return;
+                }
                 string directory = Path.GetDirectoryName(fullPath);
                 if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
                 RestoreFile(fullPath, assetExisted, assetBytes);

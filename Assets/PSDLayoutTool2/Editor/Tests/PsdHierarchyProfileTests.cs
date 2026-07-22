@@ -463,6 +463,47 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void TemporarilyNotEmittedGeneratedNodeKeepsIdentityAndBecomesPending()
+        {
+            PsdPrefabDocumentModel document = Document(
+                Node("101", "Visible", 0, Rect.zero, "a"),
+                Node("102", "Conditional", 1, Rect.zero, "b"));
+            PsdHierarchyProfile profile = Profile(document, "101", "102");
+            PsdHierarchyProfileNode conditional = profile.nodes.Single(node => node.stableId == "102");
+            conditional.ownership = PsdHierarchyNodeOwnership.Generated;
+            conditional.localFileId = 7788L;
+            conditional.lastKnownPath = "Root/Conditional";
+            profile.renames.Add(new PsdHierarchyProfileRename { stableId = "102", name = "Kept" });
+
+            List<string> pending = profile.UpdateImporterOwnership(document, new[] { "101" });
+
+            Assert.That(pending, Is.EqualTo(new[] { "102" }));
+            Assert.That(conditional.ownership, Is.EqualTo(PsdHierarchyNodeOwnership.Generated));
+            Assert.That(conditional.localFileId, Is.EqualTo(7788L));
+            Assert.That(conditional.lastKnownPath, Is.EqualTo("Root/Conditional"));
+            Assert.That(profile.groups.Single().stableLayerIds, Does.Contain("102"));
+            Assert.That(profile.renames.Any(rename => rename.stableId == "102"), Is.True);
+        }
+
+        [Test]
+        public void AcceptValidatedGeometryAdvancesOnlyAfterStructuralSafetyChecks()
+        {
+            PsdPrefabDocumentModel original = Document(Node("101", "A", 0, new Rect(0, 0, 10, 10), "a"));
+            original.sourceFingerprint = PsdHierarchyFingerprints.Document(original);
+            PsdHierarchyProfile profile = Profile(original, "101");
+            PsdPrefabDocumentModel changed = Document(Node("101", "A", 0, new Rect(0, 0, 20, 10), "a"));
+            changed.sourceFingerprint = PsdHierarchyFingerprints.Document(changed);
+            PsdHierarchyReconciliationResult pending = profile.Reconcile(changed);
+            Assert.That(pending.geometryValidationStableIds, Is.EqualTo(new[] { "101" }));
+
+            profile.AcceptValidatedGeometry(changed, pending.geometryValidationStableIds);
+
+            Assert.That(profile.nodes.Single().geometryFingerprint,
+                Is.EqualTo(PsdHierarchyFingerprints.Geometry(changed.nodes.Single())));
+            Assert.That(profile.sourceFingerprint, Is.EqualTo(changed.sourceFingerprint));
+        }
+
+        [Test]
         public void NullSerializedCollectionsAreNormalizedWithoutNullReference()
         {
             PsdHierarchyProfile profile = Profile(Document(Node("101", "A", 0, Rect.zero, "a")), "101");
