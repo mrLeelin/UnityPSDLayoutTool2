@@ -37,6 +37,8 @@ namespace PsdLayoutTool2
         private bool hasManualOverride;
         private PsdNineSliceBorder editableBorder;
         private DragGuide activeDrag;
+        private bool autoSavePending;
+        private double autoSaveDeadline;
         private string status;
         private bool statusIsError;
 
@@ -102,7 +104,14 @@ namespace PsdLayoutTool2
 
         private void OnDisable()
         {
+            EditorApplication.update -= ProcessPendingAutoSave;
             ClosePsdSession();
+        }
+
+        private void OnEnable()
+        {
+            EditorApplication.update -= ProcessPendingAutoSave;
+            EditorApplication.update += ProcessPendingAutoSave;
         }
 
         private void OnGUI()
@@ -228,7 +237,7 @@ namespace PsdLayoutTool2
             EditorGUILayout.LabelField(entry.DisplayName, EditorStyles.boldLabel);
             EditorGUILayout.LabelField("Photoshop layer " + (entry.LayerId == 0U ? "has no stable ID" : entry.LayerId.ToString()) + " · " + Mathf.RoundToInt(entry.Rect.width) + " x " + Mathf.RoundToInt(entry.Rect.height) + " PSD pixels", EditorStyles.wordWrappedMiniLabel);
             Texture2D preview = psdSession.GetPreview(entry);
-            Rect previewRect = GUILayoutUtility.GetRect(280f, 360f, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+            Rect previewRect = GUILayoutUtility.GetRect(260f, 300f, GUILayout.ExpandWidth(true), GUILayout.Height(300f));
             if (preview == null)
             {
                 EditorGUI.HelpBox(previewRect, "Unity could not decode this PSD layer.", MessageType.Warning);
@@ -242,11 +251,11 @@ namespace PsdLayoutTool2
             }
 
             EditorGUILayout.BeginHorizontal();
-            bool enabled = EditorGUILayout.ToggleLeft("Enable 9-slice for this layer", nineSliceEnabled, GUILayout.Width(210));
+            bool enabled = EditorGUILayout.ToggleLeft("Use manual 9-slice override", nineSliceEnabled, GUILayout.Width(210));
             if (enabled != nineSliceEnabled)
             {
                 nineSliceEnabled = enabled;
-                hasManualOverride = true;
+                ScheduleAutoSave();
             }
 
             GUILayout.FlexibleSpace();
@@ -254,31 +263,26 @@ namespace PsdLayoutTool2
             EditorGUILayout.EndHorizontal();
 
             EditorGUI.BeginDisabledGroup(!nineSliceEnabled || preview == null);
-            DrawBorderFields(preview == null ? 0 : preview.width, preview == null ? 0 : preview.height);
+            GUILayout.Space(4f);
+            if (DrawBorderFields(preview == null ? 0 : preview.width, preview == null ? 0 : preview.height))
+            {
+                ScheduleAutoSave();
+            }
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Use automatic candidate"))
             {
                 UseAutomaticCandidate(preview);
             }
-
-            if (GUILayout.Button("Save current layer"))
-            {
-                SaveCurrentOverride(entry, preview);
-            }
-
             EditorGUILayout.EndHorizontal();
             EditorGUI.EndDisabledGroup();
 
-            if (GUILayout.Button("Clear manual override"))
-            {
-                ClearCurrentOverride(entry);
-            }
-
-            EditorGUILayout.HelpBox("Saved values are PSD pixels in left, top, right, bottom order. They are written into this PSD asset's .meta only; the PSD file itself is not changed.", MessageType.None);
+            EditorGUILayout.HelpBox(
+                "Checked: this layer uses the manual left, top, right, bottom pixels. Unchecked: automatic PSD naming/XMP rules are used. Changes save to this PSD asset's .meta automatically after you stop editing.",
+                MessageType.None);
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawBorderFields(int width, int height)
+        private bool DrawBorderFields(int width, int height)
         {
             if (editableBorder == null)
             {
@@ -287,8 +291,10 @@ namespace PsdLayoutTool2
 
             EditorGUILayout.BeginHorizontal();
             int left = EditorGUILayout.IntField("Left", editableBorder.Left);
-            int top = EditorGUILayout.IntField("Top", editableBorder.Top);
             int right = EditorGUILayout.IntField("Right", editableBorder.Right);
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.BeginHorizontal();
+            int top = EditorGUILayout.IntField("Top", editableBorder.Top);
             int bottom = EditorGUILayout.IntField("Bottom", editableBorder.Bottom);
             EditorGUILayout.EndHorizontal();
             PsdNineSliceBorder next = ClampBorder(new PsdNineSliceBorder(left, top, right, bottom), width, height);
@@ -296,7 +302,10 @@ namespace PsdLayoutTool2
             {
                 editableBorder = next;
                 hasManualOverride = true;
+                return true;
             }
+
+            return false;
         }
 
         private void DrawNineSliceGuides(Rect imageRect, int width, int height)
@@ -345,6 +354,7 @@ namespace PsdLayoutTool2
             else if (evt.type == EventType.MouseUp && activeDrag != DragGuide.None)
             {
                 activeDrag = DragGuide.None;
+                ScheduleAutoSave();
                 evt.Use();
             }
         }
@@ -364,7 +374,8 @@ namespace PsdLayoutTool2
             editableBorder = candidate.Border;
             nineSliceEnabled = true;
             hasManualOverride = true;
-            status = "Automatic candidate applied. Drag the cyan guides to refine it, then save this layer.";
+            ScheduleAutoSave();
+            status = "Automatic candidate applied. Drag the cyan guides to refine it; the .meta is saved automatically after you stop.";
             statusIsError = false;
         }
 
@@ -392,37 +403,42 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            importer.userData = PsdNineSliceOverrideStore.Write(importer.userData, entry.LayerId, nineSliceEnabled, nineSliceEnabled ? editableBorder : null);
-            importer.SaveAndReimport();
-            hasManualOverride = true;
+            importer.userData = nineSliceEnabled
+                ? PsdNineSliceOverrideStore.Write(importer.userData, entry.LayerId, true, editableBorder)
+                : PsdNineSliceOverrideStore.Remove(importer.userData, entry.LayerId);
+            AssetDatabase.WriteImportSettingsIfDirty(assetPath);
+            hasManualOverride = nineSliceEnabled;
             status = nineSliceEnabled
                 ? "Saved manual 9-slice override. The next PSD-to-Prefab import uses it first."
-                : "Saved manual disable override. The next PSD-to-Prefab import skips nine-slice for this layer.";
+                : "Manual override removed. The next PSD-to-Prefab import uses PSD naming/XMP automatic rules.";
             statusIsError = false;
         }
 
-        private void ClearCurrentOverride(PsdNineSlicePsdLayerEntry entry)
+        private void ScheduleAutoSave()
         {
-            if (entry.LayerId == 0U)
+            if (mode != EditorMode.Psd || psdSession == null || GetSelectedPsdLayer() == null)
             {
-                status = "This PSD layer has no stable Photoshop layer ID.";
-                statusIsError = true;
                 return;
             }
 
-            AssetImporter importer = AssetImporter.GetAtPath(assetPath);
-            if (importer == null)
+            autoSavePending = true;
+            autoSaveDeadline = EditorApplication.timeSinceStartup + 0.35d;
+        }
+
+        private void ProcessPendingAutoSave()
+        {
+            if (!autoSavePending || EditorApplication.timeSinceStartup < autoSaveDeadline)
             {
-                status = "Unity could not access the selected PSD importer.";
-                statusIsError = true;
                 return;
             }
 
-            importer.userData = PsdNineSliceOverrideStore.Remove(importer.userData, entry.LayerId);
-            importer.SaveAndReimport();
-            LoadSelectedPsdLayerState();
-            status = "Manual override cleared. The next import falls back to PSD naming and embedded metadata.";
-            statusIsError = false;
+            autoSavePending = false;
+            PsdNineSlicePsdLayerEntry entry = GetSelectedPsdLayer();
+            Texture2D preview = psdSession == null || entry == null ? null : psdSession.GetPreview(entry);
+            if (entry != null)
+            {
+                SaveCurrentOverride(entry, preview);
+            }
         }
 
         private void SelectPsdLayer(int index)
@@ -443,11 +459,11 @@ namespace PsdLayoutTool2
 
             AssetImporter importer = AssetImporter.GetAtPath(assetPath);
             PsdNineSliceOverride saved;
-            if (importer != null && PsdNineSliceOverrideStore.TryGet(importer.userData, entry.LayerId, out saved))
+            if (importer != null && PsdNineSliceOverrideStore.TryGet(importer.userData, entry.LayerId, out saved) && saved.Enabled)
             {
                 hasManualOverride = true;
-                nineSliceEnabled = saved.Enabled;
-                editableBorder = saved.Border ?? CreateDefaultBorder(Mathf.RoundToInt(entry.Rect.width), Mathf.RoundToInt(entry.Rect.height));
+                nineSliceEnabled = true;
+                editableBorder = saved.Border;
                 return;
             }
 
@@ -455,7 +471,7 @@ namespace PsdLayoutTool2
             PsdNineSliceNameRule rule;
             if (PsdNineSliceNameRules.TryParse(entry.DisplayName, out rule))
             {
-                nineSliceEnabled = true;
+                nineSliceEnabled = false;
                 editableBorder = rule.ExplicitBorder ?? CreateDefaultBorder(Mathf.RoundToInt(entry.Rect.width), Mathf.RoundToInt(entry.Rect.height));
             }
             else
