@@ -79,6 +79,85 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ChildFirstResolutionReusesExistingInnerAndWrapsItWithDirectOuterMember()
+        {
+            RectTransform inner = new GameObject("Inner Old", typeof(RectTransform)).GetComponent<RectTransform>();
+            inner.SetParent(root, false);
+            ConfigureIdentityGroup(inner);
+            RectTransform first = LeafUnder(inner, "A", 0, new Vector2(-80f, 10f));
+            RectTransform second = LeafUnder(inner, "B", 1, new Vector2(10f, 10f));
+            RectTransform third = Leaf("C", 1, new Vector2(100f, 10f));
+            first.gameObject.AddComponent<Image>();
+            second.gameObject.AddComponent<Image>();
+            third.gameObject.AddComponent<Image>();
+            Dictionary<string, RectTransform> registry = Registry(first, second, third);
+            PsdHierarchyPlan plan = Plan(
+                Group("outer", "", "Outer", "103"),
+                Group("inner", "outer", "Inner", "101", "102"));
+            var existing = new Dictionary<string, RectTransform> { { "inner", inner } };
+
+            PsdHierarchyApplyResult result = PsdHierarchyApplier.Apply(root, plan, registry, existing);
+
+            Assert.That(result.groupsByKey["inner"], Is.SameAs(inner));
+            Assert.That(result.createdGroupKeys, Is.EquivalentTo(new[] { "outer" }));
+            RectTransform outer = result.groupsByKey["outer"];
+            Assert.That(inner.parent, Is.SameAs(outer));
+            Assert.That(third.parent, Is.SameAs(outer));
+            Assert.That(first.parent, Is.SameAs(inner));
+            Assert.That(second.parent, Is.SameAs(inner));
+            Assert.That(outer.parent, Is.SameAs(root));
+        }
+
+        [Test]
+        public void ParentGroupMayContainOnlyAnExistingChildGroup()
+        {
+            RectTransform inner = new GameObject("Inner", typeof(RectTransform)).GetComponent<RectTransform>();
+            inner.SetParent(root, false);
+            ConfigureIdentityGroup(inner);
+            RectTransform first = LeafUnder(inner, "A", 0, Vector2.zero);
+            first.gameObject.AddComponent<Image>();
+            PsdHierarchyPlan plan = Plan(
+                Group("outer", "", "Outer"),
+                Group("inner", "outer", "Inner", "101"));
+
+            PsdHierarchyApplyResult result = PsdHierarchyApplier.Apply(
+                root, plan, Registry(first), new Dictionary<string, RectTransform> { { "inner", inner } });
+
+            Assert.That(result.groupsByKey["inner"], Is.SameAs(inner));
+            Assert.That(inner.parent, Is.SameAs(result.groupsByKey["outer"]));
+            Assert.That(result.groupsByKey["outer"].parent, Is.SameAs(root));
+        }
+
+        [Test]
+        public void CycleIsRejectedBeforeAnyHierarchyMutation()
+        {
+            RectTransform first = Leaf("A", 0, Vector2.zero);
+            RectTransform second = Leaf("B", 1, Vector2.zero);
+            string before = GraphSignature(root);
+            PsdHierarchyPlan cycle = Plan(
+                Group("outer", "inner", "Outer", "101"),
+                Group("inner", "outer", "Inner", "102"));
+
+            Assert.Throws<PsdHierarchyApplyException>(() =>
+                PsdHierarchyApplier.Apply(root, cycle, Registry(first, second), EmptyGroups()));
+
+            Assert.That(GraphSignature(root), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void UnknownParentIsRejectedBeforeAnyHierarchyMutation()
+        {
+            RectTransform first = Leaf("A", 0, Vector2.zero);
+            string before = GraphSignature(root);
+            PsdHierarchyPlan invalid = Plan(Group("inner", "missing", "Inner", "101"));
+
+            Assert.Throws<PsdHierarchyApplyException>(() =>
+                PsdHierarchyApplier.Apply(root, invalid, Registry(first), EmptyGroups()));
+
+            Assert.That(GraphSignature(root), Is.EqualTo(before));
+        }
+
+        [Test]
         public void ApplyPreservesFullRectVisualComponentsMaterialsNineSliceReferencesAndOrder()
         {
             GameObject canvasObject = new GameObject("Canvas", typeof(RectTransform), typeof(Canvas));
@@ -259,14 +338,32 @@ namespace PsdLayoutTool2.Tests
 
         private RectTransform Leaf(string name, int sibling, Vector2 position)
         {
+            return LeafUnder(root, name, sibling, position);
+        }
+
+        private static RectTransform LeafUnder(RectTransform parent, string name, int sibling, Vector2 position)
+        {
             RectTransform rect = new GameObject(name, typeof(RectTransform)).GetComponent<RectTransform>();
-            rect.SetParent(root, false);
+            rect.SetParent(parent, false);
             rect.SetSiblingIndex(sibling);
             rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
             rect.pivot = new Vector2(0.5f, 0.5f);
             rect.anchoredPosition = position;
             rect.sizeDelta = new Vector2(100f, 50f);
             return rect;
+        }
+
+        private static void ConfigureIdentityGroup(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.anchoredPosition3D = Vector3.zero;
+            rect.sizeDelta = Vector2.zero;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rect.localRotation = Quaternion.identity;
+            rect.localScale = Vector3.one;
         }
 
         private static Dictionary<string, RectTransform> Registry(params RectTransform[] values)

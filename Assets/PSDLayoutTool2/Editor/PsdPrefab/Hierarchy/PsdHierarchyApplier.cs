@@ -59,6 +59,13 @@ namespace PsdLayoutTool2
             public Vector2 offsetMax;
         }
 
+        private sealed class AtomicChild
+        {
+            public RectTransform transform;
+            public int rank;
+            public TransformState authoredLeafState;
+        }
+
         public static PsdHierarchyApplyResult Apply(
             RectTransform root,
             PsdHierarchyPlan plan,
@@ -82,6 +89,9 @@ namespace PsdLayoutTool2
 
             Dictionary<string, RectTransform> leaves = ReadRegistry(root, registry);
             Dictionary<string, PsdHierarchyPlanGroup> groups = ReadPlanGroups(plan, leaves);
+            // Materialize before any mutation so unknown parents and cycles are
+            // rejected while the graph is still untouched.
+            TopologicalGroups(groups).ToList();
             Dictionary<string, RectTransform> ownedGroups = ReadOwnedGroups(root, groups, leaves, existingGroupsByKey);
             foreach (RectTransform leaf in leaves.Values) ValidateMovable(root, leaf);
 
@@ -89,51 +99,26 @@ namespace PsdLayoutTool2
             List<TransformState> rollbackStates = CaptureGraph(root);
             var created = new List<RectTransform>();
             var result = new PsdHierarchyApplyResult();
+            var groupRanks = new Dictionary<string, int>(StringComparer.Ordinal);
 
             try
             {
-                foreach (PsdHierarchyPlanGroup group in TopologicalGroups(groups))
+                foreach (PsdHierarchyPlanGroup rootGroup in groups.Values
+                             .Where(group => string.IsNullOrEmpty(group.parentKey))
+                             .OrderBy(group => group.key, StringComparer.Ordinal))
                 {
-                    RectTransform container;
-                    RectTransform desiredParent;
-                    if (ownedGroups.TryGetValue(group.key, out container))
-                    {
-                        desiredParent = string.IsNullOrEmpty(group.parentKey)
-                            ? container.parent as RectTransform
-                            : result.groupsByKey[group.parentKey];
-                        if (desiredParent == null) Fail("Existing group '" + group.key + "' has no RectTransform parent.");
-                        if (container.parent != desiredParent) container.SetParent(desiredParent, false);
-                        ConfigureIdentityContainer(container);
-                    }
-                    else
-                    {
-                        desiredParent = string.IsNullOrEmpty(group.parentKey)
-                            ? FindCommonCurrentParent(group.key, groups, leaves)
-                            : result.groupsByKey[group.parentKey];
-                        container = CreateContainer(desiredParent, group.displayName);
-                        created.Add(container);
-                        result.createdGroupKeys.Add(group.key);
-                    }
-
-                    container.name = group.displayName;
-                    result.groupsByKey.Add(group.key, container);
-                    Invoke(failureInjector, PsdHierarchyApplyStage.GroupPrepared);
+                    ResolveGroupChildFirst(
+                        rootGroup.key,
+                        groups,
+                        ownedGroups,
+                        leaves,
+                        rollbackStates,
+                        result,
+                        groupRanks,
+                        created,
+                        failureInjector);
                 }
 
-                foreach (PsdHierarchyPlanGroup group in TopologicalGroups(groups))
-                {
-                    RectTransform container = result.groupsByKey[group.key];
-                    foreach (string stableId in group.memberStableIds)
-                    {
-                        RectTransform leaf = leaves[stableId];
-                        TransformState authored = rollbackStates.First(state => state.transform == leaf);
-                        leaf.SetParent(container, false);
-                        RestoreLocalState(authored);
-                        Invoke(failureInjector, PsdHierarchyApplyStage.MemberMoved);
-                    }
-                }
-
-                RestoreVisualOrder(groups, result.groupsByKey, leaves, rollbackStates);
                 foreach (PsdHierarchyPlanRename rename in plan.renames ?? new List<PsdHierarchyPlanRename>())
                     leaves[rename.stableId].name = rename.name;
 
@@ -224,23 +209,95 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static RectTransform FindCommonCurrentParent(
+        /// <summary>
+        /// Resolves direct child groups first, then treats those groups and this
+        /// group's direct PSD members as opaque atomic children. This is the
+        /// crucial distinction from flattening descendant leaves: an existing
+        /// inner group can remain intact while a new outer group wraps it.
+        /// </summary>
+        private static RectTransform ResolveGroupChildFirst(
             string groupKey,
             Dictionary<string, PsdHierarchyPlanGroup> groups,
-            Dictionary<string, RectTransform> leaves)
+            Dictionary<string, RectTransform> ownedGroups,
+            Dictionary<string, RectTransform> leaves,
+            List<TransformState> rollbackStates,
+            PsdHierarchyApplyResult result,
+            Dictionary<string, int> groupRanks,
+            List<RectTransform> created,
+            Action<PsdHierarchyApplyStage> failureInjector)
         {
-            var descendantKeys = new HashSet<string>(StringComparer.Ordinal) { groupKey };
-            bool changed;
-            do
+            RectTransform alreadyResolved;
+            if (result.groupsByKey.TryGetValue(groupKey, out alreadyResolved)) return alreadyResolved;
+
+            PsdHierarchyPlanGroup group = groups[groupKey];
+            List<PsdHierarchyPlanGroup> directChildGroups = groups.Values
+                .Where(candidate => string.Equals(candidate.parentKey, groupKey, StringComparison.Ordinal))
+                .OrderBy(candidate => candidate.key, StringComparer.Ordinal).ToList();
+            foreach (PsdHierarchyPlanGroup child in directChildGroups)
             {
-                changed = false;
-                foreach (PsdHierarchyPlanGroup candidate in groups.Values)
-                    if (descendantKeys.Contains(candidate.parentKey) && descendantKeys.Add(candidate.key)) changed = true;
-            } while (changed);
-            Transform[] parents = groups.Values.Where(group => descendantKeys.Contains(group.key))
-                .SelectMany(group => group.memberStableIds).Select(id => leaves[id].parent).Distinct().ToArray();
-            if (parents.Length != 1 || !(parents[0] is RectTransform)) Fail("Group '" + groupKey + "' would move members from multiple parents.");
-            return (RectTransform)parents[0];
+                ResolveGroupChildFirst(
+                    child.key, groups, ownedGroups, leaves, rollbackStates, result, groupRanks, created, failureInjector);
+            }
+
+            var atoms = new List<AtomicChild>();
+            foreach (string stableId in group.memberStableIds ?? new List<string>())
+            {
+                RectTransform leaf = leaves[stableId];
+                TransformState state = rollbackStates.First(item => item.transform == leaf);
+                atoms.Add(new AtomicChild { transform = leaf, rank = state.siblingIndex, authoredLeafState = state });
+            }
+            foreach (PsdHierarchyPlanGroup child in directChildGroups)
+            {
+                atoms.Add(new AtomicChild
+                {
+                    transform = result.groupsByKey[child.key],
+                    rank = groupRanks[child.key]
+                });
+            }
+            if (atoms.Count == 0) Fail("Group '" + groupKey + "' has no direct member or direct child group.");
+
+            RectTransform container;
+            bool reused = ownedGroups.TryGetValue(groupKey, out container);
+            int groupRank;
+            if (reused)
+            {
+                TransformState state = rollbackStates.First(item => item.transform == container);
+                groupRank = state.siblingIndex;
+            }
+            else
+            {
+                Transform[] parents = atoms.Select(atom => atom.transform.parent).Distinct().ToArray();
+                if (parents.Length != 1 || !(parents[0] is RectTransform))
+                    Fail("Group '" + groupKey + "' atomic children do not share one current RectTransform parent.");
+                groupRank = atoms.Min(atom => atom.rank);
+                container = CreateContainer((RectTransform)parents[0], group.displayName);
+                container.SetSiblingIndex(Mathf.Clamp(groupRank, 0, container.parent.childCount - 1));
+                created.Add(container);
+                result.createdGroupKeys.Add(groupKey);
+            }
+
+            container.name = group.displayName;
+            ConfigureIdentityContainer(container);
+            result.groupsByKey.Add(groupKey, container);
+            groupRanks.Add(groupKey, groupRank);
+            Invoke(failureInjector, PsdHierarchyApplyStage.GroupPrepared);
+
+            int sibling = 0;
+            foreach (AtomicChild atom in atoms.OrderBy(atom => atom.rank))
+            {
+                if (atom.transform.parent != container) atom.transform.SetParent(container, false);
+                if (atom.authoredLeafState != null)
+                {
+                    RestoreLocalState(atom.authoredLeafState);
+                }
+                else
+                {
+                    ConfigureIdentityContainer(atom.transform);
+                }
+                atom.transform.SetSiblingIndex(sibling++);
+                Invoke(failureInjector, PsdHierarchyApplyStage.MemberMoved);
+            }
+            return container;
         }
 
         private static RectTransform CreateContainer(RectTransform parent, string name)
@@ -346,33 +403,6 @@ namespace PsdLayoutTool2
                 foreach (TransformState state in siblings.OrderBy(state => state.siblingIndex)) state.transform.SetSiblingIndex(state.siblingIndex);
             for (int index = created.Count - 1; index >= 0; index--)
                 if (created[index] != null) UnityEngine.Object.DestroyImmediate(created[index].gameObject);
-        }
-
-        private static void RestoreVisualOrder(
-            Dictionary<string, PsdHierarchyPlanGroup> groups,
-            Dictionary<string, RectTransform> groupTransforms,
-            Dictionary<string, RectTransform> leaves,
-            List<TransformState> states)
-        {
-            var order = leaves.ToDictionary(pair => pair.Key,
-                pair => states.First(state => state.transform == pair.Value).siblingIndex, StringComparer.Ordinal);
-            var minimum = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (PsdHierarchyPlanGroup group in TopologicalGroups(groups).Reverse())
-            {
-                IEnumerable<int> direct = group.memberStableIds.Select(id => order[id]);
-                IEnumerable<int> children = groups.Values.Where(child => child.parentKey == group.key).Select(child => minimum[child.key]);
-                minimum[group.key] = direct.Concat(children).DefaultIfEmpty(int.MaxValue).Min();
-                var childOrder = group.memberStableIds.Select(id => Tuple.Create(order[id], (Transform)leaves[id]))
-                    .Concat(groups.Values.Where(child => child.parentKey == group.key)
-                        .Select(child => Tuple.Create(minimum[child.key], (Transform)groupTransforms[child.key])));
-                int sibling = 0;
-                foreach (Tuple<int, Transform> item in childOrder.OrderBy(item => item.Item1)) item.Item2.SetSiblingIndex(sibling++);
-            }
-            foreach (PsdHierarchyPlanGroup group in groups.Values.Where(group => string.IsNullOrEmpty(group.parentKey)).OrderBy(group => minimum[group.key]))
-            {
-                RectTransform container = groupTransforms[group.key];
-                container.SetSiblingIndex(Mathf.Clamp(minimum[group.key], 0, container.parent.childCount - 1));
-            }
         }
 
         private static void ValidateMovable(RectTransform root, RectTransform leaf)
