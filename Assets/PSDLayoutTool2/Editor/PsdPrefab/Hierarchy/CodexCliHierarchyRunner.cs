@@ -7,6 +7,7 @@ namespace PsdLayoutTool2
     using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
+    using Newtonsoft.Json;
 
     /// <summary>
     /// Produces a bounded request package and invokes Codex as a read-only,
@@ -48,100 +49,165 @@ namespace PsdLayoutTool2
 
             cancellationToken.ThrowIfCancellationRequested();
             string operationId = ValidateOperationId(runRequest.operationId);
-            string packagePath = Path.GetFullPath(Path.Combine(packageRoot, operationId));
-            EnsureChildPath(Path.GetFullPath(packageRoot), packagePath);
-            Directory.CreateDirectory(packagePath);
+            string rootPath = Path.GetFullPath(packageRoot);
+            Directory.CreateDirectory(rootPath);
+            string packagePath = Path.GetFullPath(Path.Combine(rootPath, operationId));
+            string lockPath = Path.GetFullPath(Path.Combine(rootPath, "." + operationId + ".lock"));
+            EnsureChildPath(rootPath, packagePath);
+            EnsureChildPath(rootPath, lockPath);
 
-            string requestPath = Path.Combine(packagePath, "request.json");
-            string schemaPath = Path.Combine(packagePath, "plan.schema.json");
-            string promptPath = Path.Combine(packagePath, "prompt.txt");
-            string outputPath = Path.Combine(packagePath, "plan.json");
-            string prompt = BuildPrompt(runRequest.targetPrefabPath, requestPath);
-
+            FileStream operationLock;
             try
             {
-                File.WriteAllText(requestPath, PsdHierarchyPlanJson.SerializeRequest(runRequest.request), new UTF8Encoding(false));
-                File.WriteAllText(schemaPath, PlanSchema, new UTF8Encoding(false));
-                File.WriteAllText(promptPath, prompt, new UTF8Encoding(false));
+                operationLock = new FileStream(lockPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            }
+            catch (IOException)
+            {
+                return OwnershipRejected("Hierarchy operation is already in progress.", packagePath);
+            }
 
-                var invocation = new PsdHierarchyProcessInvocation
+            using (operationLock)
+            {
+                if (Directory.Exists(packagePath))
                 {
-                    executable = executableResolver(),
-                    workingDirectory = packagePath,
-                    standardInput = prompt,
-                    OutputPath = outputPath,
-                    useShellExecute = false,
-                    arguments = new List<string>
-                    {
-                        "exec", "--sandbox", "read-only", "--ephemeral",
-                        "--output-schema", schemaPath, "-o", outputPath, "-"
-                    }
-                };
-
-                PsdHierarchyProcessResult processResult = await processAdapter
-                    .RunAsync(invocation, NormalizeTimeout(runRequest.timeout), cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (processResult == null)
-                {
-                    return Failed("Codex process returned no result.", packagePath, null);
+                    operationLock.Dispose();
+                    ReleaseLockFile(lockPath);
+                    return OwnershipRejected("Hierarchy operation package already exists; refusing stale output.", packagePath);
                 }
 
-                if (processResult.timedOut)
-                {
-                    return Failed("Codex hierarchy planning timeout (process timed out).", packagePath, processResult);
-                }
+                Directory.CreateDirectory(packagePath);
 
-                if (processResult.exitCode != 0)
-                {
-                    string detail = string.IsNullOrWhiteSpace(processResult.standardError)
-                        ? processResult.error
-                        : processResult.standardError;
-                    return Failed("Codex hierarchy planning failed (exit " + processResult.exitCode + "): " + detail,
-                        packagePath, processResult);
-                }
-
-                if (!File.Exists(outputPath))
-                {
-                    return Failed("Codex hierarchy plan output is missing.", packagePath, processResult);
-                }
-
-                if (new FileInfo(outputPath).Length > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
-                {
-                    return Failed("Hierarchy plan exceeds the UTF-8 byte limit.", packagePath, processResult);
-                }
+                string requestPath = Path.Combine(packagePath, "request.json");
+                string focusPath = Path.Combine(packagePath, "focus.json");
+                string schemaPath = Path.Combine(packagePath, "plan.schema.json");
+                string promptPath = Path.Combine(packagePath, "prompt.txt");
+                string outputPath = Path.Combine(packagePath, "plan.json");
+                string prompt = BuildPrompt(runRequest.targetPrefabPath, requestPath, focusPath);
 
                 try
                 {
-                    PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(File.ReadAllText(outputPath, Encoding.UTF8));
-                    PsdHierarchyPlanValidator.Validate(plan, runRequest.request);
-                    var success = new PsdHierarchyAiRunResult
+                    File.WriteAllText(requestPath, PsdHierarchyPlanJson.SerializeRequest(runRequest.request), new UTF8Encoding(false));
+                    string focusJson = SerializeFocus(runRequest);
+                    if (focusJson.Length > PsdHierarchyContractLimits.MaxJsonCharacters ||
+                        Encoding.UTF8.GetByteCount(focusJson) > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
                     {
-                        succeeded = true,
-                        plan = plan,
-                        standardOutput = processResult.standardOutput ?? string.Empty,
-                        standardError = processResult.standardError ?? string.Empty,
-                        requestPackagePath = packagePath
+                        throw new PsdHierarchyPlanFormatException("Focused hierarchy metadata exceeds the JSON quota.");
+                    }
+                    File.WriteAllText(focusPath, focusJson, new UTF8Encoding(false));
+                    File.WriteAllText(schemaPath, PlanSchema, new UTF8Encoding(false));
+                    File.WriteAllText(promptPath, prompt, new UTF8Encoding(false));
+
+                    var invocation = new PsdHierarchyProcessInvocation
+                    {
+                        executable = executableResolver(),
+                        workingDirectory = packagePath,
+                        standardInput = prompt,
+                        OutputPath = outputPath,
+                        useShellExecute = false,
+                        arguments = new List<string>
+                        {
+                            "exec", "--sandbox", "read-only", "--ephemeral",
+                            "--output-schema", schemaPath, "-o", outputPath, "-"
+                        }
                     };
-                    DeletePackage(packagePath);
-                    return success;
+
+                    PsdHierarchyProcessResult processResult = await processAdapter
+                        .RunAsync(invocation, NormalizeTimeout(runRequest.timeout), cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (processResult == null)
+                    {
+                        return Failed("Codex process returned no result.", packagePath, null);
+                    }
+
+                    if (processResult.outputLimitExceeded)
+                    {
+                        return Failed("Codex stdout/stderr exceeded the bounded output quota.", packagePath, processResult);
+                    }
+
+                    if (processResult.timedOut)
+                    {
+                        return Failed("Codex hierarchy planning timeout (process timed out).", packagePath, processResult);
+                    }
+
+                    if (processResult.exitCode != 0)
+                    {
+                        string detail = string.IsNullOrWhiteSpace(processResult.standardError)
+                            ? processResult.error
+                            : processResult.standardError;
+                        return Failed("Codex hierarchy planning failed (exit " + processResult.exitCode + "): " + detail,
+                            packagePath, processResult);
+                    }
+
+                    if (!File.Exists(outputPath))
+                    {
+                        return Failed("Codex hierarchy plan output is missing.", packagePath, processResult);
+                    }
+
+                    if (new FileInfo(outputPath).Length > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
+                    {
+                        return Failed("Hierarchy plan exceeds the UTF-8 byte limit.", packagePath, processResult);
+                    }
+
+                    try
+                    {
+                        string json;
+                        using (var outputReader = new StreamReader(outputPath, Encoding.UTF8, true, 4096))
+                        {
+                            json = await PsdHierarchyBoundedTextReader.ReadAsync(
+                                outputReader, PsdHierarchyContractLimits.MaxJsonCharacters, cancellationToken);
+                        }
+                        PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(json);
+                        if ((runRequest.modifiableStableIds ?? new List<string>()).Count > 0)
+                        {
+                            PsdHierarchyFocusedPlanValidator.ValidatePartial(plan, runRequest);
+                        }
+                        else
+                        {
+                            PsdHierarchyPlanValidator.Validate(plan, runRequest.request);
+                        }
+                        var success = new PsdHierarchyAiRunResult
+                        {
+                            succeeded = true,
+                            plan = plan,
+                            standardOutput = processResult.standardOutput ?? string.Empty,
+                            standardError = processResult.standardError ?? string.Empty,
+                            requestPackagePath = packagePath
+                        };
+                        DeletePackage(packagePath);
+                        return success;
+                    }
+                    catch (Exception exception) when (
+                        exception is PsdHierarchyPlanFormatException ||
+                        exception is PsdHierarchyPlanValidationException ||
+                        exception is PsdHierarchyOutputLimitException)
+                    {
+                        return Failed("Hierarchy plan was rejected: " + exception.Message, packagePath, processResult);
+                    }
                 }
-                catch (Exception exception) when (
-                    exception is PsdHierarchyPlanFormatException ||
-                    exception is PsdHierarchyPlanValidationException)
+                catch (PsdHierarchyProcessCancelledException exception)
                 {
-                    return Failed("Hierarchy plan was rejected: " + exception.Message, packagePath, processResult);
+                    if (exception.waitForExitSucceeded)
+                    {
+                        DeletePackage(packagePath);
+                    }
+                    throw;
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                DeletePackage(packagePath);
-                throw;
-            }
-            catch (Exception exception)
-            {
-                // Startup/offline failures retain the complete bounded package.
-                return Failed("Unable to run Codex hierarchy planner: " + exception.Message, packagePath, null);
+                catch (OperationCanceledException)
+                {
+                    // No confirmed process exit means the package remains owned
+                    // by the still-running/unknown child and must not be deleted.
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    return Failed("Unable to run Codex hierarchy planner: " + exception.Message, packagePath, null);
+                }
+                finally
+                {
+                    operationLock.Dispose();
+                    ReleaseLockFile(lockPath);
+                }
             }
         }
 
@@ -151,12 +217,23 @@ namespace PsdLayoutTool2
             "\"groups\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"key\",\"parentKey\",\"memberStableIds\",\"displayName\",\"evidence\",\"confidence\"],\"properties\":{\"key\":{\"type\":\"string\"},\"parentKey\":{\"type\":\"string\"},\"memberStableIds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"displayName\":{\"type\":\"string\"},\"evidence\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}}}}," +
             "\"renames\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"stableId\",\"name\",\"evidence\",\"confidence\"],\"properties\":{\"stableId\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"evidence\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}}}}}}";
 
-        private static string BuildPrompt(string targetPrefabPath, string requestPath)
+        private static string BuildPrompt(string targetPrefabPath, string requestPath, string focusPath)
         {
             return "You are a read-only PSD hierarchy planner. You have no permission to write Unity Assets, Prefabs, Profiles, materials, or project files. " +
-                   "Read the bounded request JSON at " + requestPath + ". Return only a plan matching plan.schema.json. " +
-                   "The target shown for evidence only is '" + (targetPrefabPath ?? string.Empty).Replace("'", "") + "'. " +
+                   "Read the bounded request JSON at " + requestPath + " and the scope/ancestor graph at " + focusPath + ". " +
+                   "Modify only IDs and existing group keys listed as modifiable. Return only a plan matching plan.schema.json. " +
+                   "The target shown for evidence only is '" + SanitizePromptValue(targetPrefabPath) + "'. " +
                    "Do not propose commands, code, material edits, deletions, or any field outside the schema.";
+        }
+
+        private static string SanitizePromptValue(string value)
+        {
+            var result = new StringBuilder();
+            foreach (char character in value ?? string.Empty)
+            {
+                if (!char.IsControl(character) && character != '\'') result.Append(character);
+            }
+            return result.ToString();
         }
 
         private static TimeSpan NormalizeTimeout(TimeSpan value)
@@ -206,8 +283,52 @@ namespace PsdLayoutTool2
                 standardOutput = processResult != null ? processResult.standardOutput ?? string.Empty : string.Empty,
                 standardError = processResult != null ? processResult.standardError ?? string.Empty : string.Empty,
                 requestPackagePath = packagePath,
-                offlinePackageAvailable = Directory.Exists(packagePath)
+                offlinePackageAvailable = HasCompleteOfflinePackage(packagePath)
             };
+        }
+
+        private static PsdHierarchyAiRunResult OwnershipRejected(string error, string packagePath)
+        {
+            return new PsdHierarchyAiRunResult
+            {
+                succeeded = false,
+                error = error,
+                requestPackagePath = packagePath,
+                offlinePackageAvailable = false
+            };
+        }
+
+        private static string SerializeFocus(PsdHierarchyAiRunRequest request)
+        {
+            return JsonConvert.SerializeObject(new
+            {
+                modifiableStableIds = request.modifiableStableIds ?? new List<string>(),
+                contextStableIds = request.contextStableIds ?? new List<string>(),
+                modifiableGroupKeys = request.modifiableGroupKeys ?? new List<string>(),
+                baselineGroups = request.baselineGroups ?? new List<PsdHierarchyPlanGroup>()
+            }, Formatting.None);
+        }
+
+        private static void ReleaseLockFile(string lockPath)
+        {
+            try
+            {
+                if (File.Exists(lockPath)) File.Delete(lockPath);
+            }
+            catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException)
+            {
+                // A live foreign lock is never deleted. Our own lock is disposed
+                // before this best-effort filesystem cleanup.
+            }
+        }
+
+        private static bool HasCompleteOfflinePackage(string packagePath)
+        {
+            return Directory.Exists(packagePath) &&
+                   File.Exists(Path.Combine(packagePath, "request.json")) &&
+                   File.Exists(Path.Combine(packagePath, "focus.json")) &&
+                   File.Exists(Path.Combine(packagePath, "plan.schema.json")) &&
+                   File.Exists(Path.Combine(packagePath, "prompt.txt"));
         }
 
         private static void DeletePackage(string path)
@@ -258,38 +379,84 @@ namespace PsdLayoutTool2
                     throw new InvalidOperationException("Codex process did not start.");
                 }
 
-                Task<string> stdout = process.StandardOutput.ReadToEndAsync();
-                Task<string> stderr = process.StandardError.ReadToEndAsync();
-                await process.StandardInput.WriteAsync(invocation.standardInput ?? string.Empty);
-                process.StandardInput.Close();
-
-                using (linkedSource.Token.Register(() => completion.TrySetCanceled()))
+                Task<string> stdout = null;
+                Task<string> stderr = null;
+                try
                 {
-                    try
-                    {
-                        int exitCode = await completion.Task;
-                        return new PsdHierarchyProcessResult
-                        {
-                            exitCode = exitCode,
-                            standardOutput = await stdout,
-                            standardError = await stderr
-                        };
-                    }
-                    catch (TaskCanceledException)
-                    {
-                        TryKill(process);
-                        if (cancellationToken.IsCancellationRequested)
-                        {
-                            throw new OperationCanceledException(cancellationToken);
-                        }
+                    stdout = PsdHierarchyBoundedTextReader.ReadAsync(
+                        process.StandardOutput, PsdHierarchyContractLimits.MaxJsonCharacters, linkedSource.Token);
+                    stderr = PsdHierarchyBoundedTextReader.ReadAsync(
+                        process.StandardError, PsdHierarchyContractLimits.MaxJsonCharacters, linkedSource.Token);
+                    await process.StandardInput.WriteAsync(invocation.standardInput ?? string.Empty);
+                    process.StandardInput.Close();
 
-                        return new PsdHierarchyProcessResult
+                    using (linkedSource.Token.Register(() => completion.TrySetCanceled()))
+                    {
+                        try
                         {
-                            timedOut = true,
-                            wasKilled = true,
-                            error = "Process timeout."
-                        };
+                            Task streams = Task.WhenAll(stdout, stderr);
+                            Task first = await Task.WhenAny(completion.Task, streams);
+                            if (first == streams)
+                            {
+                                await streams; // Propagate output quota errors early.
+                            }
+                            int exitCode = await completion.Task;
+                            return new PsdHierarchyProcessResult
+                            {
+                                exitCode = exitCode,
+                                standardOutput = await stdout,
+                                standardError = await stderr
+                            };
+                        }
+                        catch (PsdHierarchyOutputLimitException exception)
+                        {
+                            ProcessTerminationResult termination = TerminateProcessTreeAndWait(process);
+                            if (termination.waitForExitSucceeded) await ObserveStreams(stdout, stderr);
+                            return new PsdHierarchyProcessResult
+                            {
+                                outputLimitExceeded = true,
+                                wasKilled = termination.killRequested,
+                                processTreeKilled = termination.processTreeKillRequested,
+                                waitForExitSucceeded = termination.waitForExitSucceeded,
+                                error = exception.Message
+                            };
+                        }
+                        catch (TaskCanceledException)
+                        {
+                            ProcessTerminationResult termination = TerminateProcessTreeAndWait(process);
+                            if (termination.waitForExitSucceeded) await ObserveStreams(stdout, stderr);
+                            if (cancellationToken.IsCancellationRequested)
+                            {
+                                throw new PsdHierarchyProcessCancelledException(
+                                    "Codex process cancelled after termination request.",
+                                    termination.processTreeKillRequested,
+                                    termination.waitForExitSucceeded,
+                                    cancellationToken);
+                            }
+
+                            return new PsdHierarchyProcessResult
+                            {
+                                timedOut = true,
+                                wasKilled = termination.killRequested,
+                                processTreeKilled = termination.processTreeKillRequested,
+                                waitForExitSucceeded = termination.waitForExitSucceeded,
+                                error = "Process timeout."
+                            };
+                        }
                     }
+                }
+                catch (PsdHierarchyProcessCancelledException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    ProcessTerminationResult termination = TerminateProcessTreeAndWait(process);
+                    if (termination.waitForExitSucceeded && stdout != null && stderr != null)
+                    {
+                        await ObserveStreams(stdout, stderr);
+                    }
+                    throw;
                 }
             }
         }
@@ -341,19 +508,97 @@ namespace PsdLayoutTool2
             return result.ToString();
         }
 
-        private static void TryKill(Process process)
+        private static ProcessTerminationResult TerminateProcessTreeAndWait(Process process)
         {
+            var result = new ProcessTerminationResult();
             try
             {
-                if (!process.HasExited)
+                if (process.HasExited)
+                {
+                    result.waitForExitSucceeded = true;
+                    return result;
+                }
+
+                result.killRequested = true;
+                var treeKill = typeof(Process).GetMethod("Kill", new[] { typeof(bool) });
+                if (treeKill != null)
+                {
+                    treeKill.Invoke(process, new object[] { true });
+                    result.processTreeKillRequested = true;
+                }
+                else if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                {
+                    using (var taskKill = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "taskkill.exe",
+                        Arguments = "/PID " + process.Id + " /T /F",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }))
+                    {
+                        result.processTreeKillRequested = taskKill != null && taskKill.WaitForExit(5000);
+                    }
+                }
+                else
                 {
                     process.Kill();
-                    process.WaitForExit(5000);
                 }
+
+                result.waitForExitSucceeded = process.WaitForExit(5000);
             }
-            catch (InvalidOperationException)
+            catch (Exception)
             {
                 // Process exited between the observation and kill attempt.
+                try { result.waitForExitSucceeded = process.HasExited || process.WaitForExit(5000); }
+                catch (InvalidOperationException) { result.waitForExitSucceeded = true; }
+            }
+            return result;
+        }
+
+        private static async Task ObserveStreams(params Task<string>[] streams)
+        {
+            foreach (Task<string> stream in streams)
+            {
+                try { await stream; }
+                catch (Exception) { /* Quota/cancellation was already recorded. */ }
+            }
+        }
+
+        private struct ProcessTerminationResult
+        {
+            public bool killRequested;
+            public bool processTreeKillRequested;
+            public bool waitForExitSucceeded;
+        }
+    }
+
+    public sealed class PsdHierarchyOutputLimitException : InvalidOperationException
+    {
+        public PsdHierarchyOutputLimitException(string message) : base(message) { }
+    }
+
+    /// <summary>Chunked reader used for stdout, stderr and imported JSON.</summary>
+    public static class PsdHierarchyBoundedTextReader
+    {
+        public static async Task<string> ReadAsync(
+            TextReader reader,
+            int maximumCharacters,
+            CancellationToken cancellationToken)
+        {
+            if (reader == null) throw new ArgumentNullException("reader");
+            if (maximumCharacters < 0) throw new ArgumentOutOfRangeException("maximumCharacters");
+            var value = new StringBuilder(Math.Min(maximumCharacters, 4096));
+            var buffer = new char[4096];
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int read = await reader.ReadAsync(buffer, 0, buffer.Length);
+                if (read == 0) return value.ToString();
+                if (value.Length > maximumCharacters - read)
+                {
+                    throw new PsdHierarchyOutputLimitException("Text output exceeds the character quota.");
+                }
+                value.Append(buffer, 0, read);
             }
         }
     }

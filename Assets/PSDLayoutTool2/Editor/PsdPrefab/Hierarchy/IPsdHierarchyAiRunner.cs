@@ -23,6 +23,10 @@ namespace PsdLayoutTool2
         public PsdHierarchyRequest request;
         public string targetPrefabPath;
         public TimeSpan timeout = TimeSpan.FromMinutes(2);
+        public List<string> modifiableStableIds = new List<string>();
+        public List<string> contextStableIds = new List<string>();
+        public List<string> modifiableGroupKeys = new List<string>();
+        public List<PsdHierarchyPlanGroup> baselineGroups = new List<PsdHierarchyPlanGroup>();
     }
 
     public sealed class PsdHierarchyAiRunResult
@@ -58,6 +62,26 @@ namespace PsdLayoutTool2
         public string error = string.Empty;
         public bool timedOut;
         public bool wasKilled;
+        public bool outputLimitExceeded;
+        public bool processTreeKilled;
+        public bool waitForExitSucceeded;
+    }
+
+    public sealed class PsdHierarchyProcessCancelledException : OperationCanceledException
+    {
+        public PsdHierarchyProcessCancelledException(
+            string message,
+            bool processTreeKilled,
+            bool waitForExitSucceeded,
+            CancellationToken cancellationToken)
+            : base(message, cancellationToken)
+        {
+            this.processTreeKilled = processTreeKilled;
+            this.waitForExitSucceeded = waitForExitSucceeded;
+        }
+
+        public bool processTreeKilled { get; private set; }
+        public bool waitForExitSucceeded { get; private set; }
     }
 
     /// <summary>

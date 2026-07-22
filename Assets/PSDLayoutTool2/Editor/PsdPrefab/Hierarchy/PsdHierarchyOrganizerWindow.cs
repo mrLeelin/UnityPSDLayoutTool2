@@ -20,6 +20,7 @@ namespace PsdLayoutTool2
         private readonly PsdHierarchyPlan baselinePlan;
         private readonly PsdHierarchyReconciliationResult reconciliation;
         private readonly IPsdHierarchyAiRunner runner;
+        private PsdHierarchyPlan proposedPlanValue;
 
         public PsdHierarchyOrganizerPreviewModel(
             string targetPrefabPath,
@@ -33,7 +34,7 @@ namespace PsdLayoutTool2
             this.baselinePlan = ClonePlan(baselinePlan ?? throw new ArgumentNullException("baselinePlan"));
             this.reconciliation = reconciliation ?? throw new ArgumentNullException("reconciliation");
             this.runner = runner ?? throw new ArgumentNullException("runner");
-            proposedPlan = ClonePlan(this.baselinePlan);
+            proposedPlanValue = ClonePlan(this.baselinePlan);
             pendingMissingStableIds = new List<string>(reconciliation.pendingMissingStableIds);
         }
 
@@ -42,7 +43,10 @@ namespace PsdLayoutTool2
         {
             get { return fullRequest.nodes.Select(CloneNode).ToList(); }
         }
-        public PsdHierarchyPlan proposedPlan { get; private set; }
+        public PsdHierarchyPlan proposedPlan
+        {
+            get { return ClonePlan(proposedPlanValue); }
+        }
         public List<string> validationErrors { get; } = new List<string>();
         public List<string> pendingMissingStableIds { get; private set; }
         public bool canApply { get; private set; }
@@ -64,13 +68,21 @@ namespace PsdLayoutTool2
                 foreach (HashSet<string> scope in scopes)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    PsdHierarchyRequest scopedRequest = CloneScopedRequest(fullRequest, scope);
+                    HashSet<string> contextIds = BuildContextIds(scope);
+                    PsdHierarchyRequest scopedRequest = CloneScopedRequest(fullRequest, contextIds, scope);
+                    List<PsdHierarchyPlanGroup> baselineGraph = BuildBaselineGroupGraph(working, scope);
                     var runRequest = new PsdHierarchyAiRunRequest
                     {
                         operationId = Guid.NewGuid().ToString("N"),
                         request = scopedRequest,
                         targetPrefabPath = targetPrefabPath,
-                        timeout = TimeSpan.FromMinutes(2)
+                        timeout = TimeSpan.FromMinutes(2),
+                        modifiableStableIds = scope.OrderBy(value => value, StringComparer.Ordinal).ToList(),
+                        contextStableIds = contextIds.OrderBy(value => value, StringComparer.Ordinal).ToList(),
+                        baselineGroups = baselineGraph,
+                        modifiableGroupKeys = baselineGraph
+                            .Where(group => group.memberStableIds.Any(scope.Contains))
+                            .Select(group => group.key).OrderBy(key => key, StringComparer.Ordinal).ToList()
                     };
                     PsdHierarchyAiRunResult result = await runner.RunAsync(runRequest, cancellationToken);
                     if (result == null || !result.succeeded || result.plan == null)
@@ -78,11 +90,11 @@ namespace PsdLayoutTool2
                         validationErrors.Add(result != null && !string.IsNullOrWhiteSpace(result.error)
                             ? result.error
                             : "Hierarchy planner returned no validated plan.");
-                        proposedPlan = working;
+                        proposedPlanValue = ClonePlan(working);
                         return;
                     }
 
-                    EnsurePartialPlanStaysInScope(result.plan, scope);
+                    PsdHierarchyFocusedPlanValidator.ValidatePartial(result.plan, runRequest);
                     MergeScope(working, result.plan, scope);
                 }
 
@@ -92,7 +104,7 @@ namespace PsdLayoutTool2
                 }
                 AdoptCurrentIdentity(working, fullRequest);
                 PsdHierarchyPlanValidator.Validate(working, fullRequest);
-                proposedPlan = working;
+                proposedPlanValue = ClonePlan(working);
                 if (pendingMissingStableIds.Count > 0)
                 {
                     validationErrors.Add("Missing PSD IDs are pending explicit cleanup confirmation.");
@@ -110,7 +122,7 @@ namespace PsdLayoutTool2
                 exception is ArgumentException)
             {
                 validationErrors.Add(exception.Message);
-                proposedPlan = working;
+                proposedPlanValue = ClonePlan(working);
             }
             finally
             {
@@ -126,7 +138,7 @@ namespace PsdLayoutTool2
             {
                 PsdHierarchyPlan candidate = PsdHierarchyPlanJson.Parse(json);
                 PsdHierarchyPlanValidator.Validate(candidate, fullRequest);
-                proposedPlan = ClonePlan(candidate);
+                proposedPlanValue = ClonePlan(candidate);
                 if (pendingMissingStableIds.Count > 0)
                 {
                     validationErrors.Add("Missing PSD IDs are pending explicit cleanup confirmation.");
@@ -139,6 +151,31 @@ namespace PsdLayoutTool2
                 exception is PsdHierarchyPlanValidationException)
             {
                 validationErrors.Add(exception.Message);
+            }
+        }
+
+        public bool TryCreateValidatedApplyPlan(out PsdHierarchyPlan plan, out string error)
+        {
+            plan = ClonePlan(proposedPlanValue);
+            error = string.Empty;
+            if (!canApply || isRunning)
+            {
+                error = "Hierarchy preview is not ready to apply.";
+                plan = null;
+                return false;
+            }
+            try
+            {
+                PsdHierarchyPlanValidator.Validate(plan, fullRequest);
+                plan = ClonePlan(plan);
+                return true;
+            }
+            catch (Exception exception) when (exception is PsdHierarchyPlanValidationException || exception is ArgumentException)
+            {
+                error = exception.Message;
+                plan = null;
+                canApply = false;
+                return false;
             }
         }
 
@@ -181,20 +218,50 @@ namespace PsdLayoutTool2
             return scopes;
         }
 
-        private static void EnsurePartialPlanStaysInScope(PsdHierarchyPlan partial, HashSet<string> scope)
+        private HashSet<string> BuildContextIds(HashSet<string> scope)
         {
-            IEnumerable<string> touched = (partial.groups ?? new List<PsdHierarchyPlanGroup>())
-                .Where(group => group != null)
-                .SelectMany(group => group.memberStableIds ?? new List<string>())
-                .Concat((partial.renames ?? new List<PsdHierarchyPlanRename>())
-                    .Where(rename => rename != null)
-                    .Select(rename => rename.stableId));
-            string outside = touched.FirstOrDefault(id => !scope.Contains(id));
-            if (outside != null)
+            var context = new HashSet<string>(scope, StringComparer.Ordinal);
+            foreach (PsdHierarchyRequestNode focused in fullRequest.nodes.Where(node => node != null && scope.Contains(node.stableId)))
             {
-                throw new InvalidOperationException(
-                    "Focused hierarchy plan touched ID '" + outside + "' outside its allowed scope.");
+                foreach (PsdHierarchyRequestNode sibling in fullRequest.nodes.Where(node => node != null &&
+                             string.Equals(node.parentStableId ?? string.Empty, focused.parentStableId ?? string.Empty, StringComparison.Ordinal) &&
+                             Math.Abs(node.siblingIndex - focused.siblingIndex) == 1))
+                {
+                    context.Add(sibling.stableId);
+                }
+
+                string boundary = focused.protectedBoundaryStableId ?? string.Empty;
+                if (!string.IsNullOrEmpty(boundary))
+                {
+                    foreach (PsdHierarchyRequestNode boundaryNode in fullRequest.nodes.Where(node => node != null &&
+                                 (string.Equals(node.stableId, boundary, StringComparison.Ordinal) ||
+                                  string.Equals(node.protectedBoundaryStableId ?? string.Empty, boundary, StringComparison.Ordinal))))
+                    {
+                        context.Add(boundaryNode.stableId);
+                    }
+                }
             }
+            return context;
+        }
+
+        private static List<PsdHierarchyPlanGroup> BuildBaselineGroupGraph(PsdHierarchyPlan plan, HashSet<string> scope)
+        {
+            var byKey = (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null)
+                .ToDictionary(group => group.key, StringComparer.Ordinal);
+            var keys = new HashSet<string>(byKey.Values
+                .Where(group => group.memberStableIds.Any(scope.Contains))
+                .Select(group => group.key), StringComparer.Ordinal);
+            foreach (string initial in keys.ToArray())
+            {
+                string key = initial;
+                while (byKey.ContainsKey(key) && !string.IsNullOrEmpty(byKey[key].parentKey))
+                {
+                    key = byKey[key].parentKey;
+                    if (!keys.Add(key)) break;
+                }
+            }
+            return keys.Where(byKey.ContainsKey).Select(key => CloneGroup(byKey[key])).ToList();
         }
 
         private static void MergeScope(PsdHierarchyPlan target, PsdHierarchyPlan partial, HashSet<string> scope)
@@ -213,11 +280,25 @@ namespace PsdLayoutTool2
             {
                 group.memberStableIds.RemoveAll(missing.Contains);
             }
-            plan.groups.RemoveAll(group => group.memberStableIds.Count == 0);
+            while (true)
+            {
+                PsdHierarchyPlanGroup empty = plan.groups.FirstOrDefault(group => group.memberStableIds.Count == 0);
+                if (empty == null) break;
+                foreach (PsdHierarchyPlanGroup child in plan.groups.Where(group =>
+                             string.Equals(group.parentKey, empty.key, StringComparison.Ordinal)))
+                {
+                    child.parentKey = empty.parentKey ?? string.Empty;
+                }
+                plan.groups.Remove(empty);
+            }
         }
 
-        private static PsdHierarchyRequest CloneScopedRequest(PsdHierarchyRequest source, HashSet<string> scope)
+        private static PsdHierarchyRequest CloneScopedRequest(
+            PsdHierarchyRequest source,
+            HashSet<string> contextIds,
+            HashSet<string> focusedIds)
         {
+            PsdHierarchyRectangle focusedBounds = ComputeBounds(source.nodes.Where(node => node != null && focusedIds.Contains(node.stableId)));
             return new PsdHierarchyRequest
             {
                 schemaVersion = source.schemaVersion,
@@ -228,11 +309,45 @@ namespace PsdLayoutTool2
                 geometryFingerprint = source.geometryFingerprint,
                 documentWidth = source.documentWidth,
                 documentHeight = source.documentHeight,
-                nodes = source.nodes.Where(node => node != null && scope.Contains(node.stableId)).Select(CloneNode).ToList(),
+                nodes = source.nodes.Where(node => node != null && contextIds.Contains(node.stableId)).Select(CloneNode).ToList(),
                 currentPrefabHierarchy = source.currentPrefabHierarchy
-                    .Where(node => node != null && scope.Contains(node.stableId))
+                    .Where(node => node != null && contextIds.Contains(node.stableId))
                     .Select(CloneMetadata).ToList(),
-                previews = source.previews.Select(ClonePreview).ToList()
+                previews = source.previews.Where(preview => preview != null && Intersects(preview.crop, focusedBounds))
+                    .Select(preview => CloneClippedPreview(preview, focusedBounds)).ToList()
+            };
+        }
+
+        private static PsdHierarchyRectangle ComputeBounds(IEnumerable<PsdHierarchyRequestNode> nodes)
+        {
+            List<PsdHierarchyRequestNode> values = nodes.ToList();
+            if (values.Count == 0) return new PsdHierarchyRectangle();
+            float minX = values.Min(node => node.rectangle.x);
+            float minY = values.Min(node => node.rectangle.y);
+            float maxX = values.Max(node => node.rectangle.x + node.rectangle.width);
+            float maxY = values.Max(node => node.rectangle.y + node.rectangle.height);
+            return new PsdHierarchyRectangle { x = minX, y = minY, width = maxX - minX, height = maxY - minY };
+        }
+
+        private static bool Intersects(PsdHierarchyRectangle left, PsdHierarchyRectangle right)
+        {
+            return left.x < right.x + right.width && left.x + left.width > right.x &&
+                   left.y < right.y + right.height && left.y + left.height > right.y;
+        }
+
+        private static PsdHierarchyPreviewReference CloneClippedPreview(
+            PsdHierarchyPreviewReference source,
+            PsdHierarchyRectangle bounds)
+        {
+            float x = Math.Max(source.crop.x, bounds.x);
+            float y = Math.Max(source.crop.y, bounds.y);
+            float right = Math.Min(source.crop.x + source.crop.width, bounds.x + bounds.width);
+            float bottom = Math.Min(source.crop.y + source.crop.height, bounds.y + bounds.height);
+            return new PsdHierarchyPreviewReference
+            {
+                key = source.key,
+                kind = source.kind,
+                crop = new PsdHierarchyRectangle { x = x, y = y, width = Math.Max(0, right - x), height = Math.Max(0, bottom - y) }
             };
         }
 
@@ -343,6 +458,108 @@ namespace PsdLayoutTool2
     }
 
     /// <summary>
+    /// Validates the untrusted focused response without pretending it is a full
+    /// hierarchy. Ancestor keys may live only in the supplied baseline graph;
+    /// the merged complete plan is still validated by Task 3 afterwards.
+    /// </summary>
+    public static class PsdHierarchyFocusedPlanValidator
+    {
+        public static void ValidatePartial(PsdHierarchyPlan partial, PsdHierarchyAiRunRequest runRequest)
+        {
+            if (partial == null || runRequest == null || runRequest.request == null)
+                throw new PsdHierarchyPlanValidationException("Focused plan context is missing.");
+
+            PsdHierarchyRequest request = runRequest.request;
+            if (partial.schemaVersion != PsdHierarchyPlan.CurrentSchemaVersion ||
+                !string.Equals(partial.sourcePsdGuid, request.sourcePsdGuid, StringComparison.Ordinal) ||
+                !string.Equals(partial.sourceFingerprint, request.sourceFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(partial.contentFingerprint, request.contentFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(partial.structureFingerprint, request.structureFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(partial.geometryFingerprint, request.geometryFingerprint, StringComparison.Ordinal))
+            {
+                throw new PsdHierarchyPlanValidationException("Focused plan identity/fingerprints do not match its request.");
+            }
+
+            var allowedIds = new HashSet<string>(runRequest.modifiableStableIds ?? new List<string>(), StringComparer.Ordinal);
+            var contextIds = new HashSet<string>((request.nodes ?? new List<PsdHierarchyRequestNode>())
+                .Where(node => node != null).Select(node => node.stableId), StringComparer.Ordinal);
+            var baselineByKey = (runRequest.baselineGroups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null).ToDictionary(group => group.key, StringComparer.Ordinal);
+            var modifiableGroupKeys = new HashSet<string>(
+                runRequest.modifiableGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            foreach (string groupKey in modifiableGroupKeys)
+            {
+                PsdHierarchyPlanGroup baselineGroup;
+                if (!baselineByKey.TryGetValue(groupKey, out baselineGroup) ||
+                    !(baselineGroup.memberStableIds ?? new List<string>()).Any(allowedIds.Contains))
+                {
+                    throw new PsdHierarchyPlanValidationException(
+                        "Focused request grants invalid group scope '" + groupKey + "'.");
+                }
+            }
+            var partialKeys = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (PsdHierarchyPlanGroup group in partial.groups ?? new List<PsdHierarchyPlanGroup>())
+            {
+                if (group == null || !partialKeys.Add(group.key))
+                    throw new PsdHierarchyPlanValidationException("Focused plan contains a null or duplicate group key.");
+                if (baselineByKey.ContainsKey(group.key) && !modifiableGroupKeys.Contains(group.key))
+                    throw new PsdHierarchyPlanValidationException("Focused plan modified group '" + group.key + "' outside its scope.");
+                foreach (string member in group.memberStableIds ?? new List<string>())
+                {
+                    if (!allowedIds.Contains(member) || !contextIds.Contains(member))
+                        throw new PsdHierarchyPlanValidationException("Focused plan touched ID '" + member + "' outside its scope.");
+                }
+            }
+
+            foreach (PsdHierarchyPlanGroup group in partial.groups ?? new List<PsdHierarchyPlanGroup>())
+            {
+                if (!string.IsNullOrEmpty(group.parentKey) &&
+                    !partialKeys.Contains(group.parentKey) &&
+                    !baselineByKey.ContainsKey(group.parentKey))
+                {
+                    throw new PsdHierarchyPlanValidationException(
+                        "Focused group '" + group.key + "' references unknown ancestor '" + group.parentKey + "'.");
+                }
+            }
+
+            var renamed = new HashSet<string>(StringComparer.Ordinal);
+            foreach (PsdHierarchyPlanRename rename in partial.renames ?? new List<PsdHierarchyPlanRename>())
+            {
+                if (rename == null || !renamed.Add(rename.stableId) || !allowedIds.Contains(rename.stableId) || !contextIds.Contains(rename.stableId))
+                    throw new PsdHierarchyPlanValidationException("Focused rename touched an ID outside its scope.");
+            }
+        }
+    }
+
+    /// <summary>Bounded manual import path shared by the preview and tests.</summary>
+    public static class PsdHierarchyManualPlanLoader
+    {
+        public static PsdHierarchyPlan Load(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                throw new FileNotFoundException("Hierarchy plan file was not found.", path);
+            if (new FileInfo(path).Length > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
+                throw new PsdHierarchyPlanFormatException("Hierarchy plan exceeds the UTF-8 byte limit.");
+            string json;
+            using (var reader = new StreamReader(path, System.Text.Encoding.UTF8, true, 4096))
+            {
+                try
+                {
+                    json = PsdHierarchyBoundedTextReader.ReadAsync(
+                        reader, PsdHierarchyContractLimits.MaxJsonCharacters, CancellationToken.None)
+                        .GetAwaiter().GetResult();
+                }
+                catch (PsdHierarchyOutputLimitException exception)
+                {
+                    throw new PsdHierarchyPlanFormatException(exception.Message, exception);
+                }
+            }
+            return PsdHierarchyPlanJson.Parse(json);
+        }
+    }
+
+    /// <summary>
     /// Non-mutating Editor preview. Apply is exposed as an event only after full
     /// validation; the window itself never saves an Asset, Prefab or Profile.
     /// </summary>
@@ -420,7 +637,16 @@ namespace PsdLayoutTool2
             GUI.enabled = model.canApply && !model.isRunning;
             if (GUILayout.Button("Apply Validated Plan"))
             {
-                applyRequested?.Invoke(model.proposedPlan);
+                PsdHierarchyPlan freshPlan;
+                string error;
+                if (model.TryCreateValidatedApplyPlan(out freshPlan, out error))
+                {
+                    applyRequested?.Invoke(freshPlan);
+                }
+                else if (!string.IsNullOrEmpty(error))
+                {
+                    Debug.LogError(error);
+                }
             }
             GUI.enabled = true;
         }
@@ -454,7 +680,8 @@ namespace PsdLayoutTool2
             }
             try
             {
-                model.ImportManualPlan(File.ReadAllText(path));
+                PsdHierarchyPlan plan = PsdHierarchyManualPlanLoader.Load(path);
+                model.ImportManualPlan(Newtonsoft.Json.JsonConvert.SerializeObject(plan));
             }
             catch (Exception exception)
             {
