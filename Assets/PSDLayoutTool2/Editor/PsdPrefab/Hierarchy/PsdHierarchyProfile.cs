@@ -13,6 +13,13 @@ namespace PsdLayoutTool2
         public string contentFingerprint;
         public string structureFingerprint;
         public string geometryFingerprint;
+
+        // Added without changing the schema version: zero/empty are the safe
+        // defaults for profiles created before transactional identity tracking.
+        // Such records are never guessed from their diagnostic path.
+        public long localFileId;
+        public string lastKnownPath;
+        public bool pendingCreation;
     }
 
     [Serializable]
@@ -22,6 +29,8 @@ namespace PsdLayoutTool2
         public string parentKey;
         public string displayName;
         public List<string> stableLayerIds = new List<string>();
+        public long localFileId;
+        public string lastKnownPath;
         public byte[] GetPlanBytes()
         {
             // Bytes are a deterministic view of validated structured fields,

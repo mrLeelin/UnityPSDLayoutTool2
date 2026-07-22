@@ -829,7 +829,19 @@
                     {
                         PsdLogger.Step("Save prefab: " + prefabRelativePath);
                         EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "保存 Prefab...", 0.95f);
-                        PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath);
+                        if (!TrySaveIncrementalHierarchyPrefab(
+                                normalizedAssetPath,
+                                sourceModel,
+                                prefabRelativePath,
+                                importRootGameObject,
+                                CaptureGeneratedUiNodeRegistry()))
+                        {
+                            // Absence of a hierarchy Profile deliberately keeps
+                            // the established importer behavior. Once a valid
+                            // Profile exists, failures are never downgraded to
+                            // this destructive whole-candidate save path.
+                            PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath);
+                        }
                     }
                     else
                     {
@@ -1321,6 +1333,135 @@
                 string path = GetTextureOutputPath(outputRootDirectory, child);
                 result.Add(NormalizePath(path));
             }
+        }
+
+        /// <summary>
+        /// Applies a persisted hierarchy Profile to the exact configured target
+        /// Prefab. Returning false means no Profile was adopted and preserves
+        /// the original importer save behavior; a stale or ambiguous Profile
+        /// throws so it cannot silently overwrite project-owned work.
+        /// </summary>
+        private static bool TrySaveIncrementalHierarchyPrefab(
+            string sourcePsdPath,
+            PsdPrefabDocumentModel sourceModel,
+            string prefabPath,
+            GameObject candidateRoot,
+            IReadOnlyDictionary<string, RectTransform> candidateRegistry)
+        {
+            if (!UseUnityUI || string.IsNullOrEmpty(prefabPath) ||
+                AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null)
+                return false;
+
+            string sourceGuid = AssetDatabase.AssetPathToGUID(sourcePsdPath);
+            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
+            PsdHierarchyProfile persisted = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
+            if (persisted == null) return false;
+            if (!persisted.CheckSchema().canApply)
+                throw new InvalidOperationException("Hierarchy Profile schema is stale or unsupported: " + profilePath);
+            if (!string.Equals(persisted.sourcePsdGuid, sourceGuid, StringComparison.Ordinal))
+                throw new InvalidOperationException("Hierarchy Profile belongs to a different PSD: " + profilePath);
+
+            PsdHierarchyProfile working = UnityEngine.Object.Instantiate(persisted);
+            GameObject existingContents = null;
+            try
+            {
+                PsdHierarchyReconciliationResult reconciliation = working.Reconcile(sourceModel);
+                if (reconciliation.requiresReplan || reconciliation.unsortedNewStableIds.Count > 0 ||
+                    reconciliation.unsortedUnstableIds.Count > 0)
+                    throw new InvalidOperationException(
+                        "Hierarchy Profile requires focused replanning before this PSD can be imported.");
+
+                PsdHierarchyPlan plan = CreatePlanFromProfile(working, sourceModel, sourceGuid);
+                PsdHierarchyProfile refreshed = CreateRefreshedProfile(working, sourceModel, sourceGuid);
+                UnityEngine.Object.DestroyImmediate(working);
+                working = refreshed;
+
+                existingContents = PrefabUtility.LoadPrefabContents(prefabPath);
+                PsdPrefabIncrementalMergeResult merge = PsdPrefabIncrementalMerge.Merge(
+                    prefabPath, existingContents, candidateRoot, candidateRegistry, working, plan);
+                PsdPrefabTransactionalSave.Save(
+                    prefabPath, existingContents, profilePath, working,
+                    merge.generatedByStableId, merge.groupsByKey,
+                    Array.Empty<string>(), null);
+                return true;
+            }
+            finally
+            {
+                if (existingContents != null) PrefabUtility.UnloadPrefabContents(existingContents);
+                if (working != null) UnityEngine.Object.DestroyImmediate(working);
+            }
+        }
+
+        private static PsdHierarchyPlan CreatePlanFromProfile(
+            PsdHierarchyProfile profile,
+            PsdPrefabDocumentModel sourceModel,
+            string sourceGuid)
+        {
+            var plan = new PsdHierarchyPlan
+            {
+                schemaVersion = PsdHierarchyPlan.CurrentSchemaVersion,
+                sourcePsdGuid = sourceGuid,
+                sourceFingerprint = sourceModel.sourceFingerprint,
+                contentFingerprint = string.Empty,
+                structureFingerprint = string.Empty,
+                geometryFingerprint = string.Empty
+            };
+            foreach (PsdHierarchyProfileGroup source in profile.groups ?? new List<PsdHierarchyProfileGroup>())
+            {
+                plan.groups.Add(new PsdHierarchyPlanGroup
+                {
+                    key = source.key,
+                    parentKey = source.parentKey,
+                    displayName = source.displayName,
+                    memberStableIds = new List<string>(source.stableLayerIds ?? new List<string>()),
+                    evidence = "Persisted validated hierarchy Profile",
+                    confidence = 1d
+                });
+            }
+            foreach (PsdHierarchyProfileRename source in profile.renames ?? new List<PsdHierarchyProfileRename>())
+            {
+                plan.renames.Add(new PsdHierarchyPlanRename
+                {
+                    stableId = source.stableId,
+                    name = source.name,
+                    evidence = "Persisted validated hierarchy Profile",
+                    confidence = 1d
+                });
+            }
+            return plan;
+        }
+
+        /// <summary>
+        /// Accepts current PSD fingerprints only into a detached clone while
+        /// preserving the previous transaction's native object identities.
+        /// </summary>
+        private static PsdHierarchyProfile CreateRefreshedProfile(
+            PsdHierarchyProfile previous,
+            PsdPrefabDocumentModel sourceModel,
+            string sourceGuid)
+        {
+            PsdHierarchyProfile refreshed = PsdHierarchyProfile.Create(
+                sourceModel, previous.groups, previous.renames, sourceGuid);
+            Dictionary<string, PsdHierarchyProfileNode> oldNodes = (previous.nodes ?? new List<PsdHierarchyProfileNode>())
+                .Where(node => node != null).ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            foreach (PsdHierarchyProfileNode node in refreshed.nodes)
+            {
+                PsdHierarchyProfileNode old;
+                if (!oldNodes.TryGetValue(node.stableId, out old)) continue;
+                node.localFileId = old.localFileId;
+                node.lastKnownPath = old.lastKnownPath;
+                node.pendingCreation = old.pendingCreation;
+            }
+            Dictionary<string, PsdHierarchyProfileGroup> oldGroups = (previous.groups ?? new List<PsdHierarchyProfileGroup>())
+                .Where(group => group != null).ToDictionary(group => group.key, StringComparer.Ordinal);
+            foreach (PsdHierarchyProfileGroup group in refreshed.groups)
+            {
+                PsdHierarchyProfileGroup old;
+                if (!oldGroups.TryGetValue(group.key, out old)) continue;
+                group.localFileId = old.localFileId;
+                group.lastKnownPath = old.lastKnownPath;
+            }
+            return refreshed;
         }
 
         /// <summary>
