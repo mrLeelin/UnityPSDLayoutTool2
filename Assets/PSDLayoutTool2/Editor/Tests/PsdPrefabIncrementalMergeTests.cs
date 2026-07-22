@@ -342,7 +342,7 @@ namespace PsdLayoutTool2.Tests
             GameObject candidate = Root("Root");
             RectTransform candidateTextRect = Child(candidate, "Fresh Text", null);
             TextMeshProUGUI candidateText = candidateTextRect.gameObject.AddComponent<TextMeshProUGUI>();
-            candidateText.text = "更新后的文字";
+            candidateText.text = "增量文本验证";
             candidateText.font = TMP_Settings.defaultFontAsset;
             candidateText.fontSharedMaterial = candidateText.font != null ? candidateText.font.material : null;
             candidateText.fontSize = 37f;
