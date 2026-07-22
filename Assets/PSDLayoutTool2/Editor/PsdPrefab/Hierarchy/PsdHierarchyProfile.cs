@@ -3,6 +3,8 @@ namespace PsdLayoutTool2
     using System;
     using System.Collections.Generic;
     using System.Linq;
+    using System.Text;
+    using UnityEngine;
 
     [Serializable]
     public sealed class PsdHierarchyProfileNode
@@ -19,7 +21,34 @@ namespace PsdLayoutTool2
         public string key;
         public string displayName;
         public List<string> stableLayerIds = new List<string>();
-        public byte[] planBytes = new byte[0];
+        public byte[] GetPlanBytes()
+        {
+            // Bytes are a deterministic view of validated structured fields,
+            // not separately serialized state. This makes it impossible to hide
+            // an unstable ID in an opaque payload alongside a clean member list.
+            List<string> durableMembers = (stableLayerIds ?? new List<string>())
+                .Where(PsdStableLayerIdUtility.IsPersistable)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+            var value = new StringBuilder("hierarchy-group-v1|");
+            Append(value, PsdHierarchyProfile.BuildGeneratedGroupKey(durableMembers));
+            foreach (string stableId in durableMembers)
+            {
+                Append(value, stableId);
+            }
+
+            return Encoding.UTF8.GetBytes(value.ToString());
+        }
+
+        private static void Append(StringBuilder target, string value)
+        {
+            value = value ?? string.Empty;
+            target.Append(value.Length);
+            target.Append(':');
+            target.Append(value);
+            target.Append('|');
+        }
     }
 
     [Serializable]
@@ -47,9 +76,13 @@ namespace PsdLayoutTool2
     /// valid hierarchy decision or business reference.
     /// </summary>
     [Serializable]
-    public sealed class PsdHierarchyProfile
+    public sealed class PsdHierarchyProfile : ScriptableObject
     {
-        public int schemaVersion = 1;
+        public const int CurrentSchemaVersion = 1;
+
+        public int schemaVersion = CurrentSchemaVersion;
+        public string sourcePsdGuid;
+        public string sourceFingerprint;
         public List<PsdHierarchyProfileNode> nodes = new List<PsdHierarchyProfileNode>();
         public List<PsdHierarchyProfileGroup> groups = new List<PsdHierarchyProfileGroup>();
         public List<PsdHierarchyProfileRename> renames = new List<PsdHierarchyProfileRename>();
@@ -57,20 +90,24 @@ namespace PsdLayoutTool2
         public static PsdHierarchyProfile Create(
             PsdPrefabDocumentModel document,
             IEnumerable<PsdHierarchyProfileGroup> sourceGroups,
-            IEnumerable<PsdHierarchyProfileRename> sourceRenames)
+            IEnumerable<PsdHierarchyProfileRename> sourceRenames,
+            string sourcePsdGuid = "")
         {
             if (document == null)
             {
                 throw new ArgumentNullException("document");
             }
 
-            var profile = new PsdHierarchyProfile();
+            PsdHierarchyProfile profile = CreateInstance<PsdHierarchyProfile>();
+            profile.sourcePsdGuid = sourcePsdGuid ?? string.Empty;
+            profile.sourceFingerprint = document.sourceFingerprint ?? string.Empty;
             profile.nodes = document.nodes
                 .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal)
                 .Select(group => Snapshot(group.First()))
                 .ToList();
 
+            var ownedStableIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (PsdHierarchyProfileGroup source in sourceGroups ?? Enumerable.Empty<PsdHierarchyProfileGroup>())
             {
                 if (source == null)
@@ -78,25 +115,28 @@ namespace PsdLayoutTool2
                     continue;
                 }
 
-                List<string> members = DurableDistinct(source.stableLayerIds);
+                List<string> members = DurableDistinct(source.stableLayerIds)
+                    .Where(ownedStableIds.Add)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToList();
                 if (members.Count == 0)
                 {
                     continue;
                 }
 
-                string key = string.IsNullOrEmpty(source.key) ? BuildGeneratedGroupKey(members) : source.key;
+                string key = BuildGeneratedGroupKey(members);
                 if (profile.groups.Any(group => string.Equals(group.key, key, StringComparison.Ordinal)))
                 {
                     continue;
                 }
 
-                profile.groups.Add(new PsdHierarchyProfileGroup
+                var group = new PsdHierarchyProfileGroup
                 {
                     key = key,
                     displayName = source.displayName ?? string.Empty,
-                    stableLayerIds = members,
-                    planBytes = source.planBytes == null ? new byte[0] : source.planBytes.ToArray()
-                });
+                    stableLayerIds = members
+                };
+                profile.groups.Add(group);
             }
 
             profile.renames = (sourceRenames ?? Enumerable.Empty<PsdHierarchyProfileRename>())
@@ -109,6 +149,13 @@ namespace PsdLayoutTool2
                 })
                 .ToList();
             return profile;
+        }
+
+        public bool IsStale(string psdGuid, string fingerprint)
+        {
+            return schemaVersion != CurrentSchemaVersion ||
+                   !string.Equals(sourcePsdGuid ?? string.Empty, psdGuid ?? string.Empty, StringComparison.Ordinal) ||
+                   !string.Equals(sourceFingerprint ?? string.Empty, fingerprint ?? string.Empty, StringComparison.Ordinal);
         }
 
         public PsdHierarchyReconciliationResult Reconcile(PsdPrefabDocumentModel document, bool confirmMissingCleanup = false)
@@ -203,13 +250,24 @@ namespace PsdLayoutTool2
         {
             nodes = nodes.Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal).Select(group => group.First()).ToList();
-            groups = groups.Where(group => group != null)
-                .GroupBy(group => group.key ?? string.Empty, StringComparer.Ordinal).Select(group => group.First()).ToList();
-            foreach (PsdHierarchyProfileGroup group in groups)
+            var normalizedGroups = new List<PsdHierarchyProfileGroup>();
+            var ownedStableIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (PsdHierarchyProfileGroup group in groups.Where(value => value != null))
             {
-                group.stableLayerIds = DurableDistinct(group.stableLayerIds);
+                List<string> members = DurableDistinct(group.stableLayerIds)
+                    .Where(ownedStableIds.Add)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToList();
+                if (members.Count == 0)
+                {
+                    continue;
+                }
+
+                group.stableLayerIds = members;
+                group.key = BuildGeneratedGroupKey(members);
+                normalizedGroups.Add(group);
             }
-            groups.RemoveAll(group => group.stableLayerIds.Count == 0);
+            groups = normalizedGroups;
             renames = renames.Where(rename => rename != null && PsdStableLayerIdUtility.IsPersistable(rename.stableId))
                 .GroupBy(rename => rename.stableId, StringComparer.Ordinal).Select(group => group.First()).ToList();
         }

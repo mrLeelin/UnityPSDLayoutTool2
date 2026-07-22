@@ -1,6 +1,8 @@
 namespace PsdLayoutTool2
 {
+    using System.Collections.Generic;
     using System.Globalization;
+    using System.Linq;
     using System.Text;
     using UnityEngine;
 
@@ -11,6 +13,37 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdHierarchyFingerprints
     {
+        /// <summary>
+        /// Hashes decoded PSD channel bytes together with their channel IDs. The
+        /// ID and byte count delimiters ensure swapping channels or concatenating
+        /// differently-shaped data cannot produce the same input sequence.
+        /// </summary>
+        public static string Asset(IEnumerable<KeyValuePair<short, byte[]>> channels)
+        {
+            unchecked
+            {
+                uint hash = 2166136261u;
+                foreach (KeyValuePair<short, byte[]> channel in
+                         (channels ?? Enumerable.Empty<KeyValuePair<short, byte[]>>()).OrderBy(value => value.Key))
+                {
+                    HashByte(ref hash, (byte)(channel.Key >> 8));
+                    HashByte(ref hash, (byte)channel.Key);
+                    byte[] bytes = channel.Value ?? new byte[0];
+                    int length = bytes.Length;
+                    HashByte(ref hash, (byte)(length >> 24));
+                    HashByte(ref hash, (byte)(length >> 16));
+                    HashByte(ref hash, (byte)(length >> 8));
+                    HashByte(ref hash, (byte)length);
+                    foreach (byte value in bytes)
+                    {
+                        HashByte(ref hash, value);
+                    }
+                }
+
+                return hash.ToString("x8", CultureInfo.InvariantCulture);
+            }
+        }
+
         public static string Content(PsdPrefabNodeModel node)
         {
             var value = new StringBuilder();
@@ -84,6 +117,15 @@ namespace PsdLayoutTool2
         private static string ColorValue(Color color)
         {
             return Float(color.r) + "," + Float(color.g) + "," + Float(color.b) + "," + Float(color.a);
+        }
+
+        private static void HashByte(ref uint hash, byte value)
+        {
+            unchecked
+            {
+                hash ^= value;
+                hash *= 16777619u;
+            }
         }
     }
 }

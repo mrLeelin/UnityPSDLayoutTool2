@@ -1,6 +1,8 @@
 namespace PsdLayoutTool2
 {
     using System;
+    using System.Collections.Generic;
+    using System.Linq;
     using System.Text.RegularExpressions;
     using PhotoshopFile;
     using UnityEngine;
@@ -148,8 +150,12 @@ namespace PsdLayoutTool2
                 };
             }
 
+            // Pixel identity must be established before the broader content hash.
+            // Feeding Content back into assetFingerprint would make image changes
+            // invisible because the first Content call sees an empty asset value.
+            node.assetFingerprint = PsdHierarchyFingerprints.Asset(layer.Channels.Select(channel =>
+                new KeyValuePair<short, byte[]>(channel.ID, channel.ImageData)));
             node.contentFingerprint = PsdHierarchyFingerprints.Content(node);
-            node.assetFingerprint = node.contentFingerprint;
             model.nodes.Add(node);
 
             if (layer.Children == null)

@@ -1,8 +1,9 @@
 namespace PsdLayoutTool2.Tests
 {
     using System.Linq;
-    using System.Text;
+    using System.Collections.Generic;
     using NUnit.Framework;
+    using UnityEditor;
     using UnityEngine;
 
     public sealed class PsdHierarchyProfileTests
@@ -12,7 +13,7 @@ namespace PsdLayoutTool2.Tests
         {
             PsdPrefabDocumentModel original = Document(Node("101", "Old", 0, new Rect(0, 0, 10, 10), "pixels-a"));
             PsdHierarchyProfile profile = Profile(original, "101");
-            byte[] originalPlan = profile.groups[0].planBytes.ToArray();
+            byte[] originalPlan = profile.groups[0].GetPlanBytes();
 
             PsdHierarchyReconciliationResult result = profile.Reconcile(
                 Document(Node("101", "Renamed", 0, new Rect(0, 0, 10, 10), "pixels-b")));
@@ -20,7 +21,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(result.requiresReplan, Is.False);
             Assert.That(result.contentOnlyStableIds, Is.EqualTo(new[] { "101" }));
             Assert.That(profile.groups[0].stableLayerIds, Is.EqualTo(new[] { "101" }));
-            Assert.That(profile.groups[0].planBytes, Is.EqualTo(originalPlan));
+            Assert.That(profile.groups[0].GetPlanBytes(), Is.EqualTo(originalPlan));
         }
 
         [Test]
@@ -30,7 +31,7 @@ namespace PsdLayoutTool2.Tests
                 Node("101", "A", 0, new Rect(0, 0, 10, 10), "a"),
                 Node("102", "B", 1, new Rect(20, 0, 10, 10), "b"));
             PsdHierarchyProfile profile = Profile(original, "101", "102");
-            byte[] originalPlan = profile.groups[0].planBytes.ToArray();
+            byte[] originalPlan = profile.groups[0].GetPlanBytes();
 
             PsdHierarchyReconciliationResult result = profile.Reconcile(Document(
                 Node("101", "A", 0, new Rect(0, 0, 30, 10), "a"),
@@ -39,7 +40,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(result.requiresReplan, Is.False);
             Assert.That(result.geometryValidationStableIds, Is.EqualTo(new[] { "101" }));
             Assert.That(result.focusedInvalidatedScopeStableIds, Is.Empty);
-            Assert.That(profile.groups[0].planBytes, Is.EqualTo(originalPlan));
+            Assert.That(profile.groups[0].GetPlanBytes(), Is.EqualTo(originalPlan));
         }
 
         [Test]
@@ -122,6 +123,91 @@ namespace PsdLayoutTool2.Tests
             Assert.That(profile.nodes.Select(node => node.stableId).Distinct().Count(), Is.EqualTo(profile.nodes.Count));
         }
 
+        [Test]
+        public void PixelChannelBytesParticipateInAssetAndContentFingerprints()
+        {
+            string pixelsA = PsdHierarchyFingerprints.Asset(new[]
+            {
+                new KeyValuePair<short, byte[]>(0, new byte[] { 1, 2, 3 }),
+                new KeyValuePair<short, byte[]>(1, new byte[] { 4, 5, 6 })
+            });
+            string pixelsB = PsdHierarchyFingerprints.Asset(new[]
+            {
+                new KeyValuePair<short, byte[]>(0, new byte[] { 1, 2, 9 }),
+                new KeyValuePair<short, byte[]>(1, new byte[] { 4, 5, 6 })
+            });
+            PsdPrefabNodeModel node = Node("101", "Image", 0, Rect.zero, pixelsA);
+            string contentA = PsdHierarchyFingerprints.Content(node);
+            node.assetFingerprint = pixelsB;
+
+            Assert.That(pixelsB, Is.Not.EqualTo(pixelsA));
+            Assert.That(PsdHierarchyFingerprints.Content(node), Is.Not.EqualTo(contentA));
+        }
+
+        [Test]
+        public void ProfileIsScriptableObjectWithSourceIdentityAndStaleDetection()
+        {
+            PsdPrefabDocumentModel document = Document(Node("101", "A", 0, Rect.zero, "a"));
+            document.sourceFingerprint = "source-v1";
+            PsdHierarchyProfile profile = Profile(document, "101");
+
+            Assert.That(profile, Is.InstanceOf<ScriptableObject>());
+            Assert.That(profile.sourcePsdGuid, Is.EqualTo("guid-123"));
+            Assert.That(profile.sourceFingerprint, Is.EqualTo("source-v1"));
+            Assert.That(profile.schemaVersion, Is.EqualTo(PsdHierarchyProfile.CurrentSchemaVersion));
+            Assert.That(profile.IsStale("guid-123", "source-v1"), Is.False);
+            Assert.That(profile.IsStale("guid-123", "source-v2"), Is.True);
+        }
+
+        [Test]
+        public void SemanticDuplicateAndOverlappingGroupsAreNormalized()
+        {
+            PsdPrefabDocumentModel document = Document(
+                Node("101", "A", 0, Rect.zero, "a"),
+                Node("102", "B", 1, Rect.zero, "b"),
+                Node("103", "C", 2, Rect.zero, "c"));
+            PsdHierarchyProfile profile = PsdHierarchyProfile.Create(
+                document,
+                new[]
+                {
+                    new PsdHierarchyProfileGroup { key = "first", stableLayerIds = new List<string> { "101", "102" } },
+                    new PsdHierarchyProfileGroup { key = "same-members", stableLayerIds = new List<string> { "102", "101" } },
+                    new PsdHierarchyProfileGroup { key = "overlap", stableLayerIds = new List<string> { "102", "103" } }
+                },
+                null,
+                "guid-123");
+
+            profile.Reconcile(document);
+            profile.Reconcile(document);
+
+            Assert.That(profile.groups.Count, Is.EqualTo(2));
+            Assert.That(profile.groups[0].stableLayerIds, Is.EqualTo(new[] { "101", "102" }));
+            Assert.That(profile.groups[1].stableLayerIds, Is.EqualTo(new[] { "103" }));
+            Assert.That(profile.groups.SelectMany(group => group.stableLayerIds).Distinct().Count(),
+                Is.EqualTo(profile.groups.Sum(group => group.stableLayerIds.Count)));
+        }
+
+        [Test]
+        public void ProfileRoundTripContainsOnlyValidatedStablePlanMembers()
+        {
+            PsdStableLayerId fallback = PsdStableLayerIdUtility.Create(0U, string.Empty, 0, "UnstableSecret");
+            PsdHierarchyProfile profile = PsdHierarchyProfile.Create(
+                Document(Node("101", "Stable", 0, Rect.zero, "a"), Node(fallback.value, "Unstable", 1, Rect.zero, "b")),
+                new[] { new PsdHierarchyProfileGroup { stableLayerIds = new List<string> { "101", fallback.value } } },
+                new[] { new PsdHierarchyProfileRename { stableId = fallback.value, name = "MustNotPersist" } },
+                "guid-123");
+
+            string json = EditorJsonUtility.ToJson(profile);
+            PsdHierarchyProfile roundTrip = ScriptableObject.CreateInstance<PsdHierarchyProfile>();
+            EditorJsonUtility.FromJsonOverwrite(json, roundTrip);
+
+            Assert.That(json, Does.Not.Contain(fallback.value));
+            Assert.That(json, Does.Not.Contain("MustNotPersist"));
+            Assert.That(System.Text.Encoding.UTF8.GetString(roundTrip.groups[0].GetPlanBytes()), Does.Not.Contain(fallback.value));
+            Assert.That(roundTrip.groups[0].stableLayerIds, Is.EqualTo(new[] { "101" }));
+            Assert.That(roundTrip.sourcePsdGuid, Is.EqualTo("guid-123"));
+        }
+
         private static PsdHierarchyProfile Profile(PsdPrefabDocumentModel document, params string[] members)
         {
             return PsdHierarchyProfile.Create(
@@ -131,11 +217,11 @@ namespace PsdLayoutTool2.Tests
                     new PsdHierarchyProfileGroup
                     {
                         displayName = "Main",
-                        stableLayerIds = members.ToList(),
-                        planBytes = Encoding.UTF8.GetBytes("unchanged-plan")
+                        stableLayerIds = members.ToList()
                     }
                 },
-                new[] { new PsdHierarchyProfileRename { stableId = members[0], name = "Readable" } });
+                new[] { new PsdHierarchyProfileRename { stableId = members[0], name = "Readable" } },
+                "guid-123");
         }
 
         private static PsdPrefabDocumentModel Document(params PsdPrefabNodeModel[] nodes)
