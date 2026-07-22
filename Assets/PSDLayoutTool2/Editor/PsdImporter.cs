@@ -430,6 +430,37 @@
         public static PrefabOutputMode PrefabMode { get; set; }
 
         /// <summary>
+        /// Resolves the exact generated Prefab selected by explicit import settings.
+        /// The calculated path is returned even when no Prefab exists there, allowing
+        /// callers to report the missing configured target without searching elsewhere.
+        /// </summary>
+        /// <param name="psdAssetPath">PSD asset path relative to the Unity project.</param>
+        /// <param name="outputMode">Configured generated-output location.</param>
+        /// <param name="outputFolderName">Configured generated-output folder name.</param>
+        /// <param name="prefabMode">Configured Prefab location.</param>
+        /// <param name="prefabAssetPath">Calculated configured Prefab path.</param>
+        /// <returns>True only when a Prefab exists at the calculated path.</returns>
+        public static bool TryResolveGeneratedPrefabPath(
+            string psdAssetPath,
+            OutputDirectoryMode outputMode,
+            string outputFolderName,
+            PrefabOutputMode prefabMode,
+            out string prefabAssetPath)
+        {
+            if (!PsdGeneratedPrefabPathResolver.TryResolve(
+                    psdAssetPath,
+                    outputMode,
+                    outputFolderName,
+                    prefabMode,
+                    out prefabAssetPath))
+            {
+                return false;
+            }
+
+            return AssetDatabase.LoadAssetAtPath<GameObject>(prefabAssetPath) != null;
+        }
+
+        /// <summary>
         /// Gets or sets a value indicating whether the import process should create <see cref="GameObject"/>s in the scene.
         /// </summary>
         private static bool LayoutInScene { get; set; }
@@ -599,9 +630,28 @@
 
                 PsdName = Path.GetFileNameWithoutExtension(normalizedAssetPath);
 
-                string outputRelativePath = GetOutputRootRelativePath(normalizedAssetPath);
+                string outputRelativePath;
+                if (!PsdGeneratedPrefabPathResolver.TryResolveOutputRoot(
+                        normalizedAssetPath,
+                        OutputMode,
+                        OutputFolderName,
+                        out outputRelativePath))
+                {
+                    throw new InvalidOperationException("Cannot resolve the generated output path for PSD asset: " + normalizedAssetPath);
+                }
+
                 string outputFullPath = Path.Combine(GetFullProjectPath(), outputRelativePath.Replace('/', Path.DirectorySeparatorChar));
-                string prefabRelativePath = CreatePrefab ? GetPrefabRelativePath(outputRelativePath) : string.Empty;
+                string prefabRelativePath = string.Empty;
+                if (CreatePrefab &&
+                    !PsdGeneratedPrefabPathResolver.TryResolve(
+                        normalizedAssetPath,
+                        OutputMode,
+                        OutputFolderName,
+                        PrefabMode,
+                        out prefabRelativePath))
+                {
+                    throw new InvalidOperationException("Cannot resolve the generated Prefab path for PSD asset: " + normalizedAssetPath);
+                }
                 PsdLogger.Info("Output relative path: " + outputRelativePath);
                 PsdLogger.Info("Output full path: " + outputFullPath);
                 if (!string.IsNullOrEmpty(prefabRelativePath))
@@ -2841,54 +2891,6 @@
 
             pathParts.Reverse();
             return string.Join("/", pathParts.ToArray());
-        }
-
-        /// <summary>
-        /// Gets the output folder path relative to the Unity project for generated assets.
-        /// </summary>
-        /// <param name="assetPath">The PSD asset path, like "Assets/UI/Menu.psd".</param>
-        /// <returns>The output folder path, like "Assets/UI/Menu".</returns>
-        private static string GetOutputRootRelativePath(string assetPath)
-        {
-            string assetDirectory = Path.GetDirectoryName(assetPath);
-            if (string.IsNullOrEmpty(assetDirectory))
-            {
-                assetDirectory = "Assets";
-            }
-
-            assetDirectory = assetDirectory.Replace('\\', '/');
-
-            string basePath = OutputMode == OutputDirectoryMode.AssetsRoot ? "Assets" : assetDirectory;
-            string folderName = string.IsNullOrEmpty(OutputFolderName) ? PsdName : OutputFolderName.Trim();
-            if (string.IsNullOrEmpty(folderName))
-            {
-                folderName = PsdName;
-            }
-
-            folderName = MakeNameSafe(folderName);
-            return string.Format("{0}/{1}", basePath.TrimEnd('/'), folderName).Replace('\\', '/');
-        }
-
-        /// <summary>
-        /// Gets prefab output path relative to project.
-        /// </summary>
-        /// <param name="outputRelativePath">The generated output folder path.</param>
-        /// <returns>Prefab asset path relative to project.</returns>
-        private static string GetPrefabRelativePath(string outputRelativePath)
-        {
-            if (PrefabMode == PrefabOutputMode.InsideOutputFolder)
-            {
-                return string.Format("{0}/{1}.prefab", outputRelativePath, PsdName);
-            }
-
-            string outputParent = Path.GetDirectoryName(outputRelativePath);
-            if (string.IsNullOrEmpty(outputParent))
-            {
-                outputParent = "Assets";
-            }
-
-            outputParent = outputParent.Replace('\\', '/').TrimEnd('/');
-            return string.Format("{0}/{1}.prefab", outputParent, PsdName);
         }
 
         /// <summary>
