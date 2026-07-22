@@ -621,24 +621,42 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void BoundProfileRejectsNonUiModeBeforePrefabOrProfileBytesCanChange()
         {
-            const string sourceGuid = "mode-switch-source-guid";
+            const string settingsFolder = "Assets/PSDLayoutTool2Settings";
+            const string profilesFolder = settingsFolder + "/HierarchyProfiles";
+            string sourceGuid = "mode-switch-" + Guid.NewGuid().ToString("N");
             string fixedProfilePath = PsdPrefabTransactionalSave.GetProfilePath(TargetPath, sourceGuid);
-            GameObject source = Root("Root");
-            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
-            UnityEngine.Object.DestroyImmediate(source);
-            PsdHierarchyProfile profile = Profile();
-            profile.sourcePsdGuid = sourceGuid;
-            profile.targetPrefabPath = TargetPath;
-            profile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
-            string profileDirectory = Path.GetDirectoryName(FullPath(fixedProfilePath));
-            Directory.CreateDirectory(profileDirectory);
-            AssetDatabase.Refresh();
-            AssetDatabase.CreateAsset(profile, fixedProfilePath);
-            AssetDatabase.SaveAssets();
-            byte[] prefabBefore = File.ReadAllBytes(FullPath(TargetPath));
-            byte[] profileBefore = File.ReadAllBytes(FullPath(fixedProfilePath));
+            bool settingsFolderExisted = AssetDatabase.IsValidFolder(settingsFolder);
+            bool profilesFolderExisted = AssetDatabase.IsValidFolder(profilesFolder);
+            bool createdSettingsFolder = false;
+            bool createdProfilesFolder = false;
+            bool createdTestProfile = false;
             try
             {
+                if (!settingsFolderExisted)
+                {
+                    AssetDatabase.CreateFolder("Assets", "PSDLayoutTool2Settings");
+                    createdSettingsFolder = true;
+                }
+                if (!profilesFolderExisted)
+                {
+                    AssetDatabase.CreateFolder(settingsFolder, "HierarchyProfiles");
+                    createdProfilesFolder = true;
+                }
+
+                GameObject source = Root("Root");
+                PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+                UnityEngine.Object.DestroyImmediate(source);
+                PsdHierarchyProfile profile = Profile();
+                profile.sourcePsdGuid = sourceGuid;
+                profile.targetPrefabPath = TargetPath;
+                profile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+                Assert.That(AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(fixedProfilePath), Is.Null);
+                AssetDatabase.CreateAsset(profile, fixedProfilePath);
+                createdTestProfile = true;
+                AssetDatabase.SaveAssetIfDirty(profile);
+                byte[] prefabBefore = File.ReadAllBytes(FullPath(TargetPath));
+                byte[] profileBefore = File.ReadAllBytes(FullPath(fixedProfilePath));
+
                 Assert.Throws<InvalidOperationException>(() =>
                     PsdImporter.ResolveHierarchyProfileBeforePrefabImport(sourceGuid, TargetPath, false));
                 Assert.That(File.ReadAllBytes(FullPath(TargetPath)), Is.EqualTo(prefabBefore));
@@ -646,7 +664,12 @@ namespace PsdLayoutTool2.Tests
             }
             finally
             {
-                AssetDatabase.DeleteAsset(fixedProfilePath);
+                if (createdTestProfile)
+                    AssetDatabase.DeleteAsset(fixedProfilePath);
+                if (createdProfilesFolder && IsAssetDirectoryEmpty(profilesFolder))
+                    AssetDatabase.DeleteAsset(profilesFolder);
+                if (createdSettingsFolder && IsAssetDirectoryEmpty(settingsFolder))
+                    AssetDatabase.DeleteAsset(settingsFolder);
             }
 
             Assert.That(PsdImporter.ResolveHierarchyProfileBeforePrefabImport(
@@ -898,6 +921,12 @@ namespace PsdLayoutTool2.Tests
         private static string FullPath(string assetPath)
         {
             return Path.GetFullPath(Path.Combine(Application.dataPath, "..", assetPath));
+        }
+
+        private static bool IsAssetDirectoryEmpty(string assetPath)
+        {
+            string fullPath = FullPath(assetPath);
+            return Directory.Exists(fullPath) && !Directory.EnumerateFileSystemEntries(fullPath).Any();
         }
     }
 
