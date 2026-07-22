@@ -423,6 +423,46 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void MissingGeneratedRecordIdentityPlanMembershipAndRenameRemainPending()
+        {
+            PsdPrefabDocumentModel original = Document(
+                Node("101", "A", 0, Rect.zero, "a"),
+                Node("102", "B", 1, Rect.zero, "b"));
+            original.sourceFingerprint = PsdHierarchyFingerprints.Document(original);
+            PsdHierarchyProfile profile = Profile(original, "101", "102");
+            profile.nodes[1].ownership = PsdHierarchyNodeOwnership.Generated;
+            profile.nodes[1].localFileId = 7654L;
+            profile.nodes[1].lastKnownPath = "Root/B";
+            profile.renames.Add(new PsdHierarchyProfileRename { stableId = "102", name = "B Kept" });
+            PsdPrefabDocumentModel current = Document(Node("101", "A", 0, Rect.zero, "a"));
+            current.sourceFingerprint = PsdHierarchyFingerprints.Document(current);
+
+            PsdHierarchyReconciliationResult result = profile.Reconcile(current);
+
+            Assert.That(result.pendingMissingStableIds, Is.EqualTo(new[] { "102" }));
+            Assert.That(profile.nodes.Single(node => node.stableId == "102").localFileId, Is.EqualTo(7654L));
+            Assert.That(profile.groups.Single().stableLayerIds, Does.Contain("102"));
+            Assert.That(profile.renames.Any(rename => rename.stableId == "102"), Is.True);
+            Assert.That(profile.sourceFingerprint, Is.EqualTo(original.sourceFingerprint));
+        }
+
+        [Test]
+        public void ImporterSessionClassifiesNativeNodesFromActualEmissionRegistry()
+        {
+            PsdPrefabDocumentModel document = Document(
+                Node("101", "Visible", 0, Rect.zero, "a"),
+                Node("102", "Hidden", 1, Rect.zero, "b"));
+            PsdHierarchyProfile profile = Profile(document, "101");
+
+            profile.UpdateImporterOwnership(document, new[] { "101" });
+
+            Assert.That(profile.nodes.Single(node => node.stableId == "101").ownership,
+                Is.EqualTo(PsdHierarchyNodeOwnership.Generated));
+            Assert.That(profile.nodes.Single(node => node.stableId == "102").ownership,
+                Is.EqualTo(PsdHierarchyNodeOwnership.NotEmitted));
+        }
+
+        [Test]
         public void NullSerializedCollectionsAreNormalizedWithoutNullReference()
         {
             PsdHierarchyProfile profile = Profile(Document(Node("101", "A", 0, Rect.zero, "a")), "101");
@@ -474,6 +514,7 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(loaded.sourcePsdGuid, Is.Not.EqualTo("memory-only-unsaved-sentinel"));
                 Assert.That(loaded.sourceFingerprint, Is.EqualTo(document.sourceFingerprint));
                 Assert.That(loaded.groups[0].stableLayerIds, Is.EqualTo(new[] { "101" }));
+                Assert.That(loaded.nodes[0].ownership, Is.EqualTo(PsdHierarchyNodeOwnership.Unknown));
                 Assert.That(loaded.CheckSchema().status, Is.EqualTo(PsdHierarchyProfileSchemaStatus.Current));
             }
             finally

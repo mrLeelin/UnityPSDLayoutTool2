@@ -6,6 +6,13 @@ namespace PsdLayoutTool2
     using System.Text;
     using UnityEngine;
 
+    public enum PsdHierarchyNodeOwnership
+    {
+        Unknown,
+        Generated,
+        NotEmitted
+    }
+
     [Serializable]
     public sealed class PsdHierarchyProfileNode
     {
@@ -13,6 +20,7 @@ namespace PsdLayoutTool2
         public string contentFingerprint;
         public string structureFingerprint;
         public string geometryFingerprint;
+        public PsdHierarchyNodeOwnership ownership;
 
         // Added without changing the schema version: zero/empty are the safe
         // defaults for profiles created before transactional identity tracking.
@@ -106,11 +114,14 @@ namespace PsdLayoutTool2
     [Serializable]
     public sealed class PsdHierarchyProfile : ScriptableObject
     {
-        public const int CurrentSchemaVersion = 1;
+        public const int CurrentSchemaVersion = 2;
 
         public int schemaVersion = CurrentSchemaVersion;
         public string sourcePsdGuid;
         public string sourceFingerprint;
+        public string sourceContentFingerprint;
+        public string sourceStructureFingerprint;
+        public string sourceGeometryFingerprint;
         public List<PsdHierarchyProfileNode> nodes = new List<PsdHierarchyProfileNode>();
         public List<PsdHierarchyProfileGroup> groups = new List<PsdHierarchyProfileGroup>();
         public List<PsdHierarchyProfileRename> renames = new List<PsdHierarchyProfileRename>();
@@ -129,6 +140,9 @@ namespace PsdLayoutTool2
             PsdHierarchyProfile profile = CreateInstance<PsdHierarchyProfile>();
             profile.sourcePsdGuid = sourcePsdGuid ?? string.Empty;
             profile.sourceFingerprint = ResolveDocumentFingerprint(document);
+            profile.sourceContentFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Content);
+            profile.sourceStructureFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Structure);
+            profile.sourceGeometryFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Geometry);
             profile.nodes = (document.nodes ?? new List<PsdPrefabNodeModel>())
                 .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal)
@@ -291,9 +305,41 @@ namespace PsdLayoutTool2
             if (sourceCanAdvance)
             {
                 sourceFingerprint = ResolveDocumentFingerprint(document);
+                sourceContentFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Content);
+                sourceStructureFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Structure);
+                sourceGeometryFingerprint = ResolveCategoryFingerprint(document, PsdHierarchyFingerprints.Geometry);
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Records importer ownership from the actual current-session emission
+        /// registry. A native PSD node that produced no runtime object is
+        /// explicitly NotEmitted and is never matched against a business object.
+        /// Missing historical records are intentionally left unchanged.
+        /// </summary>
+        public void UpdateImporterOwnership(PsdPrefabDocumentModel document, IEnumerable<string> emittedStableIds)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            var emitted = new HashSet<string>((emittedStableIds ?? Enumerable.Empty<string>())
+                .Where(PsdStableLayerIdUtility.IsPersistable), StringComparer.Ordinal);
+            var current = new HashSet<string>((document.nodes ?? new List<PsdPrefabNodeModel>())
+                .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
+                .Select(node => node.stableId), StringComparer.Ordinal);
+            foreach (PsdHierarchyProfileNode node in nodes ?? new List<PsdHierarchyProfileNode>())
+            {
+                if (node == null || !current.Contains(node.stableId)) continue;
+                node.ownership = emitted.Contains(node.stableId)
+                    ? PsdHierarchyNodeOwnership.Generated
+                    : PsdHierarchyNodeOwnership.NotEmitted;
+                if (node.ownership == PsdHierarchyNodeOwnership.NotEmitted)
+                {
+                    node.localFileId = 0L;
+                    node.lastKnownPath = string.Empty;
+                    node.pendingCreation = false;
+                }
+            }
         }
 
         public static string BuildGeneratedGroupKey(IEnumerable<string> stableLayerIds)
@@ -414,6 +460,19 @@ namespace PsdLayoutTool2
             return !string.IsNullOrEmpty(document.sourceFingerprint)
                 ? document.sourceFingerprint
                 : PsdHierarchyFingerprints.Document(document);
+        }
+
+        private static string ResolveCategoryFingerprint(
+            PsdPrefabDocumentModel document,
+            Func<PsdPrefabNodeModel, string> fingerprint)
+        {
+            string canonical = string.Join("|", (document.nodes ?? new List<PsdPrefabNodeModel>())
+                .Where(node => node != null)
+                .OrderBy(node => node.stableId, StringComparer.Ordinal)
+                .ThenBy(node => node.siblingIndex)
+                .Select(node => (node.stableId ?? string.Empty) + ":" + fingerprint(node))
+                .ToArray());
+            return PsdStableLayerIdUtility.ComputeFnv1a(canonical);
         }
     }
 }

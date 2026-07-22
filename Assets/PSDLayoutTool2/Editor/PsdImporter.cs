@@ -1367,14 +1367,17 @@
             {
                 PsdHierarchyReconciliationResult reconciliation = working.Reconcile(sourceModel);
                 if (reconciliation.requiresReplan || reconciliation.unsortedNewStableIds.Count > 0 ||
-                    reconciliation.unsortedUnstableIds.Count > 0)
+                    reconciliation.unsortedUnstableIds.Count > 0 ||
+                    reconciliation.geometryValidationStableIds.Count > 0)
                     throw new InvalidOperationException(
-                        "Hierarchy Profile requires focused replanning before this PSD can be imported.");
+                        "Hierarchy Profile requires focused preview/replanning before this PSD can be imported.");
+
+                // Ownership is determined by what this importer invocation
+                // actually emitted, never inferred from PSD visibility/name.
+                // Missing historical records are untouched and remain pending.
+                working.UpdateImporterOwnership(sourceModel, candidateRegistry.Keys);
 
                 PsdHierarchyPlan plan = CreatePlanFromProfile(working, sourceModel, sourceGuid);
-                PsdHierarchyProfile refreshed = CreateRefreshedProfile(working, sourceModel, sourceGuid);
-                UnityEngine.Object.DestroyImmediate(working);
-                working = refreshed;
 
                 existingContents = PrefabUtility.LoadPrefabContents(prefabPath);
                 PsdPrefabIncrementalMergeResult merge = PsdPrefabIncrementalMerge.Merge(
@@ -1429,39 +1432,6 @@
                 });
             }
             return plan;
-        }
-
-        /// <summary>
-        /// Accepts current PSD fingerprints only into a detached clone while
-        /// preserving the previous transaction's native object identities.
-        /// </summary>
-        private static PsdHierarchyProfile CreateRefreshedProfile(
-            PsdHierarchyProfile previous,
-            PsdPrefabDocumentModel sourceModel,
-            string sourceGuid)
-        {
-            PsdHierarchyProfile refreshed = PsdHierarchyProfile.Create(
-                sourceModel, previous.groups, previous.renames, sourceGuid);
-            Dictionary<string, PsdHierarchyProfileNode> oldNodes = (previous.nodes ?? new List<PsdHierarchyProfileNode>())
-                .Where(node => node != null).ToDictionary(node => node.stableId, StringComparer.Ordinal);
-            foreach (PsdHierarchyProfileNode node in refreshed.nodes)
-            {
-                PsdHierarchyProfileNode old;
-                if (!oldNodes.TryGetValue(node.stableId, out old)) continue;
-                node.localFileId = old.localFileId;
-                node.lastKnownPath = old.lastKnownPath;
-                node.pendingCreation = old.pendingCreation;
-            }
-            Dictionary<string, PsdHierarchyProfileGroup> oldGroups = (previous.groups ?? new List<PsdHierarchyProfileGroup>())
-                .Where(group => group != null).ToDictionary(group => group.key, StringComparer.Ordinal);
-            foreach (PsdHierarchyProfileGroup group in refreshed.groups)
-            {
-                PsdHierarchyProfileGroup old;
-                if (!oldGroups.TryGetValue(group.key, out old)) continue;
-                group.localFileId = old.localFileId;
-                group.lastKnownPath = old.lastKnownPath;
-            }
-            return refreshed;
         }
 
         /// <summary>

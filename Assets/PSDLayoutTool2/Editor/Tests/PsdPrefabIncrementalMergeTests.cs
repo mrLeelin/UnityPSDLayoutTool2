@@ -3,7 +3,9 @@ namespace PsdLayoutTool2.Tests
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using NUnit.Framework;
+    using TMPro;
     using UnityEditor;
     using UnityEditor.SceneManagement;
     using UnityEngine;
@@ -26,6 +28,16 @@ namespace PsdLayoutTool2.Tests
             AssetDatabase.CreateFolder(Folder, "SameName");
         }
 
+        [Test]
+        public void ProfilePathIsGuidKeyedInFixedSettingsFolder()
+        {
+            Assert.That(PsdPrefabTransactionalSave.GetProfilePath(
+                    "Assets/Any/Nested/Target.prefab", "ABC-def_123"),
+                Is.EqualTo("Assets/PSDLayoutTool2Settings/HierarchyProfiles/ABC-def_123.asset"));
+            Assert.Throws<ArgumentException>(() => PsdPrefabTransactionalSave.GetProfilePath(
+                TargetPath, "../escape"));
+        }
+
         [TearDown]
         public void TearDown()
         {
@@ -38,6 +50,8 @@ namespace PsdLayoutTool2.Tests
             GameObject source = Root("Root");
             RectTransform retained = Child(source, "Old", "101");
             retained.gameObject.AddComponent<Image>();
+            PsdPrefabIncrementalCustomProbe retainedCustom = retained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
+            retainedCustom.value = 7;
             RectTransform business = Child(retained.gameObject, "Business", null);
             PsdPrefabIncrementalReferenceProbe probe = source.AddComponent<PsdPrefabIncrementalReferenceProbe>();
             probe.target = retained.gameObject;
@@ -48,18 +62,51 @@ namespace PsdLayoutTool2.Tests
 
             GameObject candidate = Root("Root");
             RectTransform candidateLeaf = Child(candidate, "Fresh", "101");
-            candidateLeaf.anchoredPosition = new Vector2(37f, -19f);
+            candidateLeaf.anchorMin = new Vector2(0.12f, 0.23f);
+            candidateLeaf.anchorMax = new Vector2(0.81f, 0.92f);
+            candidateLeaf.pivot = new Vector2(0.17f, 0.83f);
+            candidateLeaf.anchoredPosition3D = new Vector3(37f, -19f, 6f);
+            candidateLeaf.sizeDelta = new Vector2(222f, 111f);
+            candidateLeaf.offsetMin = new Vector2(3f, 4f);
+            candidateLeaf.offsetMax = new Vector2(-5f, -6f);
+            candidateLeaf.localRotation = Quaternion.Euler(0f, 0f, 13f);
+            candidateLeaf.localScale = new Vector3(1.2f, 0.8f, 1f);
+            candidateLeaf.gameObject.SetActive(false);
             Image candidateImage = candidateLeaf.gameObject.AddComponent<Image>();
             candidateImage.color = Color.cyan;
+            candidateImage.type = Image.Type.Filled;
+            candidateImage.fillMethod = Image.FillMethod.Radial180;
+            candidateImage.fillOrigin = 2;
+            candidateImage.fillAmount = 0.37f;
+            candidateImage.fillClockwise = false;
+            candidateImage.fillCenter = false;
+            candidateImage.raycastTarget = false;
+            candidateImage.raycastPadding = new Vector4(1f, 2f, 3f, 4f);
+            candidateImage.preserveAspect = true;
             Texture2D texture = new Texture2D(4, 4);
             Sprite sprite = Sprite.Create(texture, new Rect(0f, 0f, 4f, 4f), new Vector2(0.5f, 0.5f));
+            const string texturePath = Folder + "/ExternalTexture.asset";
+            AssetDatabase.CreateAsset(texture, texturePath);
+            AssetDatabase.AddObjectToAsset(sprite, texture);
+            AssetDatabase.SaveAssetIfDirty(texture);
             candidateImage.sprite = sprite;
+            Material material = new Material(Shader.Find("UI/Default"));
+            material.color = Color.magenta;
+            const string materialPath = Folder + "/ExternalMaterial.mat";
+            AssetDatabase.CreateAsset(material, materialPath);
+            AssetDatabase.SaveAssetIfDirty(material);
+            byte[] materialBytesBefore = File.ReadAllBytes(FullPath(materialPath));
+            candidateImage.material = material;
+            PsdPrefabIncrementalCustomProbe candidateCustom = candidateLeaf.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
+            candidateCustom.value = 99;
             GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
             try
             {
                 RectTransform loadedRetained = loaded.transform.Find("Old") as RectTransform;
                 RectTransform loadedBusiness = loaded.transform.Find("Old/Business") as RectTransform;
                 PsdPrefabIncrementalReferenceProbe loadedProbe = loaded.GetComponent<PsdPrefabIncrementalReferenceProbe>();
+                Type[] componentOrder = loadedRetained.GetComponents<Component>().Select(component => component.GetType()).ToArray();
+                Color materialColorBefore = material.color;
                 PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
                     TargetPath, loaded, candidate,
                     new Dictionary<string, RectTransform> { { "101", candidateLeaf } },
@@ -67,20 +114,42 @@ namespace PsdLayoutTool2.Tests
 
                 RectTransform actual = result.generatedByStableId["101"];
                 Assert.That(actual.name, Is.EqualTo("Fresh"));
-                Assert.That(actual.anchoredPosition, Is.EqualTo(new Vector2(37f, -19f)));
+                Assert.That(actual.anchorMin, Is.EqualTo(candidateLeaf.anchorMin));
+                Assert.That(actual.anchorMax, Is.EqualTo(candidateLeaf.anchorMax));
+                Assert.That(actual.pivot, Is.EqualTo(candidateLeaf.pivot));
+                Assert.That(actual.anchoredPosition3D, Is.EqualTo(candidateLeaf.anchoredPosition3D));
+                Assert.That(actual.sizeDelta, Is.EqualTo(candidateLeaf.sizeDelta));
+                Assert.That(actual.offsetMin, Is.EqualTo(candidateLeaf.offsetMin));
+                Assert.That(actual.offsetMax, Is.EqualTo(candidateLeaf.offsetMax));
+                Assert.That(actual.localRotation, Is.EqualTo(candidateLeaf.localRotation));
+                Assert.That(actual.localScale, Is.EqualTo(candidateLeaf.localScale));
+                Assert.That(actual.gameObject.activeSelf, Is.False);
                 Assert.That(actual.GetComponent<Image>().color, Is.EqualTo(Color.cyan));
                 Assert.That(actual.GetComponent<Image>().sprite, Is.SameAs(sprite), "Sprite must be copied; a null Sprite renders white.");
+                Assert.That(actual.GetComponent<Image>().material, Is.SameAs(material));
+                Assert.That(actual.GetComponent<Image>().type, Is.EqualTo(Image.Type.Filled));
+                Assert.That(actual.GetComponent<Image>().fillMethod, Is.EqualTo(Image.FillMethod.Radial180));
+                Assert.That(actual.GetComponent<Image>().fillOrigin, Is.EqualTo(2));
+                Assert.That(actual.GetComponent<Image>().fillAmount, Is.EqualTo(0.37f));
+                Assert.That(actual.GetComponent<Image>().fillClockwise, Is.False);
+                Assert.That(actual.GetComponent<Image>().fillCenter, Is.False);
+                Assert.That(actual.GetComponent<Image>().raycastTarget, Is.False);
+                Assert.That(actual.GetComponent<Image>().raycastPadding, Is.EqualTo(new Vector4(1f, 2f, 3f, 4f)));
+                Assert.That(actual.GetComponent<Image>().preserveAspect, Is.True);
+                Assert.That(material.color, Is.EqualTo(materialColorBefore), "Material assets/references must never be mutated.");
+                Assert.That(File.ReadAllBytes(FullPath(materialPath)), Is.EqualTo(materialBytesBefore));
                 Assert.That(actual.Find("Business"), Is.SameAs(loadedBusiness));
                 Assert.That(actual, Is.SameAs(loadedRetained));
                 Assert.That(loadedProbe.target, Is.SameAs(actual.gameObject));
+                Assert.That(actual.GetComponent<PsdPrefabIncrementalCustomProbe>().value, Is.EqualTo(7));
+                Assert.That(actual.GetComponents<PsdPrefabIncrementalCustomProbe>().Length, Is.EqualTo(1));
+                Assert.That(actual.GetComponents<Component>().Select(component => component.GetType()), Is.EqualTo(componentOrder));
             }
             finally
             {
                 PrefabUtility.UnloadPrefabContents(loaded);
                 UnityEngine.Object.DestroyImmediate(candidate);
                 UnityEngine.Object.DestroyImmediate(profile);
-                UnityEngine.Object.DestroyImmediate(sprite);
-                UnityEngine.Object.DestroyImmediate(texture);
             }
         }
 
@@ -114,7 +183,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void FirstAdoptionWithoutRecordedNativeIdentityFailsClosed()
+        public void FirstAdoptionUsesDeterministicHierarchyAndVisualEvidence()
         {
             GameObject source = Root("Root");
             Child(source, "Same", "101");
@@ -126,9 +195,74 @@ namespace PsdLayoutTool2.Tests
             PsdHierarchyProfile profile = Profile(Node("101", 0L, "Root/Same"));
             try
             {
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateLeaf } }, profile, EmptyPlan());
+                Assert.That(result.generatedByStableId["101"], Is.SameAs(loaded.transform.Find("Same")));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void UnknownOwnershipAndAmbiguousSameNameResourceEvidenceFailClosed()
+        {
+            GameObject source = Root("Root");
+            RectTransform wrapperA = Child(source, "WrapperA", null);
+            RectTransform wrapperB = Child(source, "WrapperB", null);
+            RectTransform first = Child(wrapperA.gameObject, "Same", null);
+            RectTransform second = Child(wrapperB.gameObject, "Same", null);
+            first.gameObject.AddComponent<Image>();
+            second.gameObject.AddComponent<Image>();
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            GameObject candidate = Root("DifferentRoot");
+            RectTransform candidateLeaf = Child(candidate, "Same", null);
+            candidateLeaf.gameObject.AddComponent<Image>();
+            PsdHierarchyProfile profile = Profile(Node("101", 0L, string.Empty));
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
                 Assert.Throws<PsdPrefabIncrementalMergeException>(() => PsdPrefabIncrementalMerge.Merge(
                     TargetPath, loaded, candidate,
                     new Dictionary<string, RectTransform> { { "101", candidateLeaf } }, profile, EmptyPlan()));
+
+                profile.nodes[0].ownership = PsdHierarchyNodeOwnership.Unknown;
+                Assert.Throws<PsdPrefabIncrementalMergeException>(() => PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateLeaf } }, profile, EmptyPlan()));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void NotEmittedNativeLayerDoesNotMatchOrBlockBusinessObject()
+        {
+            GameObject source = Root("Root");
+            RectTransform business = Child(source, "Business", null);
+            business.gameObject.AddComponent<PsdPrefabIncrementalReferenceProbe>();
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            PsdHierarchyProfileNode record = Node("101", 0L, string.Empty);
+            record.ownership = PsdHierarchyNodeOwnership.NotEmitted;
+            PsdHierarchyProfile profile = Profile(record);
+            GameObject candidate = Root("Root");
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate, new Dictionary<string, RectTransform>(), profile, EmptyPlan());
+                Assert.That(result.generatedByStableId, Is.Empty);
+                Assert.That(loaded.transform.Find("Business"), Is.Not.Null);
             }
             finally
             {
@@ -153,6 +287,7 @@ namespace PsdLayoutTool2.Tests
             GameObject candidate = Root("Root");
             RectTransform oldCandidate = Child(candidate, "Old", "101");
             RectTransform newCandidate = Child(candidate, "New", "102");
+            newCandidate.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>().value = 99;
             GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
             try
             {
@@ -162,6 +297,78 @@ namespace PsdLayoutTool2.Tests
                     profile, EmptyPlan());
                 Assert.That(result.generatedByStableId["102"].name, Is.EqualTo("New"));
                 Assert.That(result.generatedByStableId["102"].parent, Is.SameAs(loaded.transform));
+                Assert.That(result.generatedByStableId["102"].GetComponent<PsdPrefabIncrementalCustomProbe>(), Is.Null,
+                    "Candidate-only custom components must not leak into the target Prefab.");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void MergeCopiesTmpOwnedFieldsAndSharedReferencesWithoutChangingCustomComponentOrder()
+        {
+            GameObject source = Root("Root");
+            RectTransform retained = Child(source, "Old Text", null);
+            retained.gameObject.AddComponent<TextMeshProUGUI>();
+            retained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>().value = 5;
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            long localId = LocalId(TargetPath, "Old Text");
+            PsdHierarchyProfile profile = Profile(Node("101", localId, "Root/Old Text"));
+            GameObject candidate = Root("Root");
+            RectTransform candidateTextRect = Child(candidate, "Fresh Text", null);
+            TextMeshProUGUI candidateText = candidateTextRect.gameObject.AddComponent<TextMeshProUGUI>();
+            candidateText.text = "更新后的文字";
+            candidateText.font = TMP_Settings.defaultFontAsset;
+            candidateText.fontSharedMaterial = candidateText.font != null ? candidateText.font.material : null;
+            candidateText.fontSize = 37f;
+            candidateText.fontStyle = FontStyles.Bold | FontStyles.Italic;
+            candidateText.color = Color.yellow;
+            candidateText.alignment = TextAlignmentOptions.BottomRight;
+            candidateText.richText = false;
+            candidateText.textWrappingMode = TextWrappingModes.NoWrap;
+            candidateText.overflowMode = TextOverflowModes.Ellipsis;
+            candidateText.characterSpacing = 2f;
+            candidateText.wordSpacing = 3f;
+            candidateText.lineSpacing = 4f;
+            candidateText.paragraphSpacing = 5f;
+            candidateText.enableAutoSizing = true;
+            candidateText.fontSizeMin = 12f;
+            candidateText.fontSizeMax = 44f;
+            candidateText.margin = new Vector4(1f, 2f, 3f, 4f);
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                RectTransform loadedTextRect = loaded.transform.Find("Old Text") as RectTransform;
+                Type[] beforeOrder = loadedTextRect.GetComponents<Component>().Select(component => component.GetType()).ToArray();
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateTextRect } }, profile, EmptyPlan());
+                TextMeshProUGUI actual = result.generatedByStableId["101"].GetComponent<TextMeshProUGUI>();
+                Assert.That(actual.text, Is.EqualTo(candidateText.text));
+                Assert.That(actual.font, Is.SameAs(candidateText.font));
+                Assert.That(actual.fontSharedMaterial, Is.SameAs(candidateText.fontSharedMaterial));
+                Assert.That(actual.fontSize, Is.EqualTo(37f));
+                Assert.That(actual.fontStyle, Is.EqualTo(candidateText.fontStyle));
+                Assert.That(actual.color, Is.EqualTo(Color.yellow));
+                Assert.That(actual.alignment, Is.EqualTo(TextAlignmentOptions.BottomRight));
+                Assert.That(actual.richText, Is.False);
+                Assert.That(actual.textWrappingMode, Is.EqualTo(TextWrappingModes.NoWrap));
+                Assert.That(actual.overflowMode, Is.EqualTo(TextOverflowModes.Ellipsis));
+                Assert.That(actual.characterSpacing, Is.EqualTo(2f));
+                Assert.That(actual.wordSpacing, Is.EqualTo(3f));
+                Assert.That(actual.lineSpacing, Is.EqualTo(4f));
+                Assert.That(actual.paragraphSpacing, Is.EqualTo(5f));
+                Assert.That(actual.enableAutoSizing, Is.True);
+                Assert.That(actual.fontSizeMin, Is.EqualTo(12f));
+                Assert.That(actual.fontSizeMax, Is.EqualTo(44f));
+                Assert.That(actual.margin, Is.EqualTo(new Vector4(1f, 2f, 3f, 4f)));
+                Assert.That(actual.GetComponent<PsdPrefabIncrementalCustomProbe>().value, Is.EqualTo(5));
+                Assert.That(actual.GetComponents<Component>().Select(component => component.GetType()), Is.EqualTo(beforeOrder));
             }
             finally
             {
@@ -235,6 +442,9 @@ namespace PsdLayoutTool2.Tests
 
         [TestCase(PsdPrefabTransactionStage.AfterPrefabSave)]
         [TestCase(PsdPrefabTransactionStage.AfterReimportVerification)]
+        [TestCase(PsdPrefabTransactionStage.BeforeProfileCopy)]
+        [TestCase(PsdPrefabTransactionStage.DuringProfileCopy)]
+        [TestCase(PsdPrefabTransactionStage.AfterProfileCopy)]
         [TestCase(PsdPrefabTransactionStage.AfterProfileSave)]
         [TestCase(PsdPrefabTransactionStage.AfterFinalVerification)]
         public void EveryInjectedFailureRestoresPrefabProfileMetaAndLeavesSameNameSiblingUntouched(PsdPrefabTransactionStage failureStage)
@@ -277,6 +487,72 @@ namespace PsdLayoutTool2.Tests
             Assert.That(File.Exists(FullPath(TemporaryPath) + ".meta"), Is.False);
         }
 
+        [TestCase(PsdPrefabTransactionStage.BeforeProfileCopy)]
+        [TestCase(PsdPrefabTransactionStage.DuringProfileCopy)]
+        [TestCase(PsdPrefabTransactionStage.AfterProfileCopy)]
+        public void NewProfileCreationFailureRestoresOriginalAbsenceAndCleansMeta(PsdPrefabTransactionStage failureStage)
+        {
+            GameObject source = Root("Root");
+            Child(source, "Old", null);
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            GameObject temporary = Root("Temporary");
+            PrefabUtility.SaveAsPrefabAsset(temporary, TemporaryPath);
+            UnityEngine.Object.DestroyImmediate(temporary);
+            const string newProfilePath = Folder + "/NewProfile.asset";
+            PsdHierarchyProfile working = Profile(Node("101", 0L, string.Empty));
+            working.nodes[0].pendingCreation = true;
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() => PsdPrefabTransactionalSave.Save(
+                    TargetPath, loaded, newProfilePath, working,
+                    new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Old") as RectTransform } },
+                    new Dictionary<string, RectTransform>(), new[] { TemporaryPath },
+                    stage => { if (stage == failureStage) throw new InvalidOperationException("injected"); }));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(working);
+            }
+
+            Assert.That(File.Exists(FullPath(newProfilePath)), Is.False);
+            Assert.That(File.Exists(FullPath(newProfilePath) + ".meta"), Is.False);
+            Assert.That(File.Exists(FullPath(TemporaryPath)), Is.False);
+            Assert.That(File.Exists(FullPath(TemporaryPath) + ".meta"), Is.False);
+        }
+
+        [Test]
+        public void CanonicalFinalVerificationDetectsDeepProfileCorruptionAndRollsBack()
+        {
+            CreateTargetAndProfile(out _, out _);
+            byte[] before = File.ReadAllBytes(FullPath(ProfilePath));
+            PsdHierarchyProfile working = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath));
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() => PsdPrefabTransactionalSave.Save(
+                    TargetPath, loaded, ProfilePath, working,
+                    new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Old") as RectTransform } },
+                    new Dictionary<string, RectTransform>(), Array.Empty<string>(),
+                    stage =>
+                    {
+                        if (stage != PsdPrefabTransactionStage.AfterProfileSave) return;
+                        PsdHierarchyProfile corrupted = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath);
+                        corrupted.nodes[0].geometryFingerprint = "partial-corruption";
+                        EditorUtility.SetDirty(corrupted);
+                        AssetDatabase.SaveAssetIfDirty(corrupted);
+                    }));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(working);
+            }
+            Assert.That(File.ReadAllBytes(FullPath(ProfilePath)), Is.EqualTo(before));
+        }
+
         private static void CreateTargetAndProfile(out long localId, out string guid)
         {
             GameObject source = Root("Root");
@@ -300,7 +576,13 @@ namespace PsdLayoutTool2.Tests
 
         private static PsdHierarchyProfileNode Node(string stableId, long localFileId, string path)
         {
-            return new PsdHierarchyProfileNode { stableId = stableId, localFileId = localFileId, lastKnownPath = path };
+            return new PsdHierarchyProfileNode
+            {
+                stableId = stableId,
+                ownership = PsdHierarchyNodeOwnership.Generated,
+                localFileId = localFileId,
+                lastKnownPath = path
+            };
         }
 
         private static PsdHierarchyPlan EmptyPlan()
@@ -341,5 +623,10 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdPrefabIncrementalReferenceProbe : MonoBehaviour
     {
         public GameObject target;
+    }
+
+    public sealed class PsdPrefabIncrementalCustomProbe : MonoBehaviour
+    {
+        public int value;
     }
 }

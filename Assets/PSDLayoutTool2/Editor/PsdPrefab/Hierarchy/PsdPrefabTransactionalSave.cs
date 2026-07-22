@@ -11,6 +11,9 @@ namespace PsdLayoutTool2
     {
         AfterPrefabSave,
         AfterReimportVerification,
+        BeforeProfileCopy,
+        DuringProfileCopy,
+        AfterProfileCopy,
         AfterProfileSave,
         AfterFinalVerification
     }
@@ -31,9 +34,9 @@ namespace PsdLayoutTool2
         {
             if (string.IsNullOrEmpty(prefabPath)) throw new ArgumentException("Prefab path is required.", "prefabPath");
             if (string.IsNullOrEmpty(sourcePsdGuid)) throw new ArgumentException("Source PSD GUID is required.", "sourcePsdGuid");
-            string directory = (Path.GetDirectoryName(prefabPath) ?? string.Empty).Replace('\\', '/');
-            string fileName = Path.GetFileNameWithoutExtension(prefabPath) + "." + sourcePsdGuid + ".HierarchyProfile.asset";
-            return string.IsNullOrEmpty(directory) ? fileName : directory + "/" + fileName;
+            if (sourcePsdGuid.Any(character => !char.IsLetterOrDigit(character) && character != '-' && character != '_'))
+                throw new ArgumentException("Source PSD GUID contains unsafe path characters.", "sourcePsdGuid");
+            return "Assets/PSDLayoutTool2Settings/HierarchyProfiles/" + sourcePsdGuid + ".asset";
         }
 
         public static void Save(
@@ -79,7 +82,7 @@ namespace PsdLayoutTool2
                 // Profile asset, until the second transaction phase begins.
                 UpdateProfileIdentity(prefabPath, loadedContents.transform, workingProfile,
                     generatedByStableId, groupsByKey);
-                SaveProfileClone(profilePath, workingProfile);
+                SaveProfileClone(profilePath, workingProfile, failureInjector);
                 Invoke(failureInjector, PsdPrefabTransactionStage.AfterProfileSave);
 
                 AssetDatabase.ImportAsset(profilePath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
@@ -165,8 +168,12 @@ namespace PsdLayoutTool2
             return result;
         }
 
-        private static void SaveProfileClone(string profilePath, PsdHierarchyProfile workingProfile)
+        private static void SaveProfileClone(
+            string profilePath,
+            PsdHierarchyProfile workingProfile,
+            Action<PsdPrefabTransactionStage> failureInjector)
         {
+            Invoke(failureInjector, PsdPrefabTransactionStage.BeforeProfileCopy);
             PsdHierarchyProfile persistent = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
             if (persistent == null)
             {
@@ -176,30 +183,70 @@ namespace PsdLayoutTool2
                 PsdHierarchyProfile created = UnityEngine.Object.Instantiate(workingProfile);
                 created.name = Path.GetFileNameWithoutExtension(profilePath);
                 AssetDatabase.CreateAsset(created, profilePath);
+                persistent = created;
             }
             else
             {
                 EditorUtility.CopySerialized(workingProfile, persistent);
                 EditorUtility.SetDirty(persistent);
             }
-            if (persistent != null) AssetDatabase.SaveAssetIfDirty(persistent);
+            Invoke(failureInjector, PsdPrefabTransactionStage.DuringProfileCopy);
+            Invoke(failureInjector, PsdPrefabTransactionStage.AfterProfileCopy);
+            AssetDatabase.SaveAssetIfDirty(persistent);
         }
 
         private static void VerifyPersistedProfile(string profilePath, PsdHierarchyProfile expected)
         {
             PsdHierarchyProfile actual = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
             if (actual == null) throw new InvalidOperationException("Hierarchy Profile was not saved.");
-            Dictionary<string, PsdHierarchyProfileNode> actualNodes = (actual.nodes ?? new List<PsdHierarchyProfileNode>())
-                .Where(node => node != null).ToDictionary(node => node.stableId, StringComparer.Ordinal);
-            foreach (PsdHierarchyProfileNode expectedNode in expected.nodes ?? new List<PsdHierarchyProfileNode>())
+            if (!string.Equals(CanonicalProfile(actual), CanonicalProfile(expected), StringComparison.Ordinal))
+                throw new InvalidOperationException("Hierarchy Profile canonical verification failed.");
+        }
+
+        private static string CanonicalProfile(PsdHierarchyProfile profile)
+        {
+            var value = new System.Text.StringBuilder();
+            Append(value, profile.schemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Append(value, profile.sourcePsdGuid);
+            Append(value, profile.sourceFingerprint);
+            Append(value, profile.sourceContentFingerprint);
+            Append(value, profile.sourceStructureFingerprint);
+            Append(value, profile.sourceGeometryFingerprint);
+            foreach (PsdHierarchyProfileNode node in (profile.nodes ?? new List<PsdHierarchyProfileNode>())
+                         .Where(node => node != null).OrderBy(node => node.stableId, StringComparer.Ordinal))
             {
-                PsdHierarchyProfileNode actualNode;
-                if (expectedNode == null || !PsdStableLayerIdUtility.IsPersistable(expectedNode.stableId)) continue;
-                if (!actualNodes.TryGetValue(expectedNode.stableId, out actualNode) ||
-                    actualNode.localFileId != expectedNode.localFileId ||
-                    !string.Equals(actualNode.lastKnownPath, expectedNode.lastKnownPath, StringComparison.Ordinal))
-                    throw new InvalidOperationException("Hierarchy Profile identity verification failed.");
+                Append(value, node.stableId);
+                Append(value, ((int)node.ownership).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Append(value, node.contentFingerprint);
+                Append(value, node.structureFingerprint);
+                Append(value, node.geometryFingerprint);
+                Append(value, node.pendingCreation ? "1" : "0");
+                Append(value, node.localFileId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Append(value, node.lastKnownPath);
             }
+            foreach (PsdHierarchyProfileGroup group in (profile.groups ?? new List<PsdHierarchyProfileGroup>())
+                         .Where(group => group != null).OrderBy(group => group.key, StringComparer.Ordinal))
+            {
+                Append(value, group.key);
+                Append(value, group.parentKey);
+                Append(value, group.displayName);
+                foreach (string member in group.stableLayerIds ?? new List<string>()) Append(value, member);
+                Append(value, group.localFileId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Append(value, group.lastKnownPath);
+            }
+            foreach (PsdHierarchyProfileRename rename in (profile.renames ?? new List<PsdHierarchyProfileRename>())
+                         .Where(rename => rename != null).OrderBy(rename => rename.stableId, StringComparer.Ordinal))
+            {
+                Append(value, rename.stableId);
+                Append(value, rename.name);
+            }
+            return value.ToString();
+        }
+
+        private static void Append(System.Text.StringBuilder target, string field)
+        {
+            field = field ?? string.Empty;
+            target.Append(field.Length).Append(':').Append(field).Append('|');
         }
 
         private static void VerifyTargetIdentity(string prefabPath, string originalGuid)

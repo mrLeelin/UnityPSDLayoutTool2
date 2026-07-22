@@ -48,13 +48,15 @@ namespace PsdLayoutTool2
                 throw new PsdPrefabIncrementalMergeException("The hierarchy Profile schema cannot be applied.");
 
             ValidateCandidateRegistry(candidateByStableId);
-            var profileStableIds = new HashSet<string>((profile.nodes ?? new List<PsdHierarchyProfileNode>())
-                .Where(node => node != null).Select(node => node.stableId), StringComparer.Ordinal);
+            var recordsByStableId = (profile.nodes ?? new List<PsdHierarchyProfileNode>())
+                .Where(node => node != null).ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            var profileStableIds = new HashSet<string>(recordsByStableId.Keys, StringComparer.Ordinal);
             string unownedCandidateId = candidateByStableId.Keys.FirstOrDefault(id => !profileStableIds.Contains(id));
             if (!string.IsNullOrEmpty(unownedCandidateId))
                 throw new PsdPrefabIncrementalMergeException(
                     "Candidate PSD layer is not classified by the hierarchy Profile: '" + unownedCandidateId + "'.");
             Dictionary<long, RectTransform> existingByLocalId = ResolveLoadedObjectsByLocalId(prefabPath, existingContents);
+            Dictionary<RectTransform, long> localIdByExisting = existingByLocalId.ToDictionary(pair => pair.Value, pair => pair.Key);
             var result = new PsdPrefabIncrementalMergeResult();
 
             // Profile identity is the sole ownership source after adoption.
@@ -62,9 +64,26 @@ namespace PsdLayoutTool2
             foreach (PsdHierarchyProfileNode record in (profile.nodes ?? new List<PsdHierarchyProfileNode>())
                          .Where(value => value != null && PsdStableLayerIdUtility.IsPersistable(value.stableId)))
             {
-                if (record.localFileId <= 0L && !record.pendingCreation)
+                if (record.ownership == PsdHierarchyNodeOwnership.Unknown)
                     throw new PsdPrefabIncrementalMergeException(
-                        "Existing Prefab adoption is ambiguous for PSD layer '" + record.stableId + "'.");
+                        "Hierarchy Profile ownership requires explicit adoption or migration for PSD layer '" + record.stableId + "'.");
+                if (record.ownership == PsdHierarchyNodeOwnership.NotEmitted) continue;
+                if (record.localFileId <= 0L && !record.pendingCreation)
+                {
+                    RectTransform candidate;
+                    if (!candidateByStableId.TryGetValue(record.stableId, out candidate))
+                        throw new PsdPrefabIncrementalMergeException(
+                            "Generated adoption candidate is missing for PSD layer '" + record.stableId + "'.");
+                    RectTransform adopted = AdoptDeterministically(
+                        candidateRoot.transform as RectTransform, existingContents.transform as RectTransform, candidate);
+                    long adoptedLocalId;
+                    if (!localIdByExisting.TryGetValue(adopted, out adoptedLocalId))
+                        throw new PsdPrefabIncrementalMergeException("Adopted object has no persistent local file ID.");
+                    record.localFileId = adoptedLocalId;
+                    record.lastKnownPath = HierarchyPath(adopted, existingContents.transform);
+                    result.generatedByStableId.Add(record.stableId, adopted);
+                    continue;
+                }
                 if (record.pendingCreation)
                 {
                     if (record.localFileId > 0L || !candidateByStableId.ContainsKey(record.stableId))
@@ -119,6 +138,95 @@ namespace PsdLayoutTool2
             result.groupsByKey.Clear();
             foreach (KeyValuePair<string, RectTransform> pair in apply.groupsByKey) result.groupsByKey.Add(pair.Key, pair.Value);
             return result;
+        }
+
+        private static RectTransform AdoptDeterministically(
+            RectTransform candidateRoot,
+            RectTransform existingRoot,
+            RectTransform candidate)
+        {
+            if (candidateRoot == null || existingRoot == null)
+                throw new PsdPrefabIncrementalMergeException("First adoption requires RectTransform roots.");
+            int[] indexPath = SiblingIndexPath(candidate, candidateRoot);
+            RectTransform exact = FollowSiblingIndexPath(existingRoot, indexPath);
+            if (exact != null && IsAdoptionEvidenceEqual(candidate, exact) && !HasProjectComponents(exact))
+                return exact;
+
+            // Names and resource references are useful diagnostics, but never
+            // sufficient when source hierarchy/sibling evidence does not agree.
+            int visualMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
+                .Where(value => value != existingRoot && !HasProjectComponents(value))
+                .Count(value => IsVisualEvidenceEqual(candidate, value));
+            throw new PsdPrefabIncrementalMergeException(visualMatches > 1
+                ? "First adoption is ambiguous: multiple same-name/resource objects match '" + candidate.name + "'."
+                : "First adoption has no unique full hierarchy match for '" + candidate.name + "'.");
+        }
+
+        private static bool IsAdoptionEvidenceEqual(RectTransform source, RectTransform target)
+        {
+            return IsVisualEvidenceEqual(source, target) &&
+                   source.GetSiblingIndex() == target.GetSiblingIndex() &&
+                   source.anchorMin == target.anchorMin && source.anchorMax == target.anchorMax &&
+                   source.pivot == target.pivot && source.anchoredPosition3D == target.anchoredPosition3D &&
+                   source.sizeDelta == target.sizeDelta && source.localRotation == target.localRotation &&
+                   source.localScale == target.localScale;
+        }
+
+        private static bool IsVisualEvidenceEqual(RectTransform source, RectTransform target)
+        {
+            if (!string.Equals(source.name, target.name, StringComparison.Ordinal) ||
+                source.gameObject.activeSelf != target.gameObject.activeSelf) return false;
+            Image sourceImage = source.GetComponent<Image>();
+            Image targetImage = target.GetComponent<Image>();
+            if ((sourceImage == null) != (targetImage == null)) return false;
+            if (sourceImage != null && (sourceImage.sprite != targetImage.sprite ||
+                                       sourceImage.material != targetImage.material ||
+                                       sourceImage.type != targetImage.type || sourceImage.color != targetImage.color)) return false;
+            TextMeshProUGUI sourceText = source.GetComponent<TextMeshProUGUI>();
+            TextMeshProUGUI targetText = target.GetComponent<TextMeshProUGUI>();
+            if ((sourceText == null) != (targetText == null)) return false;
+            return sourceText == null || (sourceText.font == targetText.font &&
+                                          sourceText.fontSharedMaterial == targetText.fontSharedMaterial &&
+                                          string.Equals(sourceText.text, targetText.text, StringComparison.Ordinal) &&
+                                          sourceText.fontStyle == targetText.fontStyle);
+        }
+
+        private static bool HasProjectComponents(RectTransform target)
+        {
+            return target.GetComponents<Component>().Any(component =>
+                !(component is RectTransform) && !(component is CanvasRenderer) &&
+                !(component is Image) && !(component is TextMeshProUGUI) &&
+                !(component is BaseMeshEffect) && !(component is AspectRatioFitter));
+        }
+
+        private static int[] SiblingIndexPath(Transform target, Transform root)
+        {
+            var indices = new Stack<int>();
+            for (Transform cursor = target; cursor != null && cursor != root; cursor = cursor.parent)
+                indices.Push(cursor.GetSiblingIndex());
+            return indices.ToArray();
+        }
+
+        private static RectTransform FollowSiblingIndexPath(RectTransform root, IEnumerable<int> indices)
+        {
+            Transform cursor = root;
+            foreach (int index in indices)
+            {
+                if (index < 0 || index >= cursor.childCount) return null;
+                cursor = cursor.GetChild(index);
+            }
+            return cursor as RectTransform;
+        }
+
+        private static string HierarchyPath(Transform target, Transform root)
+        {
+            var names = new Stack<string>();
+            for (Transform cursor = target; cursor != null; cursor = cursor.parent)
+            {
+                names.Push(cursor.name);
+                if (cursor == root) break;
+            }
+            return string.Join("/", names.ToArray());
         }
 
         private static Dictionary<long, RectTransform> ResolveLoadedObjectsByLocalId(string prefabPath, GameObject loadedRoot)
