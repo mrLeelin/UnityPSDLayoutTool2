@@ -123,6 +123,10 @@
             }
 
             texture.SetPixels32(colors);
+            // SetPixels32 updates the CPU-side pixel buffer. Editor previews
+            // render from the GPU texture, so apply the buffer before this
+            // decoded layer is handed to the PSD nine-slice editor window.
+            texture.Apply(false, false);
             return texture;
         }
 

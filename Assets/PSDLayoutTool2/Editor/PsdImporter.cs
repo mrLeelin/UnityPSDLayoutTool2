@@ -85,6 +85,13 @@
         private static Dictionary<uint, Vector4> currentNineSliceBordersByLayerId;
 
         /// <summary>
+        /// Artist-confirmed decisions saved from the PSD nine-slice editor.
+        /// They are read once from the PSD asset meta data for the active
+        /// import and take precedence over all authoring tags and XMP values.
+        /// </summary>
+        private static Dictionary<uint, PsdNineSliceOverride> currentManualNineSliceOverridesByLayerId;
+
+        /// <summary>
         /// Borders calculated from bare PSD name tags while PNGs are generated.
         /// They only live for this import run; the PSD name remains the source
         /// of truth for future incremental updates.
@@ -373,6 +380,7 @@
         public static Material TextMeshProBaseMaterial { get; set; }
 
         private static bool tmpFontFallbackWarningEmitted;
+        private static Dictionary<string, TMP_FontAsset> currentTmpFontFallbacksByPsdName;
 
         /// <summary>
         /// Gets or sets the hierarchy path of the target canvas to align generated UI under.
@@ -534,16 +542,19 @@
                 UseTargetCanvasCoordinates = false;
                 currentLayerInfos = null;
                 currentNineSliceBordersByLayerId = new Dictionary<uint, Vector4>();
+                currentManualNineSliceOverridesByLayerId = new Dictionary<uint, PsdNineSliceOverride>();
                 currentAutomaticNineSliceBordersByLayer = new Dictionary<Layer, Vector4>();
                 currentAutomaticNineSliceBordersInTargetCoordinates = new HashSet<Layer>();
                 useEmbeddedNineSliceMetadata = false;
                 tmpFontFallbackWarningEmitted = false;
+                currentTmpFontFallbacksByPsdName = new Dictionary<string, TMP_FontAsset>(StringComparer.OrdinalIgnoreCase);
                 string normalizedAssetPath = asset.Replace('\\', '/');
                 string fullPath = Path.Combine(GetFullProjectPath(), normalizedAssetPath);
 
                 PsdLogger.Step("Read PSD file: " + fullPath);
                 LogPsdFilePreflight(fullPath);
                 PsdFile psd = new PsdFile(fullPath);
+                ConfigureManualNineSliceOverrides(normalizedAssetPath);
                 CanvasSize = new Vector2(psd.Width, psd.Height);
                 TargetCanvasSize = CanvasSize;
                 PsdLogger.Info("PSD loaded. Size=" + psd.Width + "x" + psd.Height + ", layers=" + psd.Layers.Count);
@@ -3437,7 +3448,7 @@
                             out processedPng,
                             out appliedBorder,
                             out reason);
-                        if (!processed && nineSliceRule.HasExplicitBorder)
+                        if (!processed && nineSliceRule.HasExplicitBorder && !HasEnabledManualNineSliceOverride(layer))
                         {
                             PsdNineSliceNameRule fallbackRule;
                             if (PsdNineSliceNameRules.TryParse(layer.Name, out fallbackRule) &&
@@ -4065,7 +4076,7 @@
         {
             TextMeshProUGUI textUI = uiObject.AddComponent<TextMeshProUGUI>();
             textUI.text = layer.Text ?? string.Empty;
-            textUI.font = ResolveUsableTextMeshProFont();
+            textUI.font = ResolveUsableTextMeshProFont(layer);
             textUI.fontSize = Mathf.Max(1f, GetUIFontSize(layer));
             textUI.color = ApplyLayerOpacity(layer.FillColor, layer);
             textUI.enableWordWrapping = false;
@@ -4098,12 +4109,28 @@
             ApplyTextMeshProPsdBoundsFontSize(textUI, layer);
         }
 
-        private static TMP_FontAsset ResolveUsableTextMeshProFont()
+        private static TMP_FontAsset ResolveUsableTextMeshProFont(Layer layer)
         {
             TMP_FontAsset configured = TextMeshProFont;
             if (IsUsableTextMeshProFont(configured))
             {
                 return configured;
+            }
+
+            string psdFontName = layer == null ? string.Empty : layer.FontName;
+            TMP_FontAsset matched = ResolveProjectTextMeshProFont(psdFontName);
+            if (matched != null)
+            {
+                if (!tmpFontFallbackWarningEmitted)
+                {
+                    tmpFontFallbackWarningEmitted = true;
+                    PsdLogger.Warning(
+                        "Configured TMP font is unusable; matched the PSD font in the project instead. configured=" +
+                        (configured == null ? "<none>" : configured.name) + ", psd=" + psdFontName +
+                        ", matched=" + matched.name);
+                }
+
+                return matched;
             }
 
             TMP_FontAsset fallback = TMP_Settings.defaultFontAsset;
@@ -4121,8 +4148,43 @@
 
         private static bool IsUsableTextMeshProFont(TMP_FontAsset font)
         {
-            return font != null && font.atlasTexture != null && font.material != null &&
-                font.characterTable != null && font.characterTable.Count > 0;
+            return PsdTmpFontAssetPolicy.IsUsable(font);
+        }
+
+        private static TMP_FontAsset ResolveProjectTextMeshProFont(string psdFontName)
+        {
+            if (string.IsNullOrEmpty(psdFontName))
+            {
+                return null;
+            }
+
+            if (currentTmpFontFallbacksByPsdName != null &&
+                currentTmpFontFallbacksByPsdName.TryGetValue(psdFontName, out TMP_FontAsset cached))
+            {
+                return cached;
+            }
+
+            TMP_FontAsset matched = null;
+            foreach (string guid in AssetDatabase.FindAssets("t:TMP_FontAsset"))
+            {
+                TMP_FontAsset candidate = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetDatabase.GUIDToAssetPath(guid));
+                if (IsUsableTextMeshProFont(candidate) &&
+                    PsdTextFontNameMatcher.IsMatch(
+                        psdFontName,
+                        candidate.name,
+                        candidate.sourceFontFile == null ? string.Empty : candidate.sourceFontFile.name))
+                {
+                    matched = candidate;
+                    break;
+                }
+            }
+
+            if (currentTmpFontFallbacksByPsdName != null)
+            {
+                currentTmpFontFallbacksByPsdName[psdFontName] = matched;
+            }
+
+            return matched;
         }
 
         /// <summary>
@@ -4810,6 +4872,22 @@
                 return false;
             }
 
+            PsdNineSliceOverride manualOverride;
+            if (TryGetManualNineSliceOverride(layer, out manualOverride))
+            {
+                // A manual disabled decision explicitly suppresses every
+                // automatic source. An enabled decision may use a border only
+                // after the PNG processing pass registered the matching crop.
+                if (!manualOverride.Enabled)
+                {
+                    return false;
+                }
+
+                return currentAutomaticNineSliceBordersByLayer != null &&
+                    currentAutomaticNineSliceBordersByLayer.TryGetValue(layer, out border) &&
+                    IsNineSliceBorderValid(layer, border, "manual PSD editor");
+            }
+
             if (currentAutomaticNineSliceBordersByLayer != null &&
                 currentAutomaticNineSliceBordersByLayer.TryGetValue(layer, out border))
             {
@@ -4862,6 +4940,18 @@
         private static bool TryGetNineSliceConversionRule(Layer layer, out PsdNineSliceNameRule rule)
         {
             rule = null;
+            PsdNineSliceOverride manualOverride;
+            if (TryGetManualNineSliceOverride(layer, out manualOverride))
+            {
+                if (!manualOverride.Enabled)
+                {
+                    return false;
+                }
+
+                rule = new PsdNineSliceNameRule(PsdNineSliceMode.NineSlice, manualOverride.Border);
+                return true;
+            }
+
             // A PSD may retain an older XMP border that was inferred by a previous
             // exporter version.  A current authoring name is the explicit intent
             // for this import: its numeric form supplies the border directly and
@@ -4886,6 +4976,40 @@
             }
 
             return false;
+        }
+
+        private static void ConfigureManualNineSliceOverrides(string assetPath)
+        {
+            if (currentManualNineSliceOverridesByLayerId == null)
+            {
+                currentManualNineSliceOverridesByLayerId = new Dictionary<uint, PsdNineSliceOverride>();
+            }
+
+            currentManualNineSliceOverridesByLayerId.Clear();
+            AssetImporter importer = AssetImporter.GetAtPath(assetPath);
+            if (importer == null)
+            {
+                return;
+            }
+
+            currentManualNineSliceOverridesByLayerId = PsdNineSliceOverrideStore.ReadAll(importer.userData);
+            if (currentManualNineSliceOverridesByLayerId.Count > 0)
+            {
+                PsdLogger.Info("Loaded " + currentManualNineSliceOverridesByLayerId.Count + " manual PSD 9-slice override(s) from .meta userData.");
+            }
+        }
+
+        private static bool TryGetManualNineSliceOverride(Layer layer, out PsdNineSliceOverride value)
+        {
+            value = null;
+            return layer != null && layer.Id != 0U && currentManualNineSliceOverridesByLayerId != null &&
+                currentManualNineSliceOverridesByLayerId.TryGetValue(layer.Id, out value);
+        }
+
+        private static bool HasEnabledManualNineSliceOverride(Layer layer)
+        {
+            PsdNineSliceOverride value;
+            return TryGetManualNineSliceOverride(layer, out value) && value.Enabled;
         }
 
         private static void RegisterAutomaticNineSliceBorder(Layer layer, Vector4 border, bool isInTargetCoordinates)

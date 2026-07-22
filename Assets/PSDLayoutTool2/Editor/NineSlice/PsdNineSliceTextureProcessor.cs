@@ -34,6 +34,53 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
+        /// Computes a candidate from an in-memory PSD layer preview without
+        /// importing or writing an intermediate PNG asset.
+        /// </summary>
+        public static bool TryAnalyze(Texture2D texture, out PsdNineSliceInference inference, out string error)
+        {
+            inference = null;
+            error = string.Empty;
+            if (texture == null)
+            {
+                error = "The selected PSD layer has no preview texture.";
+                return false;
+            }
+
+            try
+            {
+                Color32[] colors = texture.GetPixels32();
+                byte[] pixels = new byte[colors.Length * 4];
+                for (int y = 0; y < texture.height; y++)
+                {
+                    int unityY = texture.height - 1 - y;
+                    for (int x = 0; x < texture.width; x++)
+                    {
+                        Color32 color = colors[(unityY * texture.width) + x];
+                        int offset = ((y * texture.width) + x) * 4;
+                        pixels[offset] = color.r;
+                        pixels[offset + 1] = color.g;
+                        pixels[offset + 2] = color.b;
+                        pixels[offset + 3] = color.a;
+                    }
+                }
+
+                if (!PsdNineSliceAnalyzer.TryInfer(new PsdNineSliceRaster(texture.width, texture.height, pixels), out inference))
+                {
+                    error = "The layer does not contain enough visible pixel structure for a safe 9-slice candidate.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = "Unable to analyze PSD layer pixels: " + exception.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Crops a confirmed source PNG and stores its reusable recipe in the
         /// TextureImporter's userData. The caller is responsible for reimporting.
         /// </summary>
