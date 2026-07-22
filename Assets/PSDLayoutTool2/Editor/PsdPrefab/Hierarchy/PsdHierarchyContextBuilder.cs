@@ -17,13 +17,20 @@ namespace PsdLayoutTool2
         public static PsdHierarchyRequest Build(
             PsdPrefabDocumentModel document,
             IEnumerable<PsdHierarchyPrefabNodeMetadata> prefabHierarchy,
-            IEnumerable<PsdHierarchyPreviewReference> previews = null,
-            string sourcePsdGuid = "")
+            string sourcePsdGuid,
+            IEnumerable<PsdHierarchyPreviewReference> previews = null)
         {
             if (document == null)
             {
                 throw new ArgumentNullException("document");
             }
+
+            if (string.IsNullOrWhiteSpace(sourcePsdGuid))
+            {
+                throw new ArgumentException("Source PSD GUID is required.", "sourcePsdGuid");
+            }
+
+            EnsureLength(sourcePsdGuid, PsdHierarchyContractLimits.MaxSourceGuidLength, "source PSD GUID");
 
             List<PsdPrefabNodeModel> sourceNodes = document.nodes ?? new List<PsdPrefabNodeModel>();
             if (sourceNodes.Count > PsdHierarchyContractLimits.MaxContextNodes)
@@ -38,7 +45,7 @@ namespace PsdLayoutTool2
             var request = new PsdHierarchyRequest
             {
                 schemaVersion = PsdHierarchyRequest.CurrentSchemaVersion,
-                sourcePsdGuid = sourcePsdGuid ?? string.Empty,
+                sourcePsdGuid = sourcePsdGuid,
                 sourceFingerprint = document.sourceFingerprint ?? string.Empty,
                 contentFingerprint = ComputeDocumentFacet(sourceNodes, PsdHierarchyFingerprints.Content, null),
                 structureFingerprint = ComputeDocumentFacet(sourceNodes, PsdHierarchyFingerprints.Structure, null),
@@ -52,7 +59,6 @@ namespace PsdLayoutTool2
                 previews = previewList
             };
 
-            EnsureLength(request.sourcePsdGuid, PsdHierarchyContractLimits.MaxSourceGuidLength, "source PSD GUID");
             EnsureLength(request.sourceFingerprint, PsdHierarchyContractLimits.MaxFingerprintLength, "source fingerprint");
 
             foreach (PsdPrefabNodeModel source in sourceNodes)

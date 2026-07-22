@@ -10,6 +10,8 @@ namespace PsdLayoutTool2.Tests
 
     public sealed class PsdHierarchyPlanTests
     {
+        private const string SourcePsdGuid = "psd-guid-123";
+
         [Test]
         public void ValidStrictPlanParsesAndValidates()
         {
@@ -230,7 +232,7 @@ namespace PsdLayoutTool2.Tests
                 }
             };
 
-            PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(document, prefab, null, "psd-guid-123");
+            PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(document, prefab, SourcePsdGuid);
             string json = PsdHierarchyPlanJson.SerializeRequest(request);
 
             Assert.That(request.nodes[0].rectangle.width, Is.EqualTo(30));
@@ -239,6 +241,30 @@ namespace PsdLayoutTool2.Tests
             Assert.That(json, Does.Not.Contain("texture"));
             Assert.That(json, Does.Not.Contain("command"));
             Assert.That(json, Does.Not.Contain("write"));
+        }
+
+        [Test]
+        public void ContextBuilderProducesImmediatelySerializableContract()
+        {
+            PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(
+                DocumentModel(1),
+                new[] { PrefabNode("101", false, false) },
+                SourcePsdGuid);
+
+            Assert.That(request.sourcePsdGuid, Is.EqualTo(SourcePsdGuid));
+            Assert.DoesNotThrow(() => PsdHierarchyPlanJson.SerializeRequest(request));
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("   ")]
+        [TestCase("\t\r\n")]
+        public void ContextBuilderRejectsMissingOrWhitespaceSourcePsdGuid(string sourcePsdGuid)
+        {
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(
+                DocumentModel(0),
+                new PsdHierarchyPrefabNodeMetadata[0],
+                sourcePsdGuid));
         }
 
         [Test]
@@ -251,7 +277,7 @@ namespace PsdLayoutTool2.Tests
                 PrefabNode("101", true, false)
             };
 
-            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(document, prefab));
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(document, prefab, SourcePsdGuid));
         }
 
         [Test]
@@ -264,7 +290,7 @@ namespace PsdLayoutTool2.Tests
                 PrefabNode("101", false, true)
             };
 
-            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(document, prefab));
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(document, prefab, SourcePsdGuid));
         }
 
         [Test]
@@ -401,13 +427,13 @@ namespace PsdLayoutTool2.Tests
         public void ContextNodeAndPrefabQuotasAcceptLimitsAndRejectNextItems()
         {
             Assert.DoesNotThrow(() => PsdHierarchyContextBuilder.Build(
-                DocumentModel(PsdHierarchyContractLimits.MaxContextNodes), new PsdHierarchyPrefabNodeMetadata[0]));
+                DocumentModel(PsdHierarchyContractLimits.MaxContextNodes), new PsdHierarchyPrefabNodeMetadata[0], SourcePsdGuid));
             Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(
-                DocumentModel(PsdHierarchyContractLimits.MaxContextNodes + 1), new PsdHierarchyPrefabNodeMetadata[0]));
+                DocumentModel(PsdHierarchyContractLimits.MaxContextNodes + 1), new PsdHierarchyPrefabNodeMetadata[0], SourcePsdGuid));
 
             PsdPrefabDocumentModel empty = DocumentModel(0);
-            Assert.DoesNotThrow(() => PsdHierarchyContextBuilder.Build(empty, BuildPrefabNodes(PsdHierarchyContractLimits.MaxPrefabMetadataNodes)));
-            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(empty, BuildPrefabNodes(PsdHierarchyContractLimits.MaxPrefabMetadataNodes + 1)));
+            Assert.DoesNotThrow(() => PsdHierarchyContextBuilder.Build(empty, BuildPrefabNodes(PsdHierarchyContractLimits.MaxPrefabMetadataNodes), SourcePsdGuid));
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(empty, BuildPrefabNodes(PsdHierarchyContractLimits.MaxPrefabMetadataNodes + 1), SourcePsdGuid));
         }
 
         [Test]
@@ -416,15 +442,15 @@ namespace PsdLayoutTool2.Tests
             PsdHierarchyPrefabNodeMetadata prefab = PrefabNode("101", false, false);
             prefab.hierarchyPath = new string('p', PsdHierarchyContractLimits.MaxHierarchyPathLength);
             prefab.componentTypes = EnumerableStrings(PsdHierarchyContractLimits.MaxComponentTypesPerNode, "C");
-            Assert.DoesNotThrow(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { prefab },
+            Assert.DoesNotThrow(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { prefab }, SourcePsdGuid,
                 BuildPreviews(PsdHierarchyContractLimits.MaxPreviews)));
 
             prefab.hierarchyPath += "p";
-            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { prefab }));
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { prefab }, SourcePsdGuid));
             prefab.hierarchyPath = "Root/Node";
             prefab.componentTypes.Add("Overflow");
-            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { prefab }));
-            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { PrefabNode("101", false, false) },
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { prefab }, SourcePsdGuid));
+            Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(DocumentModel(1), new[] { PrefabNode("101", false, false) }, SourcePsdGuid,
                 BuildPreviews(PsdHierarchyContractLimits.MaxPreviews + 1)));
         }
 
@@ -520,12 +546,14 @@ namespace PsdLayoutTool2.Tests
             Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(
                 DocumentModel(0),
                 NullSequence<PsdHierarchyPrefabNodeMetadata>(PsdHierarchyContractLimits.MaxPrefabMetadataNodes + 1,
-                    () => prefabMoves++)));
+                    () => prefabMoves++),
+                SourcePsdGuid));
             Assert.That(prefabMoves, Is.EqualTo(PsdHierarchyContractLimits.MaxPrefabMetadataNodes + 1));
 
             Assert.Throws<ArgumentException>(() => PsdHierarchyContextBuilder.Build(
                 DocumentModel(0),
                 new PsdHierarchyPrefabNodeMetadata[0],
+                SourcePsdGuid,
                 NullSequence<PsdHierarchyPreviewReference>(PsdHierarchyContractLimits.MaxPreviews + 1,
                     () => previewMoves++)));
             Assert.That(previewMoves, Is.EqualTo(PsdHierarchyContractLimits.MaxPreviews + 1));
