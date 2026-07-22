@@ -33,18 +33,126 @@ namespace PsdLayoutTool2
                 Fail("Unsupported request schema version.");
             }
 
-            if (string.IsNullOrEmpty(request.sourceFingerprint) ||
-                !string.Equals(plan.sourceFingerprint, request.sourceFingerprint, StringComparison.Ordinal))
+            ValidateStructuredQuotas(plan, request);
+
+            PsdHierarchyPlanFingerprintStatus fingerprintStatus = EvaluateFingerprints(plan, request);
+            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresReplan)
             {
-                Fail("Plan source fingerprint does not match the current PSD context.");
+                Fail("Plan structure fingerprint does not match the current PSD context and requires replanning.");
+            }
+
+            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation)
+            {
+                Fail("Plan geometry fingerprint changed and requires geometry validation before apply.");
             }
 
             Dictionary<string, PsdHierarchyRequestNode> nodes = BuildNodeIndex(request.nodes);
+            ApplyPrefabProtectionMetadata(nodes, request.currentPrefabHierarchy);
             List<PsdHierarchyPlanGroup> groups = plan.groups ?? new List<PsdHierarchyPlanGroup>();
             Dictionary<string, PsdHierarchyPlanGroup> groupsByKey = BuildGroupIndex(groups);
             ValidateGroupParents(groupsByKey);
             ValidateMembership(groups, nodes);
+            ValidateDescendantClosures(groupsByKey, nodes);
             ValidateRenames(plan.renames ?? new List<PsdHierarchyPlanRename>(), nodes);
+        }
+
+        public static PsdHierarchyPlanFingerprintStatus EvaluateFingerprints(
+            PsdHierarchyPlan plan,
+            PsdHierarchyRequest request)
+        {
+            if (plan == null)
+            {
+                throw new ArgumentNullException("plan");
+            }
+
+            if (request == null)
+            {
+                throw new ArgumentNullException("request");
+            }
+
+            if (string.IsNullOrEmpty(plan.structureFingerprint) ||
+                string.IsNullOrEmpty(request.structureFingerprint) ||
+                !string.Equals(plan.structureFingerprint, request.structureFingerprint, StringComparison.Ordinal))
+            {
+                return PsdHierarchyPlanFingerprintStatus.RequiresReplan;
+            }
+
+            if (string.IsNullOrEmpty(plan.geometryFingerprint) ||
+                string.IsNullOrEmpty(request.geometryFingerprint) ||
+                !string.Equals(plan.geometryFingerprint, request.geometryFingerprint, StringComparison.Ordinal))
+            {
+                return PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation;
+            }
+
+            // Content deliberately does not participate in hierarchy staleness.
+            // A later import may replace text or pixels while preserving structure.
+            return PsdHierarchyPlanFingerprintStatus.Valid;
+        }
+
+        private static void ValidateStructuredQuotas(PsdHierarchyPlan plan, PsdHierarchyRequest request)
+        {
+            List<PsdHierarchyPlanGroup> groups = plan.groups ?? new List<PsdHierarchyPlanGroup>();
+            List<PsdHierarchyPlanRename> renames = plan.renames ?? new List<PsdHierarchyPlanRename>();
+            List<PsdHierarchyRequestNode> nodes = request.nodes ?? new List<PsdHierarchyRequestNode>();
+            List<PsdHierarchyPrefabNodeMetadata> prefab = request.currentPrefabHierarchy ??
+                                                           new List<PsdHierarchyPrefabNodeMetadata>();
+            List<PsdHierarchyPreviewReference> previews = request.previews ?? new List<PsdHierarchyPreviewReference>();
+
+            if (groups.Count > PsdHierarchyContractLimits.MaxGroups)
+            {
+                Fail("Plan exceeds the group limit.");
+            }
+
+            if (renames.Count > PsdHierarchyContractLimits.MaxRenames)
+            {
+                Fail("Plan exceeds the rename limit.");
+            }
+
+            if (nodes.Count > PsdHierarchyContractLimits.MaxContextNodes)
+            {
+                Fail("Request exceeds the context node limit.");
+            }
+
+            if (prefab.Count > PsdHierarchyContractLimits.MaxPrefabMetadataNodes)
+            {
+                Fail("Request exceeds the Prefab metadata node limit.");
+            }
+
+            if (previews.Count > PsdHierarchyContractLimits.MaxPreviews)
+            {
+                Fail("Request exceeds the preview limit.");
+            }
+
+            int totalMemberships = 0;
+            foreach (PsdHierarchyPlanGroup group in groups)
+            {
+                int memberCount = group == null || group.memberStableIds == null ? 0 : group.memberStableIds.Count;
+                if (memberCount > PsdHierarchyContractLimits.MaxMembersPerGroup)
+                {
+                    Fail("Plan group exceeds the member limit.");
+                }
+
+                totalMemberships += memberCount;
+                if (totalMemberships > PsdHierarchyContractLimits.MaxTotalMemberships)
+                {
+                    Fail("Plan exceeds the total membership limit.");
+                }
+            }
+
+            foreach (PsdHierarchyPrefabNodeMetadata metadata in prefab)
+            {
+                if (metadata != null && metadata.componentTypes != null &&
+                    metadata.componentTypes.Count > PsdHierarchyContractLimits.MaxComponentTypesPerNode)
+                {
+                    Fail("Request Prefab metadata exceeds the component type limit.");
+                }
+
+                if (metadata != null && (metadata.hierarchyPath ?? string.Empty).Length >
+                    PsdHierarchyContractLimits.MaxHierarchyPathLength)
+                {
+                    Fail("Request Prefab hierarchy path exceeds the length limit.");
+                }
+            }
         }
 
         private static Dictionary<string, PsdHierarchyRequestNode> BuildNodeIndex(
@@ -58,13 +166,68 @@ namespace PsdLayoutTool2
                     Fail("Request contains a node without a stable ID.");
                 }
 
-                if (!result.TryAdd(node.stableId, node))
+                if (!result.TryAdd(node.stableId, CloneNode(node)))
                 {
                     Fail("Request contains duplicate stable ID '" + node.stableId + "'.");
                 }
             }
 
             return result;
+        }
+
+        private static PsdHierarchyRequestNode CloneNode(PsdHierarchyRequestNode source)
+        {
+            return new PsdHierarchyRequestNode
+            {
+                stableId = source.stableId,
+                originalName = source.originalName,
+                kind = source.kind,
+                parentStableId = source.parentStableId,
+                siblingIndex = source.siblingIndex,
+                rectangle = source.rectangle,
+                hasProjectComponents = source.hasProjectComponents,
+                isProtectedBoundary = source.isProtectedBoundary,
+                protectedBoundaryStableId = source.protectedBoundaryStableId
+            };
+        }
+
+        private static void ApplyPrefabProtectionMetadata(
+            Dictionary<string, PsdHierarchyRequestNode> nodes,
+            IEnumerable<PsdHierarchyPrefabNodeMetadata> source)
+        {
+            var metadataByStableId = new Dictionary<string, PsdHierarchyPrefabNodeMetadata>(StringComparer.Ordinal);
+            int count = 0;
+            foreach (PsdHierarchyPrefabNodeMetadata metadata in source ?? Enumerable.Empty<PsdHierarchyPrefabNodeMetadata>())
+            {
+                count++;
+                if (count > PsdHierarchyContractLimits.MaxPrefabMetadataNodes)
+                {
+                    Fail("Request exceeds the Prefab metadata node limit.");
+                }
+
+                if (metadata == null || string.IsNullOrEmpty(metadata.stableId))
+                {
+                    continue;
+                }
+
+                if (!metadataByStableId.TryAdd(metadata.stableId, metadata))
+                {
+                    Fail("Request contains duplicate Prefab metadata stable ID '" + metadata.stableId + "'.");
+                }
+            }
+
+            foreach (KeyValuePair<string, PsdHierarchyRequestNode> pair in nodes)
+            {
+                PsdHierarchyPrefabNodeMetadata metadata;
+                if (!metadataByStableId.TryGetValue(pair.Key, out metadata))
+                {
+                    continue;
+                }
+
+                pair.Value.hasProjectComponents = metadata.hasProjectComponents;
+                pair.Value.isProtectedBoundary = metadata.isProtectedBoundary;
+                pair.Value.protectedBoundaryStableId = metadata.protectedBoundaryStableId ?? string.Empty;
+            }
         }
 
         private static Dictionary<string, PsdHierarchyPlanGroup> BuildGroupIndex(
@@ -174,6 +337,56 @@ namespace PsdLayoutTool2
             }
         }
 
+        private static void ValidateDescendantClosures(
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, PsdHierarchyRequestNode> nodes)
+        {
+            var childrenByParent = groups.Keys.ToDictionary(
+                key => key,
+                key => new List<string>(),
+                StringComparer.Ordinal);
+            foreach (PsdHierarchyPlanGroup group in groups.Values)
+            {
+                if (!string.IsNullOrEmpty(group.parentKey))
+                {
+                    childrenByParent[group.parentKey].Add(group.key);
+                }
+            }
+
+            var closureByGroup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (string groupKey in groups.Keys)
+            {
+                HashSet<string> closure = BuildDescendantClosure(groupKey, groups, childrenByParent, closureByGroup);
+                List<PsdHierarchyRequestNode> closureNodes = closure.Select(id => nodes[id]).ToList();
+                ValidateSameCurrentParent(groupKey + " descendant closure", closureNodes);
+                ValidateProtectedBoundary(groupKey + " descendant closure", closureNodes);
+                ValidateContiguousSiblings(groupKey + " descendant closure", closureNodes);
+            }
+        }
+
+        private static HashSet<string> BuildDescendantClosure(
+            string groupKey,
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, List<string>> childrenByParent,
+            Dictionary<string, HashSet<string>> cache)
+        {
+            HashSet<string> cached;
+            if (cache.TryGetValue(groupKey, out cached))
+            {
+                return cached;
+            }
+
+            // Cycle validation has already completed before this recursion.
+            var result = new HashSet<string>(groups[groupKey].memberStableIds, StringComparer.Ordinal);
+            foreach (string childKey in childrenByParent[groupKey])
+            {
+                result.UnionWith(BuildDescendantClosure(childKey, groups, childrenByParent, cache));
+            }
+
+            cache[groupKey] = result;
+            return result;
+        }
+
         private static void ValidateSameCurrentParent(string groupKey, IList<PsdHierarchyRequestNode> nodes)
         {
             string parentId = nodes[0].parentStableId ?? string.Empty;
@@ -186,7 +399,7 @@ namespace PsdLayoutTool2
         private static void ValidateProtectedBoundary(string groupKey, IList<PsdHierarchyRequestNode> nodes)
         {
             string boundaryId = nodes[0].protectedBoundaryStableId ?? string.Empty;
-            if (nodes.Any(node => node.isProtectedBoundary ||
+            if (nodes.Any(node => node.isProtectedBoundary || node.hasProjectComponents ||
                                   !string.Equals(node.protectedBoundaryStableId ?? string.Empty, boundaryId, StringComparison.Ordinal)))
             {
                 Fail("Group '" + groupKey + "' crosses a protected Prefab boundary.");

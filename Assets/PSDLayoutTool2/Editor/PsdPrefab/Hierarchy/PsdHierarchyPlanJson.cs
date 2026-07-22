@@ -5,6 +5,7 @@ namespace PsdLayoutTool2
     using System.Globalization;
     using System.IO;
     using System.Linq;
+    using System.Text;
     using Newtonsoft.Json;
     using Newtonsoft.Json.Linq;
 
@@ -16,7 +17,8 @@ namespace PsdLayoutTool2
     public static class PsdHierarchyPlanJson
     {
         private static readonly HashSet<string> PlanProperties = Allowed(
-            "schemaVersion", "sourceFingerprint", "groups", "renames");
+            "schemaVersion", "sourceFingerprint", "contentFingerprint", "structureFingerprint", "geometryFingerprint",
+            "groups", "renames");
         private static readonly HashSet<string> GroupProperties = Allowed(
             "key", "parentKey", "memberStableIds", "displayName", "evidence", "confidence");
         private static readonly HashSet<string> RenameProperties = Allowed(
@@ -27,6 +29,16 @@ namespace PsdLayoutTool2
             if (string.IsNullOrWhiteSpace(json))
             {
                 throw new PsdHierarchyPlanFormatException("Hierarchy plan JSON is empty.");
+            }
+
+            if (json.Length > PsdHierarchyContractLimits.MaxJsonCharacters)
+            {
+                throw new PsdHierarchyPlanFormatException("Hierarchy plan exceeds the JSON character limit.");
+            }
+
+            if (Encoding.UTF8.GetByteCount(json) > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
+            {
+                throw new PsdHierarchyPlanFormatException("Hierarchy plan exceeds the UTF-8 byte limit.");
             }
 
             try
@@ -59,35 +71,46 @@ namespace PsdLayoutTool2
                 var plan = new PsdHierarchyPlan
                 {
                     schemaVersion = schemaVersion,
-                    sourceFingerprint = RequireString(root, "sourceFingerprint", "plan")
+                    sourceFingerprint = RequireString(root, "sourceFingerprint", "plan", PsdHierarchyContractLimits.MaxFingerprintLength),
+                    contentFingerprint = RequireString(root, "contentFingerprint", "plan", PsdHierarchyContractLimits.MaxFingerprintLength),
+                    structureFingerprint = RequireString(root, "structureFingerprint", "plan", PsdHierarchyContractLimits.MaxFingerprintLength),
+                    geometryFingerprint = RequireString(root, "geometryFingerprint", "plan", PsdHierarchyContractLimits.MaxFingerprintLength)
                 };
 
                 JArray groups = RequireArray(root, "groups", "plan");
+                RequireCount(groups.Count, PsdHierarchyContractLimits.MaxGroups, "Plan exceeds the group limit.");
+                int totalMemberships = 0;
                 for (int index = 0; index < groups.Count; index++)
                 {
                     JObject group = RequireObject(groups[index], "groups[" + index + "]");
                     RequireAllowedProperties(group, GroupProperties, "groups[" + index + "]");
+                    List<string> members = RequireStringArray(group, "memberStableIds", "groups[" + index + "]",
+                        PsdHierarchyContractLimits.MaxMembersPerGroup, PsdHierarchyContractLimits.MaxIdentifierLength);
+                    totalMemberships += members.Count;
+                    RequireCount(totalMemberships, PsdHierarchyContractLimits.MaxTotalMemberships,
+                        "Plan exceeds the total membership limit.");
                     plan.groups.Add(new PsdHierarchyPlanGroup
                     {
-                        key = RequireString(group, "key", "groups[" + index + "]"),
-                        parentKey = RequireString(group, "parentKey", "groups[" + index + "]"),
-                        memberStableIds = RequireStringArray(group, "memberStableIds", "groups[" + index + "]"),
-                        displayName = RequireString(group, "displayName", "groups[" + index + "]"),
-                        evidence = RequireString(group, "evidence", "groups[" + index + "]"),
+                        key = RequireString(group, "key", "groups[" + index + "]", PsdHierarchyContractLimits.MaxIdentifierLength),
+                        parentKey = RequireString(group, "parentKey", "groups[" + index + "]", PsdHierarchyContractLimits.MaxIdentifierLength),
+                        memberStableIds = members,
+                        displayName = RequireString(group, "displayName", "groups[" + index + "]", PsdHierarchyContractLimits.MaxNameLength),
+                        evidence = RequireString(group, "evidence", "groups[" + index + "]", PsdHierarchyContractLimits.MaxEvidenceLength),
                         confidence = RequireFiniteNumber(group, "confidence", "groups[" + index + "]")
                     });
                 }
 
                 JArray renames = RequireArray(root, "renames", "plan");
+                RequireCount(renames.Count, PsdHierarchyContractLimits.MaxRenames, "Plan exceeds the rename limit.");
                 for (int index = 0; index < renames.Count; index++)
                 {
                     JObject rename = RequireObject(renames[index], "renames[" + index + "]");
                     RequireAllowedProperties(rename, RenameProperties, "renames[" + index + "]");
                     plan.renames.Add(new PsdHierarchyPlanRename
                     {
-                        stableId = RequireString(rename, "stableId", "renames[" + index + "]"),
-                        name = RequireString(rename, "name", "renames[" + index + "]"),
-                        evidence = RequireString(rename, "evidence", "renames[" + index + "]"),
+                        stableId = RequireString(rename, "stableId", "renames[" + index + "]", PsdHierarchyContractLimits.MaxIdentifierLength),
+                        name = RequireString(rename, "name", "renames[" + index + "]", PsdHierarchyContractLimits.MaxNameLength),
+                        evidence = RequireString(rename, "evidence", "renames[" + index + "]", PsdHierarchyContractLimits.MaxEvidenceLength),
                         confidence = RequireFiniteNumber(rename, "confidence", "renames[" + index + "]")
                     });
                 }
@@ -160,7 +183,7 @@ namespace PsdLayoutTool2
             return (JArray)token;
         }
 
-        private static string RequireString(JObject owner, string name, string path)
+        private static string RequireString(JObject owner, string name, string path, int maximumLength)
         {
             JToken token;
             if (!owner.TryGetValue(name, StringComparison.Ordinal, out token) || token.Type != JTokenType.String)
@@ -168,7 +191,13 @@ namespace PsdLayoutTool2
                 throw new PsdHierarchyPlanFormatException(path + "." + name + " must be a string.");
             }
 
-            return token.Value<string>();
+            string value = token.Value<string>();
+            if (value.Length > maximumLength)
+            {
+                throw new PsdHierarchyPlanFormatException(path + "." + name + " exceeds the allowed length.");
+            }
+
+            return value;
         }
 
         private static int RequireInteger(JObject owner, string name, string path)
@@ -211,9 +240,15 @@ namespace PsdLayoutTool2
             return value;
         }
 
-        private static List<string> RequireStringArray(JObject owner, string name, string path)
+        private static List<string> RequireStringArray(
+            JObject owner,
+            string name,
+            string path,
+            int maximumCount,
+            int maximumStringLength)
         {
             JArray array = RequireArray(owner, name, path);
+            RequireCount(array.Count, maximumCount, path + "." + name + " exceeds the item limit.");
             var values = new List<string>(array.Count);
             for (int index = 0; index < array.Count; index++)
             {
@@ -222,10 +257,24 @@ namespace PsdLayoutTool2
                     throw new PsdHierarchyPlanFormatException(path + "." + name + "[" + index + "] must be a string.");
                 }
 
-                values.Add(array[index].Value<string>());
+                string value = array[index].Value<string>();
+                if (value.Length > maximumStringLength)
+                {
+                    throw new PsdHierarchyPlanFormatException(path + "." + name + "[" + index + "] exceeds the allowed length.");
+                }
+
+                values.Add(value);
             }
 
             return values;
+        }
+
+        private static void RequireCount(int count, int maximum, string message)
+        {
+            if (count > maximum)
+            {
+                throw new PsdHierarchyPlanFormatException(message);
+            }
         }
     }
 }
