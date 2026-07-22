@@ -668,6 +668,32 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task ReturnedOwnedParentWithSameKeyKeepsOmittedDependentChain()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103", "104");
+            PsdHierarchyPlan baseline = Baseline(request);
+            PsdHierarchyPlanGroup grandchild = Group("grandchild", "103");
+            grandchild.parentKey = "child";
+            PsdHierarchyPlanGroup child = Group("child", "102");
+            child.parentKey = "parent";
+            baseline.groups.Add(grandchild);
+            baseline.groups.Add(child);
+            baseline.groups.Add(Group("parent", "101"));
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanWithGroup(run.request, "parent", "", "101"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, Invalidated("101"), fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == "child").parentKey, Is.EqualTo("parent"));
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == "grandchild").parentKey, Is.EqualTo("child"));
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+        }
+
+        [Test]
         public async Task MissingIdsRemainPendingUntilExplicitPreviewConfirmation()
         {
             PsdHierarchyRequest request = Request("101");

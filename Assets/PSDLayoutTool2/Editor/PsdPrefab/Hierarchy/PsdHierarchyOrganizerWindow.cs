@@ -384,8 +384,10 @@ namespace PsdLayoutTool2
             replaceAuthorizedKeys.UnionWith((runRequest.structuralDependentGroupKeys ?? new List<string>())
                 .Where(returnedKeys.Contains));
 
+            var removedOwnedKeys = new HashSet<string>(scopeOwnedKeys, StringComparer.Ordinal);
+            removedOwnedKeys.ExceptWith(returnedKeys);
             var removedParentByKey = target.groups
-                .Where(group => group != null && scopeOwnedKeys.Contains(group.key))
+                .Where(group => group != null && removedOwnedKeys.Contains(group.key))
                 .ToDictionary(group => group.key, group => group.parentKey ?? string.Empty, StringComparer.Ordinal);
             target.groups.RemoveAll(group => group != null && replaceAuthorizedKeys.Contains(group.key));
 
