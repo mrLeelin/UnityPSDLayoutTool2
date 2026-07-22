@@ -26,6 +26,7 @@ namespace PsdLayoutTool2
         public List<string> modifiableStableIds = new List<string>();
         public List<string> contextStableIds = new List<string>();
         public List<string> modifiableGroupKeys = new List<string>();
+        public List<string> existingGroupKeys = new List<string>();
         public List<PsdHierarchyPlanGroup> baselineGroups = new List<PsdHierarchyPlanGroup>();
     }
 
@@ -63,7 +64,9 @@ namespace PsdLayoutTool2
         public bool timedOut;
         public bool wasKilled;
         public bool outputLimitExceeded;
-        public bool processTreeKilled;
+        // Tree-aware termination reported success. Cleanup must additionally
+        // require waitForExitSucceeded; parent exit alone is not confirmation.
+        public bool processTreeKillConfirmed;
         public bool waitForExitSucceeded;
     }
 
@@ -71,16 +74,16 @@ namespace PsdLayoutTool2
     {
         public PsdHierarchyProcessCancelledException(
             string message,
-            bool processTreeKilled,
+            bool processTreeKillConfirmed,
             bool waitForExitSucceeded,
             CancellationToken cancellationToken)
             : base(message, cancellationToken)
         {
-            this.processTreeKilled = processTreeKilled;
+            this.processTreeKillConfirmed = processTreeKillConfirmed;
             this.waitForExitSucceeded = waitForExitSucceeded;
         }
 
-        public bool processTreeKilled { get; private set; }
+        public bool processTreeKillConfirmed { get; private set; }
         public bool waitForExitSucceeded { get; private set; }
     }
 

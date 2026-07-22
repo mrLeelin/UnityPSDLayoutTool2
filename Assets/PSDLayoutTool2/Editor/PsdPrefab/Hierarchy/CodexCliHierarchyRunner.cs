@@ -196,7 +196,7 @@ namespace PsdLayoutTool2
                 }
                 catch (PsdHierarchyProcessCancelledException exception)
                 {
-                    if (exception.processTreeKilled && exception.waitForExitSucceeded)
+                    if (exception.processTreeKillConfirmed && exception.waitForExitSucceeded)
                     {
                         DeletePackage(packagePath);
                         throw;
@@ -316,6 +316,7 @@ namespace PsdLayoutTool2
                 modifiableStableIds = request.modifiableStableIds ?? new List<string>(),
                 contextStableIds = request.contextStableIds ?? new List<string>(),
                 modifiableGroupKeys = request.modifiableGroupKeys ?? new List<string>(),
+                existingGroupKeys = request.existingGroupKeys ?? new List<string>(),
                 baselineGroups = request.baselineGroups ?? new List<PsdHierarchyPlanGroup>()
             }, Formatting.None);
         }
@@ -423,7 +424,7 @@ namespace PsdLayoutTool2
                             {
                                 outputLimitExceeded = true,
                                 wasKilled = termination.killRequested,
-                                processTreeKilled = termination.processTreeKillRequested,
+                                processTreeKillConfirmed = termination.processTreeKillConfirmed,
                                 waitForExitSucceeded = termination.waitForExitSucceeded,
                                 error = exception.Message
                             };
@@ -436,7 +437,7 @@ namespace PsdLayoutTool2
                             {
                                 throw new PsdHierarchyProcessCancelledException(
                                     "Codex process cancelled after termination request.",
-                                    termination.processTreeKillRequested,
+                                    termination.processTreeKillConfirmed,
                                     termination.waitForExitSucceeded,
                                     cancellationToken);
                             }
@@ -445,7 +446,7 @@ namespace PsdLayoutTool2
                             {
                                 timedOut = true,
                                 wasKilled = termination.killRequested,
-                                processTreeKilled = termination.processTreeKillRequested,
+                                processTreeKillConfirmed = termination.processTreeKillConfirmed,
                                 waitForExitSucceeded = termination.waitForExitSucceeded,
                                 error = "Process timeout."
                             };
@@ -531,7 +532,7 @@ namespace PsdLayoutTool2
                 if (treeKill != null)
                 {
                     treeKill.Invoke(process, new object[] { true });
-                    result.processTreeKillRequested = true;
+                    result.processTreeKillConfirmed = true;
                 }
                 else if (Environment.OSVersion.Platform == PlatformID.Win32NT)
                 {
@@ -543,7 +544,10 @@ namespace PsdLayoutTool2
                         CreateNoWindow = true
                     }))
                     {
-                        result.processTreeKillRequested = taskKill != null && taskKill.WaitForExit(5000);
+                        bool taskkillWaited = taskKill != null && taskKill.WaitForExit(5000);
+                        int taskkillExitCode = taskkillWaited ? taskKill.ExitCode : -1;
+                        result.processTreeKillConfirmed = PsdHierarchyTaskkillConfirmation.IsConfirmed(
+                            taskkillWaited, taskkillExitCode);
                     }
                 }
                 else
@@ -574,7 +578,7 @@ namespace PsdLayoutTool2
         private struct ProcessTerminationResult
         {
             public bool killRequested;
-            public bool processTreeKillRequested;
+            public bool processTreeKillConfirmed;
             public bool waitForExitSucceeded;
         }
     }
@@ -653,6 +657,18 @@ namespace PsdLayoutTool2
             }
 
             await exit;
+        }
+    }
+
+    /// <summary>
+    /// taskkill only confirms a Windows tree termination request when the helper
+    /// itself completed and returned success. Parent exit alone is insufficient.
+    /// </summary>
+    public static class PsdHierarchyTaskkillConfirmation
+    {
+        public static bool IsConfirmed(bool waitForExitSucceeded, int exitCode)
+        {
+            return waitForExitSucceeded && exitCode == 0;
         }
     }
 }

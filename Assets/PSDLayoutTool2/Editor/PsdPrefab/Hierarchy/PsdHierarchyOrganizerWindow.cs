@@ -96,7 +96,9 @@ namespace PsdLayoutTool2
                         modifiableStableIds = scope.OrderBy(value => value, StringComparer.Ordinal).ToList(),
                         contextStableIds = contextIds.OrderBy(value => value, StringComparer.Ordinal).ToList(),
                         baselineGroups = baselineGraph,
-                        modifiableGroupKeys = modifiableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList()
+                        modifiableGroupKeys = modifiableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        existingGroupKeys = working.groups.Where(group => group != null)
+                            .Select(group => group.key).OrderBy(key => key, StringComparer.Ordinal).ToList()
                     };
                     PsdHierarchyAiRunResult result = await runner.RunAsync(runRequest, cancellationToken);
                     if (result == null || !result.succeeded || result.plan == null)
@@ -109,7 +111,7 @@ namespace PsdLayoutTool2
                     }
 
                     PsdHierarchyFocusedPlanValidator.ValidatePartial(result.plan, runRequest);
-                    MergeScope(working, result.plan, scope);
+                    MergeScope(working, result.plan, runRequest);
                 }
 
                 if (confirmMissingCleanup)
@@ -290,12 +292,18 @@ namespace PsdLayoutTool2
             return keys.Where(byKey.ContainsKey).Select(key => CloneGroup(byKey[key])).ToList();
         }
 
-        private static void MergeScope(PsdHierarchyPlan target, PsdHierarchyPlan partial, HashSet<string> scope)
+        private static void MergeScope(
+            PsdHierarchyPlan target,
+            PsdHierarchyPlan partial,
+            PsdHierarchyAiRunRequest runRequest)
         {
-            var replacedKeys = new HashSet<string>((partial.groups ?? new List<PsdHierarchyPlanGroup>())
-                .Where(group => group != null).Select(group => group.key), StringComparer.Ordinal);
-            target.groups.RemoveAll(group => group != null &&
-                (group.memberStableIds.Any(scope.Contains) || replacedKeys.Contains(group.key)));
+            var replaceAuthorizedKeys = new HashSet<string>(
+                runRequest.modifiableGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            replaceAuthorizedKeys.IntersectWith((partial.groups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null).Select(group => group.key));
+            target.groups.RemoveAll(group => group != null && replaceAuthorizedKeys.Contains(group.key));
+            var scope = new HashSet<string>(
+                runRequest.modifiableStableIds ?? new List<string>(), StringComparer.Ordinal);
             target.renames.RemoveAll(rename => rename != null && scope.Contains(rename.stableId));
             target.groups.AddRange((partial.groups ?? new List<PsdHierarchyPlanGroup>()).Select(CloneGroup));
             target.renames.AddRange((partial.renames ?? new List<PsdHierarchyPlanRename>()).Select(CloneRename));
@@ -516,6 +524,8 @@ namespace PsdLayoutTool2
                 .Where(group => group != null).ToDictionary(group => group.key, StringComparer.Ordinal);
             var modifiableGroupKeys = new HashSet<string>(
                 runRequest.modifiableGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            var existingGroupKeys = new HashSet<string>(
+                runRequest.existingGroupKeys ?? new List<string>(), StringComparer.Ordinal);
             foreach (string groupKey in modifiableGroupKeys)
             {
                 PsdHierarchyPlanGroup baselineGroup;
@@ -535,6 +545,9 @@ namespace PsdLayoutTool2
                     throw new PsdHierarchyPlanValidationException("Focused plan contains a null or duplicate group key.");
                 if (baselineByKey.ContainsKey(group.key) && !modifiableGroupKeys.Contains(group.key))
                     throw new PsdHierarchyPlanValidationException("Focused plan modified group '" + group.key + "' outside its scope.");
+                if (!baselineByKey.ContainsKey(group.key) && existingGroupKeys.Contains(group.key))
+                    throw new PsdHierarchyPlanValidationException(
+                        "Focused plan reused an existing group key outside its scope: '" + group.key + "'.");
 
                 PsdHierarchyPlanGroup baselineGroup;
                 if (baselineByKey.TryGetValue(group.key, out baselineGroup))
@@ -550,6 +563,16 @@ namespace PsdLayoutTool2
                         !string.Equals(group.parentKey ?? string.Empty, baselineGroup.parentKey ?? string.Empty, StringComparison.Ordinal))
                         throw new PsdHierarchyPlanValidationException(
                             "Focused plan moved readonly group '" + group.key + "'.");
+                    if (readonlyBefore.Count > 0 &&
+                        (!string.Equals(group.displayName ?? string.Empty, baselineGroup.displayName ?? string.Empty, StringComparison.Ordinal) ||
+                         !string.Equals(group.evidence ?? string.Empty, baselineGroup.evidence ?? string.Empty, StringComparison.Ordinal) ||
+                         group.confidence != baselineGroup.confidence))
+                        throw new PsdHierarchyPlanValidationException(
+                            "Focused plan changed readonly group metadata for '" + group.key + "'.");
+                    if (readonlyBefore.Count > 0 &&
+                        !(group.memberStableIds ?? new List<string>()).Any(allowedIds.Contains))
+                        throw new PsdHierarchyPlanValidationException(
+                            "Focused plan restated readonly group '" + group.key + "' without adding a modifiable ID.");
                 }
 
                 foreach (string member in group.memberStableIds ?? new List<string>())

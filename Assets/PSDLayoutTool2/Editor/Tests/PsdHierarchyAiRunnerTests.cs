@@ -347,7 +347,8 @@ namespace PsdLayoutTool2.Tests
             reconciliation.unsortedNewStableIds.Add("103");
             var fake = new FakeRunner
             {
-                ResultFactory = run => Success(PlanWithGroup(run.request, "existing", "", "101", "102", "103"))
+                ResultFactory = run => Success(PlanWithBaselineGroup(
+                    run.request, baseline.groups.Single(), "101", "102", "103"))
             };
             var model = new PsdHierarchyOrganizerPreviewModel(
                 "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
@@ -374,7 +375,8 @@ namespace PsdLayoutTool2.Tests
             reconciliation.unsortedNewStableIds.Add("103");
             var fake = new FakeRunner
             {
-                ResultFactory = run => Success(PlanWithGroup(run.request, "existing", "", "102", "101", "103"))
+                ResultFactory = run => Success(PlanWithBaselineGroup(
+                    run.request, baseline.groups.Single(), "102", "101", "103"))
             };
             var model = new PsdHierarchyOrganizerPreviewModel(
                 "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
@@ -383,6 +385,66 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(model.canApply, Is.False);
             Assert.That(model.validationErrors.Single(), Does.Contain("readonly").IgnoreCase);
+        }
+
+        [Test]
+        public async Task PartialNewGroupCannotHijackExistingKeyOutsideFocusedScope()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103", "104");
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.groups.Add(new PsdHierarchyPlanGroup
+            {
+                key = "outside", parentKey = "", memberStableIds = new List<string> { "101" },
+                displayName = "Outside", evidence = "old", confidence = 1
+            });
+            var reconciliation = new PsdHierarchyReconciliationResult { requiresReplan = true };
+            reconciliation.unsortedNewStableIds.Add("104");
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanWithGroup(run.request, "outside", "", "104"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            Assert.That(fake.Requests.Single().existingGroupKeys, Does.Contain("outside"));
+            Assert.That(fake.Requests.Single().modifiableGroupKeys, Does.Not.Contain("outside"));
+            Assert.That(model.canApply, Is.False);
+            Assert.That(model.validationErrors.Single(), Does.Contain("existing group key").IgnoreCase);
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == "outside").memberStableIds,
+                Is.EqualTo(new[] { "101" }));
+        }
+
+        [Test]
+        public async Task JoiningReadonlyNeighborGroupCannotAlterItsMetadata()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.groups.Add(new PsdHierarchyPlanGroup
+            {
+                key = "existing", parentKey = "", memberStableIds = new List<string> { "101", "102" },
+                displayName = "Existing", evidence = "original evidence", confidence = .75
+            });
+            var reconciliation = new PsdHierarchyReconciliationResult { requiresReplan = true };
+            reconciliation.unsortedNewStableIds.Add("103");
+            var fake = new FakeRunner
+            {
+                ResultFactory = run =>
+                {
+                    PsdHierarchyPlan plan = PlanWithBaselineGroup(
+                        run.request, baseline.groups.Single(), "101", "102", "103");
+                    plan.groups[0].displayName = "Hijacked metadata";
+                    return Success(plan);
+                }
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline, reconciliation, fake);
+
+            await model.RefreshAsync(false, CancellationToken.None);
+
+            Assert.That(model.canApply, Is.False);
+            Assert.That(model.validationErrors.Single(), Does.Contain("metadata").IgnoreCase);
         }
 
         [Test]
@@ -534,9 +596,19 @@ namespace PsdLayoutTool2.Tests
             CollectionAssert.AreEqual(new[] { "kill-tree", "wait-exit", "package-cleaned" }, order);
         }
 
-        [TestCase(false, true)]
-        [TestCase(true, false)]
-        public async Task UnconfirmedTreeTerminationRetainsPackage(bool treeKilled, bool waited)
+        [Test]
+        public async Task ParentExitWithoutConfirmedTreeKillRetainsPackage()
+        {
+            await AssertUnconfirmedTreeTerminationRetainsPackage(false, true);
+        }
+
+        [Test]
+        public async Task ConfirmedTreeKillWithoutExitWaitRetainsPackage()
+        {
+            await AssertUnconfirmedTreeTerminationRetainsPackage(true, false);
+        }
+
+        private async Task AssertUnconfirmedTreeTerminationRetainsPackage(bool treeKilled, bool waited)
         {
             var entered = new TaskCompletionSource<bool>();
             var adapter = new RecordingProcessAdapter(async (invocation, timeout, token) =>
@@ -581,6 +653,14 @@ namespace PsdLayoutTool2.Tests
 
             Assert.ThrowsAsync<PsdHierarchyOutputLimitException>(async () =>
                 await PsdHierarchyProcessOutputMonitor.WaitAsync(exit.Task, overflow, never.Task));
+        }
+
+        [TestCase(true, 0, true)]
+        [TestCase(true, 1, false)]
+        [TestCase(false, 0, false)]
+        public void TaskkillConfirmationRequiresWaitAndZeroExit(bool waited, int exitCode, bool expected)
+        {
+            Assert.That(PsdHierarchyTaskkillConfirmation.IsConfirmed(waited, exitCode), Is.EqualTo(expected));
         }
 
         private CodexCliHierarchyRunner Runner(IHierarchyProcessAdapter adapter)
@@ -669,6 +749,24 @@ namespace PsdLayoutTool2.Tests
                 displayName = key,
                 evidence = "focused",
                 confidence = .9
+            });
+            return plan;
+        }
+
+        private static PsdHierarchyPlan PlanWithBaselineGroup(
+            PsdHierarchyRequest request,
+            PsdHierarchyPlanGroup baseline,
+            params string[] members)
+        {
+            PsdHierarchyPlan plan = IdentityPlan(request);
+            plan.groups.Add(new PsdHierarchyPlanGroup
+            {
+                key = baseline.key,
+                parentKey = baseline.parentKey,
+                memberStableIds = new List<string>(members),
+                displayName = baseline.displayName,
+                evidence = baseline.evidence,
+                confidence = baseline.confidence
             });
             return plan;
         }
