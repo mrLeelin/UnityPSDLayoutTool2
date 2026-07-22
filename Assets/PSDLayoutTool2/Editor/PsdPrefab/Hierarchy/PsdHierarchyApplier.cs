@@ -507,10 +507,12 @@ namespace PsdLayoutTool2
                 if (component == null || component is Transform || forbidden.Contains(component)) continue;
                 var serialized = new SerializedObject(component);
                 SerializedProperty property = serialized.GetIterator();
-                bool enterChildren = true;
-                while (property.NextVisible(enterChildren))
+                // Next(true) performs a complete depth-first traversal through
+                // hidden fields, arrays/lists, and nested serializable objects.
+                // We only reject exact references in the forbidden target set;
+                // unrelated fields such as m_Script remain harmless.
+                while (property.Next(true))
                 {
-                    enterChildren = false;
                     if (property.propertyType == SerializedPropertyType.ObjectReference &&
                         property.objectReferenceValue != null && forbidden.Contains(property.objectReferenceValue))
                     {

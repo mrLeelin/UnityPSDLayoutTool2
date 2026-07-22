@@ -296,6 +296,50 @@ namespace PsdLayoutTool2.Tests
             Assert.That(probe.rectTarget, Is.SameAs(old));
         }
 
+        [TestCase("hidden")]
+        [TestCase("list")]
+        [TestCase("array")]
+        [TestCase("nested")]
+        public void DeepSerializedReferenceShapesFailClosedAndLeafReferencesRemainAllowed(string referenceShape)
+        {
+            RectTransform old = OwnedGroup("Old", root, 0);
+            RectTransform leaf = LeafUnder(old, "A", 0, Vector2.zero);
+            leaf.gameObject.AddComponent<Image>();
+            PsdHierarchyDeepReferenceProbe probe = rootObject.AddComponent<PsdHierarchyDeepReferenceProbe>();
+
+            // These leaf references are deliberately legal and prove the scan
+            // rejects only the disappearing generated container target set.
+            probe.allowedLeaf = leaf;
+            probe.rectTargets.Add(leaf);
+            probe.gameObjectTargets = new[] { leaf.gameObject };
+            probe.nested.allowedLeaf = leaf.gameObject;
+            switch (referenceShape)
+            {
+                case "hidden":
+                    probe.hiddenRectTarget = old;
+                    break;
+                case "list":
+                    probe.rectTargets.Add(old);
+                    break;
+                case "array":
+                    probe.gameObjectTargets = new[] { leaf.gameObject, old.gameObject };
+                    break;
+                case "nested":
+                    probe.nested.target = old.gameObject;
+                    break;
+            }
+            string before = GraphSignature(root);
+
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root, Plan(), Registry(leaf), new Dictionary<string, RectTransform> { { "old", old } }));
+
+            Assert.That(GraphSignature(root), Is.EqualTo(before));
+            Assert.That(old == null, Is.False);
+            Assert.That(leaf.parent, Is.SameAs(old));
+            Assert.That(probe.allowedLeaf, Is.SameAs(leaf));
+            Assert.That(probe.nested.allowedLeaf, Is.SameAs(leaf.gameObject));
+        }
+
         [Test]
         public void MemberRemovedFromReusedGroupIsPromotedWithoutAffectingRemainingMember()
         {
@@ -642,5 +686,23 @@ namespace PsdLayoutTool2.Tests
     {
         public GameObject target;
         public RectTransform rectTarget;
+    }
+
+    public sealed class PsdHierarchyDeepReferenceProbe : MonoBehaviour
+    {
+        [HideInInspector]
+        public RectTransform hiddenRectTarget;
+
+        public RectTransform allowedLeaf;
+        public List<RectTransform> rectTargets = new List<RectTransform>();
+        public GameObject[] gameObjectTargets;
+        public PsdHierarchyNestedReference nested = new PsdHierarchyNestedReference();
+    }
+
+    [Serializable]
+    public sealed class PsdHierarchyNestedReference
+    {
+        public GameObject target;
+        public GameObject allowedLeaf;
     }
 }
