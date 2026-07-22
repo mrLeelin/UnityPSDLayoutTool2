@@ -267,6 +267,44 @@
                         PsdImporter.GeneratePrefab(assetPath);
                     }
 
+                    // This action is intentionally adjacent to the primary Prefab action. Opening
+                    // Preview only reads the PSD, exact configured Prefab and optional Profile;
+                    // applying remains a separate explicit action inside the preview window.
+                    string hierarchyTargetPath;
+                    string hierarchyUnavailableReason;
+                    bool hierarchyPreviewAvailable = PsdHierarchyOrganizerEntry.TryResolveAvailability(
+                        assetPath,
+                        PsdImporter.OutputMode,
+                        PsdImporter.OutputFolderName,
+                        PsdImporter.PrefabMode,
+                        PsdImporter.UseUnityUI,
+                        path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
+                        out hierarchyTargetPath,
+                        out hierarchyUnavailableReason);
+                    using (new EditorGUI.DisabledScope(!hierarchyPreviewAvailable))
+                    {
+                        if (GUILayout.Button(
+                                new GUIContent(
+                                    PsdHierarchyOrganizerEntry.PreviewButtonLabel,
+                                    "只读生成层级整理预览；不会直接修改 Prefab、Profile 或材质。"),
+                                GUILayout.Height(24)))
+                        {
+                            try
+                            {
+                                PsdHierarchyOrganizerEntry.Open(assetPath);
+                            }
+                            catch (Exception exception)
+                            {
+                                Debug.LogException(exception);
+                                EditorUtility.DisplayDialog("PSDLayoutTool2", exception.Message, "确定");
+                            }
+                        }
+                    }
+                    if (!hierarchyPreviewAvailable)
+                    {
+                        EditorGUILayout.HelpBox(hierarchyUnavailableReason, MessageType.Info);
+                    }
+
                     GUIContent maximumDepthLabel = LocalizedContent(
                         "最大深度（Z）",
                         "Maximum Depth (Z)",

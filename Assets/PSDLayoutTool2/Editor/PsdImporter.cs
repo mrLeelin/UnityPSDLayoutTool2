@@ -543,6 +543,41 @@
         }
 
         /// <summary>
+        /// Revalidates and applies a previewed hierarchy plan through one exact
+        /// Prefab import. The process-local handoff is always cleared, including
+        /// cancellation and exceptions, so it cannot leak into a later import.
+        /// </summary>
+        public static void GeneratePrefabWithHierarchyPlan(
+            string assetPath,
+            string expectedSourceGuid,
+            string expectedPrefabPath,
+            PsdHierarchyPlan previewedPlan)
+        {
+            if (previewedPlan == null) throw new ArgumentNullException("previewedPlan");
+            PsdHierarchyOrganizerInput fresh = PsdHierarchyOrganizerEntry.BuildFromAssets(
+                assetPath, expectedPrefabPath, new CodexCliHierarchyRunner());
+            if (!string.Equals(fresh.sourcePsdGuid, expectedSourceGuid, StringComparison.Ordinal))
+                throw new InvalidOperationException("The selected PSD identity changed after Preview was opened.");
+            if (!string.Equals(fresh.targetPrefabPath, expectedPrefabPath.Replace('\\', '/'), StringComparison.Ordinal))
+                throw new InvalidOperationException("The configured target Prefab changed after Preview was opened.");
+
+            // Validation is repeated against a newly parsed PSD and freshly
+            // inspected target. A previously valid window cannot authorize a
+            // stale or cross-target operation.
+            PsdHierarchyPlanValidator.Validate(previewedPlan, fresh.request);
+            PsdHierarchyPendingOperation.Enqueue(
+                fresh.sourcePsdGuid, fresh.sourcePsdPath, fresh.targetPrefabPath, previewedPlan);
+            try
+            {
+                GeneratePrefab(assetPath);
+            }
+            finally
+            {
+                PsdHierarchyPendingOperation.Clear();
+            }
+        }
+
+        /// <summary>
         /// Gets a readable label for the active import mode.
         /// </summary>
         /// <returns>Import mode label.</returns>
@@ -683,6 +718,11 @@
                 {
                     if (IsTargetPrefabOpenInPrefabMode(prefabRelativePath))
                     {
+                        string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+                        if (PsdHierarchyPendingOperation.HasMatch(sourceGuid, prefabRelativePath))
+                            throw new InvalidOperationException(
+                                "Close the target Prefab Mode before applying the hierarchy preview. " +
+                                "The one-shot Apply plan was not deferred to a later import.");
                         SchedulePrefabModeExitAndResumeImport(
                             asset,
                             forcedSelection,
@@ -715,7 +755,18 @@
                     ", hasSelectableEntries=" + conflictAnalysis.HasSelectableEntries);
 
                 ImportConflictSelection effectiveSelection = forcedSelection;
-                if (!skipConflictPrompt && conflictAnalysis.HasExistingTargets)
+                string hierarchyApplySourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+                bool isExplicitHierarchyApply = PsdHierarchyPendingOperation.HasMatch(
+                    hierarchyApplySourceGuid, prefabRelativePath);
+                if (isExplicitHierarchyApply && conflictAnalysis.HasExistingTargets)
+                {
+                    // Apply is already an explicit update command. Keep it synchronous so the
+                    // process-local plan cannot leak across an asynchronous conflict dialog, and
+                    // do not infer permission to delete stale generated files.
+                    effectiveSelection = CreateDefaultConflictSelection(conflictAnalysis);
+                    effectiveSelection.PathsToDelete.Clear();
+                }
+                else if (!skipConflictPrompt && conflictAnalysis.HasExistingTargets)
                 {
                     PsdLogger.Step("Prompt user to update existing targets");
                     bool updateExistingFiles = PromptForUpdatingExistingFiles(conflictAnalysis);
@@ -1390,32 +1441,53 @@
             string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
             PsdHierarchyProfile persisted = ResolveHierarchyProfileBeforePrefabImport(
                 sourceGuid, prefabPath, UseUnityUI);
+            PsdHierarchyPlan pendingPlan;
+            bool hasPendingPlan = PsdHierarchyPendingOperation.TryTake(
+                sourceGuid, prefabPath, out pendingPlan);
             if (!UseUnityUI) return false;
-            if (persisted == null) return false;
-            if (!persisted.CheckSchema().canApply)
+            if (persisted == null && !hasPendingPlan) return false;
+            if (persisted != null && !persisted.CheckSchema().canApply)
                 throw new InvalidOperationException("Hierarchy Profile schema is stale or unsupported: " + profilePath);
-            if (!string.Equals(persisted.sourcePsdGuid, sourceGuid, StringComparison.Ordinal))
+            if (persisted != null && !string.Equals(persisted.sourcePsdGuid, sourceGuid, StringComparison.Ordinal))
                 throw new InvalidOperationException("Hierarchy Profile belongs to a different PSD: " + profilePath);
 
-            PsdHierarchyProfile working = UnityEngine.Object.Instantiate(persisted);
+            PsdHierarchyProfile working = null;
             GameObject existingContents = null;
             try
             {
-                PsdHierarchyReconciliationResult reconciliation = working.Reconcile(sourceModel);
-                if (reconciliation.requiresReplan || reconciliation.unsortedNewStableIds.Count > 0 ||
-                    reconciliation.unsortedUnstableIds.Count > 0)
-                    throw new InvalidOperationException(
-                        "Hierarchy Profile requires focused preview/replanning before this PSD can be imported.");
+                PsdHierarchyReconciliationResult reconciliation = null;
+                PsdHierarchyPlan plan;
+                if (hasPendingPlan)
+                {
+                    IEnumerable<PsdHierarchyPrefabNodeMetadata> metadata = persisted == null
+                        ? Enumerable.Empty<PsdHierarchyPrefabNodeMetadata>()
+                        : PsdPrefabIncrementalMerge.BuildProfilePrefabMetadata(prefabPath, persisted);
+                    PsdHierarchyRequest freshRequest = PsdHierarchyContextBuilder.Build(
+                        sourceModel, metadata, sourceGuid);
+                    PsdHierarchyPlanValidator.Validate(pendingPlan, freshRequest);
+                    working = CreateWorkingProfileFromPendingPlan(
+                        sourceModel, sourceGuid, pendingPlan, persisted);
+                    plan = pendingPlan;
+                }
+                else
+                {
+                    working = UnityEngine.Object.Instantiate(persisted);
+                    reconciliation = working.Reconcile(sourceModel);
+                    if (reconciliation.requiresReplan || reconciliation.unsortedNewStableIds.Count > 0 ||
+                        reconciliation.unsortedUnstableIds.Count > 0)
+                        throw new InvalidOperationException(
+                            "Hierarchy Profile requires focused preview/replanning before this PSD can be imported.");
+                    plan = CreatePlanFromProfile(working, sourceGuid);
+                }
 
                 // Ownership is determined by what this importer invocation
                 // actually emitted, never inferred from PSD visibility/name.
                 // Missing historical records are untouched and remain pending.
                 foreach (string pendingEmission in working.UpdateImporterOwnership(sourceModel, candidateRegistry.Keys))
-                    if (!reconciliation.pendingMissingStableIds.Contains(pendingEmission))
+                    if (reconciliation != null && !reconciliation.pendingMissingStableIds.Contains(pendingEmission))
                         reconciliation.pendingMissingStableIds.Add(pendingEmission);
 
-                PsdHierarchyPlan plan = CreatePlanFromProfile(working, sourceGuid);
-                if (reconciliation.geometryValidationStableIds.Count > 0)
+                if (reconciliation != null && reconciliation.geometryValidationStableIds.Count > 0)
                 {
                     if (reconciliation.pendingMissingStableIds.Count > 0)
                         throw new InvalidOperationException(
@@ -1442,7 +1514,7 @@
                 PsdPrefabTransactionalSave.Save(
                     prefabPath, existingContents, profilePath, working,
                     merge.generatedByStableId, merge.groupsByKey,
-                    Array.Empty<string>(), null, false);
+                    Array.Empty<string>(), null, persisted == null);
                 return true;
             }
             finally
@@ -1488,6 +1560,75 @@
                 });
             }
             return plan;
+        }
+
+        /// <summary>
+        /// Creates a detached Profile snapshot from the freshly validated
+        /// preview plan. Existing identity is copied only by stable PSD ID and
+        /// validated group key; newly introduced PSD IDs remain pending creation.
+        /// The persisted Profile asset is never modified by this preparation.
+        /// </summary>
+        private static PsdHierarchyProfile CreateWorkingProfileFromPendingPlan(
+            PsdPrefabDocumentModel sourceModel,
+            string sourceGuid,
+            PsdHierarchyPlan plan,
+            PsdHierarchyProfile persisted)
+        {
+            var groups = (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null)
+                .Select(group => new PsdHierarchyProfileGroup
+                {
+                    key = group.key,
+                    parentKey = group.parentKey,
+                    displayName = group.displayName,
+                    stableLayerIds = new List<string>(group.memberStableIds ?? new List<string>())
+                });
+            var renames = (plan.renames ?? new List<PsdHierarchyPlanRename>())
+                .Where(rename => rename != null)
+                .Select(rename => new PsdHierarchyProfileRename
+                {
+                    stableId = rename.stableId,
+                    name = rename.name
+                });
+            PsdHierarchyProfile working = PsdHierarchyProfile.Create(
+                sourceModel, groups, renames, sourceGuid);
+            if (persisted == null) return working;
+
+            working.targetPrefabPath = persisted.targetPrefabPath;
+            working.targetPrefabGuid = persisted.targetPrefabGuid;
+            Dictionary<string, PsdHierarchyProfileNode> previousNodes =
+                (persisted.nodes ?? new List<PsdHierarchyProfileNode>())
+                .Where(node => node != null)
+                .ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            foreach (PsdHierarchyProfileNode node in working.nodes)
+            {
+                PsdHierarchyProfileNode previous;
+                if (!previousNodes.TryGetValue(node.stableId, out previous))
+                {
+                    node.pendingCreation = true;
+                    continue;
+                }
+
+                node.ownership = previous.ownership;
+                node.localFileId = previous.localFileId;
+                node.lastKnownPath = previous.lastKnownPath;
+                node.pendingCreation = previous.pendingCreation;
+                node.importerOwnedComponentTypes = new List<string>(
+                    previous.importerOwnedComponentTypes ?? new List<string>());
+            }
+
+            Dictionary<string, PsdHierarchyProfileGroup> previousGroups =
+                (persisted.groups ?? new List<PsdHierarchyProfileGroup>())
+                .Where(group => group != null)
+                .ToDictionary(group => group.key, StringComparer.Ordinal);
+            foreach (PsdHierarchyProfileGroup group in working.groups)
+            {
+                PsdHierarchyProfileGroup previous;
+                if (!previousGroups.TryGetValue(group.key, out previous)) continue;
+                group.localFileId = previous.localFileId;
+                group.lastKnownPath = previous.lastKnownPath;
+            }
+            return working;
         }
 
         /// <summary>
