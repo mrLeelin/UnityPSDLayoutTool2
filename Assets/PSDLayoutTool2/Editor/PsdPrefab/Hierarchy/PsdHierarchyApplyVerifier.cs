@@ -89,7 +89,7 @@ namespace PsdLayoutTool2
 
             var registeredIds = new HashSet<int>(registry.Values.Where(value => value != null)
                 .Select(value => value.gameObject.GetInstanceID()));
-            CollectVisualOrder(root, 0, registeredIds, snapshot.visualLeafOrder, snapshot.visualParents,
+            CollectVisualOrder(root, 0, registeredIds, organizerGroupSet, snapshot.visualLeafOrder, snapshot.visualParents,
                 snapshot.protectedVisualDirectParents);
             return snapshot;
         }
@@ -147,7 +147,7 @@ namespace PsdLayoutTool2
             var currentParents = new Dictionary<int, int>();
             var registeredIds = new HashSet<int>(registry.Values.Where(value => value != null)
                 .Select(value => value.gameObject.GetInstanceID()));
-            CollectVisualOrder(root, 0, registeredIds, currentOrder, currentParents,
+            CollectVisualOrder(root, 0, registeredIds, new HashSet<RectTransform>(), currentOrder, currentParents,
                 new Dictionary<Transform, Transform>());
             if (!before.visualLeafOrder.SequenceEqual(currentOrder))
                 throw new PsdHierarchyApplyException("The organizer changed the original visual leaf order.");
@@ -207,6 +207,7 @@ namespace PsdLayoutTool2
             Transform parent,
             int nearestVisualParent,
             HashSet<int> registeredIds,
+            HashSet<RectTransform> organizerGroups,
             List<int> result,
             Dictionary<int, int> visualParents,
             Dictionary<Transform, Transform> protectedDirectParents)
@@ -220,10 +221,11 @@ namespace PsdLayoutTool2
                 {
                     result.Add(id);
                     visualParents[id] = nearestVisualParent;
-                    if (!registeredIds.Contains(id)) protectedDirectParents[child] = child.parent;
+                    if (!registeredIds.Contains(id) && !organizerGroups.Contains(child.parent as RectTransform))
+                        protectedDirectParents[child] = child.parent;
                     nextVisualParent = id;
                 }
-                CollectVisualOrder(child, nextVisualParent, registeredIds, result, visualParents, protectedDirectParents);
+                CollectVisualOrder(child, nextVisualParent, registeredIds, organizerGroups, result, visualParents, protectedDirectParents);
             }
         }
 

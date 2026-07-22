@@ -158,6 +158,118 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ExistingChildGroupCanBePromotedToLogicalRootWhenOldParentDisappears()
+        {
+            RectTransform outer = OwnedGroup("Outer", root, 0);
+            RectTransform inner = OwnedGroup("Inner", outer, 0);
+            RectTransform leaf = LeafUnder(inner, "A", 0, Vector2.zero);
+            leaf.gameObject.AddComponent<Image>();
+            var oldGroups = new Dictionary<string, RectTransform>
+            {
+                { "outer", outer },
+                { "inner", inner }
+            };
+
+            PsdHierarchyApplyResult result = PsdHierarchyApplier.Apply(
+                root, Plan(Group("inner", "", "Inner", "101")), Registry(leaf), oldGroups);
+
+            Assert.That(result.groupsByKey["inner"], Is.SameAs(inner));
+            Assert.That(inner.parent, Is.SameAs(root));
+            Assert.That(outer == null, Is.True);
+            Assert.That(leaf.parent, Is.SameAs(inner));
+        }
+
+        [Test]
+        public void RemovingOldGroupUngroupsAllMembersAndDestroysOnlyTheContainer()
+        {
+            RectTransform old = OwnedGroup("Old", root, 0);
+            RectTransform first = LeafUnder(old, "A", 0, new Vector2(-20f, 0f));
+            RectTransform second = LeafUnder(old, "B", 1, new Vector2(20f, 0f));
+            first.gameObject.AddComponent<Image>();
+            second.gameObject.AddComponent<Image>();
+
+            PsdHierarchyApplyResult result = PsdHierarchyApplier.Apply(
+                root, Plan(), Registry(first, second), new Dictionary<string, RectTransform> { { "old", old } });
+
+            Assert.That(result.groupsByKey, Is.Empty);
+            Assert.That(first.parent, Is.SameAs(root));
+            Assert.That(second.parent, Is.SameAs(root));
+            Assert.That(old == null, Is.True);
+        }
+
+        [Test]
+        public void MemberRemovedFromReusedGroupIsPromotedWithoutAffectingRemainingMember()
+        {
+            RectTransform old = OwnedGroup("Old", root, 0);
+            RectTransform first = LeafUnder(old, "A", 0, new Vector2(-20f, 0f));
+            RectTransform second = LeafUnder(old, "B", 1, new Vector2(20f, 0f));
+            first.gameObject.AddComponent<Image>();
+            second.gameObject.AddComponent<Image>();
+
+            PsdHierarchyApplier.Apply(
+                root,
+                Plan(Group("old", "", "Old", "101")),
+                Registry(first, second),
+                new Dictionary<string, RectTransform> { { "old", old } });
+
+            Assert.That(first.parent, Is.SameAs(old));
+            Assert.That(second.parent, Is.SameAs(root));
+        }
+
+        [Test]
+        public void ProjectOwnedChildInRemovedGeneratedGroupIsSafelyPromoted()
+        {
+            RectTransform old = OwnedGroup("Old", root, 0);
+            RectTransform leaf = LeafUnder(old, "A", 0, Vector2.zero);
+            leaf.gameObject.AddComponent<Image>();
+            RectTransform projectChild = LeafUnder(old, "Business", 1, new Vector2(30f, 0f));
+            projectChild.gameObject.AddComponent<Image>();
+            PsdHierarchyReferenceProbe probe = projectChild.gameObject.AddComponent<PsdHierarchyReferenceProbe>();
+            probe.target = leaf.gameObject;
+
+            PsdHierarchyApplier.Apply(
+                root, Plan(), Registry(leaf), new Dictionary<string, RectTransform> { { "old", old } });
+
+            Assert.That(projectChild.parent, Is.SameAs(root));
+            Assert.That(probe.target, Is.SameAs(leaf.gameObject));
+            Assert.That(old == null, Is.True);
+        }
+
+        [TestCase(PsdHierarchyApplyStage.MemberMoved)]
+        [TestCase(PsdHierarchyApplyStage.BeforeVerification)]
+        public void FailureWhileRemovingOldGroupRestoresContainerChildrenAndOrdering(PsdHierarchyApplyStage failureStage)
+        {
+            RectTransform old = OwnedGroup("Old", root, 0);
+            RectTransform leaf = LeafUnder(old, "A", 0, Vector2.zero);
+            leaf.gameObject.AddComponent<Image>();
+            RectTransform business = LeafUnder(old, "Business", 1, new Vector2(20f, 0f));
+            business.gameObject.AddComponent<Image>();
+            string before = GraphSignature(root);
+            int injected = 0;
+
+            Assert.Throws<InvalidOperationException>(() => PsdHierarchyApplier.Apply(
+                root,
+                Plan(),
+                Registry(leaf),
+                new Dictionary<string, RectTransform> { { "old", old } },
+                stage =>
+                {
+                    if (stage != failureStage || injected++ != 0) return;
+                    if (stage == PsdHierarchyApplyStage.BeforeVerification)
+                    {
+                        business.SetSiblingIndex(0);
+                        return;
+                    }
+                    throw new InvalidOperationException("injected removed-group failure");
+                }));
+
+            Assert.That(old == null, Is.False);
+            Assert.That(GraphSignature(root), Is.EqualTo(before));
+            Assert.That(leaf.parent, Is.SameAs(old));
+            Assert.That(business.parent, Is.SameAs(old));
+        }
+
+        [Test]
         public void ApplyPreservesFullRectVisualComponentsMaterialsNineSliceReferencesAndOrder()
         {
             GameObject canvasObject = new GameObject("Canvas", typeof(RectTransform), typeof(Canvas));
@@ -364,6 +476,15 @@ namespace PsdLayoutTool2.Tests
             rect.offsetMax = Vector2.zero;
             rect.localRotation = Quaternion.identity;
             rect.localScale = Vector3.one;
+        }
+
+        private static RectTransform OwnedGroup(string name, RectTransform parent, int sibling)
+        {
+            RectTransform result = new GameObject(name, typeof(RectTransform)).GetComponent<RectTransform>();
+            result.SetParent(parent, false);
+            result.SetSiblingIndex(sibling);
+            ConfigureIdentityGroup(result);
+            return result;
         }
 
         private static Dictionary<string, RectTransform> Registry(params RectTransform[] values)

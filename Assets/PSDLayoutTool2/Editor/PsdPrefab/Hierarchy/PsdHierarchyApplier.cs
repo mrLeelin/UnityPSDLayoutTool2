@@ -93,6 +93,7 @@ namespace PsdLayoutTool2
             // rejected while the graph is still untouched.
             TopologicalGroups(groups).ToList();
             Dictionary<string, RectTransform> ownedGroups = ReadOwnedGroups(root, groups, leaves, existingGroupsByKey);
+            Dictionary<RectTransform, string> oldKeysByTransform = ownedGroups.ToDictionary(pair => pair.Value, pair => pair.Key);
             foreach (RectTransform leaf in leaves.Values) ValidateMovable(root, leaf);
 
             PsdHierarchyApplySnapshot verification = PsdHierarchyApplyVerifier.Capture(root, leaves, ownedGroups.Values);
@@ -100,9 +101,13 @@ namespace PsdLayoutTool2
             var created = new List<RectTransform>();
             var result = new PsdHierarchyApplyResult();
             var groupRanks = new Dictionary<string, int>(StringComparer.Ordinal);
+            Dictionary<string, RectTransform> logicalRootParents = CaptureLogicalRootParents(groups, ownedGroups, oldKeysByTransform);
 
             try
             {
+                EvacuateDisappearedGroups(
+                    groups, ownedGroups, oldKeysByTransform, rollbackStates, failureInjector);
+
                 foreach (PsdHierarchyPlanGroup rootGroup in groups.Values
                              .Where(group => string.IsNullOrEmpty(group.parentKey))
                              .OrderBy(group => group.key, StringComparer.Ordinal))
@@ -119,11 +124,26 @@ namespace PsdLayoutTool2
                         failureInjector);
                 }
 
+                EnforcePlanGroupParents(groups, result.groupsByKey, logicalRootParents, oldKeysByTransform);
+                EvacuateRemovedMembersFromSurvivingGroups(
+                    groups, ownedGroups, oldKeysByTransform, leaves, rollbackStates, result.groupsByKey);
+
                 foreach (PsdHierarchyPlanRename rename in plan.renames ?? new List<PsdHierarchyPlanRename>())
                     leaves[rename.stableId].name = rename.name;
 
                 Invoke(failureInjector, PsdHierarchyApplyStage.BeforeVerification);
+                VerifyHierarchyConformance(
+                    groups, leaves, ownedGroups, result.groupsByKey, logicalRootParents);
                 PsdHierarchyApplyVerifier.VerifyUnchanged(verification, root, leaves);
+
+                foreach (KeyValuePair<string, RectTransform> oldGroup in ownedGroups
+                             .Where(pair => !groups.ContainsKey(pair.Key))
+                             .OrderByDescending(pair => Depth(pair.Value)))
+                {
+                    if (oldGroup.Value.childCount != 0)
+                        Fail("Disappeared generated group '" + oldGroup.Key + "' was not empty after verification.");
+                    UnityEngine.Object.DestroyImmediate(oldGroup.Value.gameObject);
+                }
                 return result;
             }
             catch
@@ -185,7 +205,7 @@ namespace PsdLayoutTool2
             foreach (KeyValuePair<string, RectTransform> pair in source)
             {
                 RectTransform value = pair.Value;
-                if (!groups.ContainsKey(pair.Key) || value == null || value == root || !value.IsChildOf(root))
+                if (string.IsNullOrWhiteSpace(pair.Key) || value == null || value == root || !value.IsChildOf(root))
                     Fail("Existing group identity '" + pair.Key + "' is invalid for this plan.");
                 if (leafObjects.Contains(value) || !objects.Add(value)) Fail("Existing group identities must be one-to-one and cannot claim PSD leaves.");
                 Component[] components = value.GetComponents<Component>();
@@ -207,6 +227,242 @@ namespace PsdLayoutTool2
                 if (ready.Count == 0) Fail("Plan group hierarchy contains a cycle.");
                 foreach (PsdHierarchyPlanGroup group in ready) { emitted.Add(group.key); yield return group; }
             }
+        }
+
+        private static Dictionary<string, RectTransform> CaptureLogicalRootParents(
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> oldGroups,
+            Dictionary<RectTransform, string> oldKeysByTransform)
+        {
+            var result = new Dictionary<string, RectTransform>(StringComparer.Ordinal);
+            foreach (PsdHierarchyPlanGroup group in groups.Values.Where(item => string.IsNullOrEmpty(item.parentKey)))
+            {
+                RectTransform existing;
+                if (oldGroups.TryGetValue(group.key, out existing))
+                    result[group.key] = FindNearestNonGeneratedParent(existing.parent, oldKeysByTransform);
+            }
+            return result;
+        }
+
+        private static void EvacuateDisappearedGroups(
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> oldGroups,
+            Dictionary<RectTransform, string> oldKeysByTransform,
+            List<TransformState> rollbackStates,
+            Action<PsdHierarchyApplyStage> failureInjector)
+        {
+            foreach (KeyValuePair<string, RectTransform> oldGroup in oldGroups
+                         .Where(pair => !groups.ContainsKey(pair.Key))
+                         .OrderByDescending(pair => Depth(pair.Value)))
+            {
+                RectTransform target = FindPromotionParent(oldGroup.Value, groups, oldGroups, oldKeysByTransform);
+                Transform[] children = Enumerable.Range(0, oldGroup.Value.childCount)
+                    .Select(oldGroup.Value.GetChild).ToArray();
+                foreach (Transform child in children)
+                {
+                    // A disappeared generated child container is evacuated by
+                    // its own pass and then destroyed; never preserve the shell.
+                    RectTransform childRect = child as RectTransform;
+                    string childOldKey;
+                    if (childRect != null && oldKeysByTransform.TryGetValue(childRect, out childOldKey) &&
+                        !groups.ContainsKey(childOldKey)) continue;
+                    MovePreservingState(child, target, rollbackStates);
+                    Invoke(failureInjector, PsdHierarchyApplyStage.MemberMoved);
+                }
+            }
+        }
+
+        private static void EnforcePlanGroupParents(
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> planTransforms,
+            Dictionary<string, RectTransform> logicalRootParents,
+            Dictionary<RectTransform, string> oldKeysByTransform)
+        {
+            foreach (PsdHierarchyPlanGroup group in TopologicalGroups(groups))
+            {
+                RectTransform transform = planTransforms[group.key];
+                RectTransform desired;
+                if (!string.IsNullOrEmpty(group.parentKey))
+                {
+                    desired = planTransforms[group.parentKey];
+                }
+                else if (!logicalRootParents.TryGetValue(group.key, out desired))
+                {
+                    desired = FindNearestNonGeneratedParent(transform.parent, oldKeysByTransform);
+                    logicalRootParents[group.key] = desired;
+                }
+                if (transform.parent != desired) transform.SetParent(desired, false);
+                ConfigureIdentityContainer(transform);
+            }
+        }
+
+        private static void EvacuateRemovedMembersFromSurvivingGroups(
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> oldGroups,
+            Dictionary<RectTransform, string> oldKeysByTransform,
+            Dictionary<string, RectTransform> leaves,
+            List<TransformState> rollbackStates,
+            Dictionary<string, RectTransform> planTransforms)
+        {
+            var stableIdByTransform = leaves.ToDictionary(pair => pair.Value, pair => pair.Key);
+            foreach (KeyValuePair<string, RectTransform> oldGroup in oldGroups.Where(pair => groups.ContainsKey(pair.Key)))
+            {
+                var allowedMembers = new HashSet<string>(groups[oldGroup.Key].memberStableIds ?? new List<string>(), StringComparer.Ordinal);
+                Transform[] children = Enumerable.Range(0, oldGroup.Value.childCount).Select(oldGroup.Value.GetChild).ToArray();
+                foreach (Transform child in children)
+                {
+                    RectTransform rect = child as RectTransform;
+                    string stableId;
+                    if (rect == null || !stableIdByTransform.TryGetValue(rect, out stableId) || allowedMembers.Contains(stableId))
+                        continue;
+
+                    // A leaf explicitly assigned elsewhere was already moved by
+                    // ResolveGroupChildFirst. Remaining leaves were removed from
+                    // this group and must be promoted above their old owner.
+                    RectTransform target = FindPlanAncestorOrLogicalParent(
+                        groups[oldGroup.Key].parentKey, oldGroup.Value, groups, planTransforms, oldKeysByTransform);
+                    MovePreservingState(rect, target, rollbackStates);
+                }
+            }
+        }
+
+        private static RectTransform FindPromotionParent(
+            RectTransform oldGroup,
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> oldGroups,
+            Dictionary<RectTransform, string> oldKeysByTransform)
+        {
+            for (Transform cursor = oldGroup.parent; cursor != null; cursor = cursor.parent)
+            {
+                RectTransform rect = cursor as RectTransform;
+                string key;
+                if (rect != null && oldKeysByTransform.TryGetValue(rect, out key))
+                {
+                    if (groups.ContainsKey(key)) return oldGroups[key];
+                    continue;
+                }
+                if (rect != null) return rect;
+            }
+            Fail("Cannot find a safe non-generated parent for disappeared group.");
+            return null;
+        }
+
+        private static RectTransform FindPlanAncestorOrLogicalParent(
+            string parentKey,
+            RectTransform oldOwner,
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> planTransforms,
+            Dictionary<RectTransform, string> oldKeysByTransform)
+        {
+            string current = parentKey;
+            while (!string.IsNullOrEmpty(current))
+            {
+                RectTransform target;
+                if (planTransforms.TryGetValue(current, out target)) return target;
+                PsdHierarchyPlanGroup group;
+                current = groups.TryGetValue(current, out group) ? group.parentKey : string.Empty;
+            }
+            return FindNearestNonGeneratedParent(oldOwner.parent, oldKeysByTransform);
+        }
+
+        private static RectTransform FindNearestNonGeneratedParent(
+            Transform start,
+            Dictionary<RectTransform, string> oldKeysByTransform)
+        {
+            for (Transform cursor = start; cursor != null; cursor = cursor.parent)
+            {
+                RectTransform rect = cursor as RectTransform;
+                if (rect != null && !oldKeysByTransform.ContainsKey(rect)) return rect;
+            }
+            Fail("Cannot resolve the logical non-generated hierarchy parent.");
+            return null;
+        }
+
+        private static void MovePreservingState(
+            Transform child,
+            RectTransform target,
+            List<TransformState> rollbackStates)
+        {
+            TransformState state = rollbackStates.First(item => item.transform == child);
+            child.SetParent(target, false);
+            RestoreLocalState(state);
+            int rank = rollbackStates.IndexOf(state);
+            int destinationIndex = Enumerable.Range(0, target.childCount)
+                .Select(target.GetChild)
+                .Where(item => item != child)
+                .Count(item => OriginalRank(item, rollbackStates, null, null) < rank);
+            child.SetSiblingIndex(destinationIndex);
+        }
+
+        private static void OrderChildrenByOriginalRank(
+            RectTransform parent,
+            List<TransformState> states,
+            Dictionary<string, RectTransform> planGroups,
+            Dictionary<string, int> groupRanks)
+        {
+            Transform[] children = Enumerable.Range(0, parent.childCount).Select(parent.GetChild)
+                .OrderBy(child => OriginalRank(child, states, planGroups, groupRanks)).ToArray();
+            for (int index = 0; index < children.Length; index++) children[index].SetSiblingIndex(index);
+        }
+
+        private static void SetSiblingByOriginalRank(
+            Transform child,
+            Transform parent,
+            int rank,
+            List<TransformState> states,
+            Dictionary<string, RectTransform> planGroups,
+            Dictionary<string, int> groupRanks)
+        {
+            int index = Enumerable.Range(0, parent.childCount).Select(parent.GetChild)
+                .Where(item => item != child)
+                .Count(item => OriginalRank(item, states, planGroups, groupRanks) < rank);
+            child.SetSiblingIndex(index);
+        }
+
+        private static int OriginalRank(
+            Transform transform,
+            List<TransformState> states,
+            Dictionary<string, RectTransform> planGroups,
+            Dictionary<string, int> groupRanks)
+        {
+            int original = states.FindIndex(state => state.transform == transform);
+            if (original >= 0) return original;
+            if (planGroups != null && groupRanks != null)
+            {
+                foreach (KeyValuePair<string, RectTransform> pair in planGroups)
+                    if (pair.Value == transform) return groupRanks[pair.Key];
+            }
+            return int.MaxValue;
+        }
+
+        private static void VerifyHierarchyConformance(
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> leaves,
+            Dictionary<string, RectTransform> oldGroups,
+            Dictionary<string, RectTransform> resultGroups,
+            Dictionary<string, RectTransform> logicalRootParents)
+        {
+            if (!new HashSet<string>(groups.Keys, StringComparer.Ordinal).SetEquals(resultGroups.Keys))
+                Fail("Apply result does not exactly match the current plan group keys.");
+            foreach (PsdHierarchyPlanGroup group in groups.Values)
+            {
+                RectTransform expectedParent = string.IsNullOrEmpty(group.parentKey)
+                    ? logicalRootParents[group.key]
+                    : resultGroups[group.parentKey];
+                if (resultGroups[group.key].parent != expectedParent)
+                    Fail("Group '" + group.key + "' does not conform to parentKey.");
+                foreach (string member in group.memberStableIds ?? new List<string>())
+                    if (leaves[member].parent != resultGroups[group.key])
+                        Fail("Plan member '" + member + "' is not a direct child of group '" + group.key + "'.");
+            }
+            var disappeared = new HashSet<RectTransform>(oldGroups.Where(pair => !groups.ContainsKey(pair.Key))
+                .Select(pair => pair.Value));
+            foreach (RectTransform old in disappeared)
+                if (old.childCount != 0) Fail("A disappeared generated group still owns children.");
+            foreach (RectTransform leaf in leaves.Values)
+                for (Transform cursor = leaf.parent; cursor != null; cursor = cursor.parent)
+                    if (cursor is RectTransform && disappeared.Contains((RectTransform)cursor))
+                        Fail("A PSD leaf retains disappeared generated ancestry.");
         }
 
         /// <summary>
@@ -244,7 +500,7 @@ namespace PsdLayoutTool2
             {
                 RectTransform leaf = leaves[stableId];
                 TransformState state = rollbackStates.First(item => item.transform == leaf);
-                atoms.Add(new AtomicChild { transform = leaf, rank = state.siblingIndex, authoredLeafState = state });
+                atoms.Add(new AtomicChild { transform = leaf, rank = rollbackStates.IndexOf(state), authoredLeafState = state });
             }
             foreach (PsdHierarchyPlanGroup child in directChildGroups)
             {
@@ -262,7 +518,7 @@ namespace PsdLayoutTool2
             if (reused)
             {
                 TransformState state = rollbackStates.First(item => item.transform == container);
-                groupRank = state.siblingIndex;
+                groupRank = rollbackStates.IndexOf(state);
             }
             else
             {
@@ -271,7 +527,6 @@ namespace PsdLayoutTool2
                     Fail("Group '" + groupKey + "' atomic children do not share one current RectTransform parent.");
                 groupRank = atoms.Min(atom => atom.rank);
                 container = CreateContainer((RectTransform)parents[0], group.displayName);
-                container.SetSiblingIndex(Mathf.Clamp(groupRank, 0, container.parent.childCount - 1));
                 created.Add(container);
                 result.createdGroupKeys.Add(groupKey);
             }
@@ -282,7 +537,6 @@ namespace PsdLayoutTool2
             groupRanks.Add(groupKey, groupRank);
             Invoke(failureInjector, PsdHierarchyApplyStage.GroupPrepared);
 
-            int sibling = 0;
             foreach (AtomicChild atom in atoms.OrderBy(atom => atom.rank))
             {
                 if (atom.transform.parent != container) atom.transform.SetParent(container, false);
@@ -294,9 +548,10 @@ namespace PsdLayoutTool2
                 {
                     ConfigureIdentityContainer(atom.transform);
                 }
-                atom.transform.SetSiblingIndex(sibling++);
                 Invoke(failureInjector, PsdHierarchyApplyStage.MemberMoved);
             }
+            OrderChildrenByOriginalRank(container, rollbackStates, result.groupsByKey, groupRanks);
+            SetSiblingByOriginalRank(container, container.parent, groupRank, rollbackStates, result.groupsByKey, groupRanks);
             return container;
         }
 
