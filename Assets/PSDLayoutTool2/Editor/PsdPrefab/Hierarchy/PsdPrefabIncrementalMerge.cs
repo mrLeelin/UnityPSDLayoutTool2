@@ -99,11 +99,26 @@ namespace PsdLayoutTool2
             PsdHierarchyProfile profile,
             PsdHierarchyPlan plan)
         {
+            return Merge(
+                prefabPath, existingContents, candidateRoot, candidateByStableId,
+                profile, profile != null ? profile.groups : null, plan);
+        }
+
+        public static PsdPrefabIncrementalMergeResult Merge(
+            string prefabPath,
+            GameObject existingContents,
+            GameObject candidateRoot,
+            IReadOnlyDictionary<string, RectTransform> candidateByStableId,
+            PsdHierarchyProfile profile,
+            IEnumerable<PsdHierarchyProfileGroup> previousGroups,
+            PsdHierarchyPlan plan)
+        {
             if (string.IsNullOrEmpty(prefabPath)) throw new ArgumentException("Prefab path is required.", "prefabPath");
             if (existingContents == null) throw new ArgumentNullException("existingContents");
             if (candidateRoot == null) throw new ArgumentNullException("candidateRoot");
             if (candidateByStableId == null) throw new ArgumentNullException("candidateByStableId");
             if (profile == null) throw new ArgumentNullException("profile");
+            if (previousGroups == null) throw new ArgumentNullException("previousGroups");
             if (plan == null) throw new ArgumentNullException("plan");
             if (!profile.CheckSchema().canApply)
                 throw new PsdPrefabIncrementalMergeException("The hierarchy Profile schema cannot be applied.");
@@ -160,7 +175,10 @@ namespace PsdLayoutTool2
                     throw new PsdPrefabIncrementalMergeException("The Profile contains a duplicate PSD layer identity.");
             }
 
-            foreach (PsdHierarchyProfileGroup group in profile.groups ?? new List<PsdHierarchyProfileGroup>())
+            // Previous group identity is deliberately separate from the new
+            // Profile/plan. Removed keys must still be recognized long enough
+            // for the applier to promote their children and delete only shells.
+            foreach (PsdHierarchyProfileGroup group in previousGroups)
             {
                 if (group == null || group.localFileId <= 0L) continue;
                 RectTransform retained;

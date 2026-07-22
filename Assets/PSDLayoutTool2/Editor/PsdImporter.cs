@@ -1558,7 +1558,11 @@
 
                 existingContents = PrefabUtility.LoadPrefabContents(prefabPath);
                 PsdPrefabIncrementalMergeResult merge = PsdPrefabIncrementalMerge.Merge(
-                    prefabPath, existingContents, candidateRoot, candidateRegistry, working, plan);
+                    prefabPath, existingContents, candidateRoot, candidateRegistry, working,
+                    persisted != null
+                        ? persisted.groups
+                        : Enumerable.Empty<PsdHierarchyProfileGroup>(),
+                    plan);
                 PsdPrefabTransactionalSave.Save(
                     prefabPath, existingContents, profilePath, working,
                     merge.generatedByStableId, merge.groupsByKey,

@@ -828,6 +828,209 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void FirstProfileSaveCreatesMissingDirectoryChainWithoutGlobalRefresh()
+        {
+            GameObject source = Root("Root");
+            Child(source, "Old", null);
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            string profilePath = Folder + "/Created/HierarchyProfiles/Profile.asset";
+            PsdHierarchyProfile working = Profile(Node("101", 0L, string.Empty));
+            working.nodes[0].pendingCreation = true;
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                PsdPrefabTransactionalSave.Save(
+                    TargetPath, loaded, profilePath, working,
+                    new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Old") as RectTransform } },
+                    new Dictionary<string, RectTransform>(), Array.Empty<string>(), null, true);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(working);
+            }
+
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Created"), Is.True);
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Created/HierarchyProfiles"), Is.True);
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath), Is.Not.Null);
+        }
+
+        [Test]
+        public void FailedFirstProfileSaveRemovesOnlyTransactionCreatedEmptyDirectories()
+        {
+            GameObject source = Root("Root");
+            Child(source, "Old", null);
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            string profilePath = Folder + "/RollbackCreated/HierarchyProfiles/Profile.asset";
+            PsdHierarchyProfile working = Profile(Node("101", 0L, string.Empty));
+            working.nodes[0].pendingCreation = true;
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() => PsdPrefabTransactionalSave.Save(
+                    TargetPath, loaded, profilePath, working,
+                    new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Old") as RectTransform } },
+                    new Dictionary<string, RectTransform>(), Array.Empty<string>(),
+                    stage => { if (stage == PsdPrefabTransactionStage.DuringProfileCopy) throw new InvalidOperationException("injected"); },
+                    true));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(working);
+            }
+
+            Assert.That(File.Exists(FullPath(profilePath)), Is.False);
+            Assert.That(File.Exists(FullPath(profilePath) + ".meta"), Is.False);
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath), Is.Null);
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/RollbackCreated/HierarchyProfiles"), Is.False);
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/RollbackCreated"), Is.False);
+            Assert.That(Directory.Exists(FullPath(Folder + "/RollbackCreated")), Is.False);
+        }
+
+        [Test]
+        public void FailedFirstProfileSaveKeepsPreexistingEmptyDirectories()
+        {
+            AssetDatabase.CreateFolder(Folder, "Existing");
+            AssetDatabase.CreateFolder(Folder + "/Existing", "HierarchyProfiles");
+            GameObject source = Root("Root");
+            Child(source, "Old", null);
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            string profilePath = Folder + "/Existing/HierarchyProfiles/Profile.asset";
+            PsdHierarchyProfile working = Profile(Node("101", 0L, string.Empty));
+            working.nodes[0].pendingCreation = true;
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() => PsdPrefabTransactionalSave.Save(
+                    TargetPath, loaded, profilePath, working,
+                    new Dictionary<string, RectTransform> { { "101", loaded.transform.Find("Old") as RectTransform } },
+                    new Dictionary<string, RectTransform>(), Array.Empty<string>(),
+                    stage => { if (stage == PsdPrefabTransactionStage.DuringProfileCopy) throw new InvalidOperationException("injected"); },
+                    true));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(working);
+            }
+
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Existing"), Is.True);
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Existing/HierarchyProfiles"), Is.True);
+        }
+
+        [Test]
+        public void PreviousGroupIdentityRemovesDisappearedShellWhileFinalProfileUsesNewPlanOnly()
+        {
+            GameObject source = Root("Root");
+            RectTransform shell = Child(source, "Old Group", null);
+            Child(shell.gameObject, "Old", "101");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            long leafId = LocalId(TargetPath, "Old Group/Old");
+            long shellId = LocalId(TargetPath, "Old Group");
+            PsdHierarchyProfile persisted = Profile(Node("101", leafId, "Root/Old Group/Old"));
+            persisted.groups.Add(new PsdHierarchyProfileGroup
+            {
+                key = "old_group", displayName = "Old Group", localFileId = shellId, lastKnownPath = "Root/Old Group",
+                stableLayerIds = new List<string> { "101" }
+            });
+            AssetDatabase.CreateAsset(persisted, ProfilePath);
+            AssetDatabase.SaveAssetIfDirty(persisted);
+
+            persisted.targetPrefabPath = TargetPath;
+            persisted.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+            EditorUtility.SetDirty(persisted);
+            AssetDatabase.SaveAssetIfDirty(persisted);
+            PsdHierarchyProfile working = UnityEngine.Object.Instantiate(persisted);
+            working.groups.Clear();
+            GameObject candidate = Root("Root");
+            RectTransform candidateLeaf = Child(candidate, "Fresh", "101");
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                PsdPrefabIncrementalMergeResult merged = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateLeaf } },
+                    working, persisted.groups, new PsdHierarchyPlan());
+                Assert.That(loaded.transform.Find("Old Group"), Is.Null);
+                Assert.That(loaded.transform.Find("Fresh"), Is.Not.Null);
+                Assert.That(merged.groupsByKey, Is.Empty);
+
+                PsdPrefabTransactionalSave.Save(
+                    TargetPath, loaded, ProfilePath, working,
+                    merged.generatedByStableId, merged.groupsByKey,
+                    Array.Empty<string>(), null, false);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(working);
+            }
+
+            Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath).transform.Find("Old Group"), Is.Null);
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath).groups, Is.Empty);
+        }
+
+        [Test]
+        public void DisappearedGroupTransactionFailureRestoresOldShellAndPreviousProfile()
+        {
+            GameObject source = Root("Root");
+            RectTransform shell = Child(source, "Old Group", null);
+            Child(shell.gameObject, "Old", "101");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            long leafId = LocalId(TargetPath, "Old Group/Old");
+            long shellId = LocalId(TargetPath, "Old Group");
+            PsdHierarchyProfile persisted = Profile(Node("101", leafId, "Root/Old Group/Old"));
+            persisted.groups.Add(new PsdHierarchyProfileGroup
+            {
+                key = "old_group", displayName = "Old Group", localFileId = shellId,
+                lastKnownPath = "Root/Old Group", stableLayerIds = new List<string> { "101" }
+            });
+            AssetDatabase.CreateAsset(persisted, ProfilePath);
+            AssetDatabase.SaveAssetIfDirty(persisted);
+            persisted.targetPrefabPath = TargetPath;
+            persisted.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+            EditorUtility.SetDirty(persisted);
+            AssetDatabase.SaveAssetIfDirty(persisted);
+            byte[] profileBefore = File.ReadAllBytes(FullPath(ProfilePath));
+
+            PsdHierarchyProfile working = UnityEngine.Object.Instantiate(persisted);
+            working.groups.Clear();
+            GameObject candidate = Root("Root");
+            RectTransform candidateLeaf = Child(candidate, "Fresh", "101");
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                PsdPrefabIncrementalMergeResult merged = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateLeaf } },
+                    working, persisted.groups, new PsdHierarchyPlan());
+                Assert.Throws<InvalidOperationException>(() => PsdPrefabTransactionalSave.Save(
+                    TargetPath, loaded, ProfilePath, working,
+                    merged.generatedByStableId, merged.groupsByKey, Array.Empty<string>(),
+                    stage => { if (stage == PsdPrefabTransactionStage.AfterPrefabSave) throw new InvalidOperationException("injected"); },
+                    false));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(working);
+            }
+
+            Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath).transform.Find("Old Group/Old"), Is.Not.Null);
+            Assert.That(File.ReadAllBytes(FullPath(ProfilePath)), Is.EqualTo(profileBefore));
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath).groups.Single().key,
+                Is.EqualTo("old_group"));
+        }
+
+        [Test]
         public void CanonicalFinalVerificationDetectsDeepProfileCorruptionAndRollsBack()
         {
             CreateTargetAndProfile(out _, out _);

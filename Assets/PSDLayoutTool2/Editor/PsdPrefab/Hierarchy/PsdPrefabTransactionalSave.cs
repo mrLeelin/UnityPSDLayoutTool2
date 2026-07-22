@@ -89,6 +89,7 @@ namespace PsdLayoutTool2
 
             AssetBackup prefabBackup = AssetBackup.Capture(prefabPath);
             AssetBackup profileBackup = AssetBackup.Capture(profilePath);
+            var createdProfileDirectories = new List<string>();
             string originalGuid = AssetDatabase.AssetPathToGUID(prefabPath);
             bool wasBound = !string.IsNullOrEmpty(workingProfile.targetPrefabPath) ||
                             !string.IsNullOrEmpty(workingProfile.targetPrefabGuid);
@@ -119,7 +120,8 @@ namespace PsdLayoutTool2
                 // Profile asset, until the second transaction phase begins.
                 UpdateProfileIdentity(prefabPath, loadedContents.transform, workingProfile,
                     generatedByStableId, groupsByKey);
-                SaveProfileClone(profilePath, workingProfile, failureInjector);
+                SaveProfileClone(
+                    profilePath, workingProfile, failureInjector, createdProfileDirectories);
                 Invoke(failureInjector, PsdPrefabTransactionStage.AfterProfileSave);
 
                 AssetDatabase.ImportAsset(profilePath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
@@ -146,6 +148,7 @@ namespace PsdLayoutTool2
                     // another same-name Prefab elsewhere in the project.
                     ImportIfPresent(prefabPath);
                     ImportIfPresent(profilePath);
+                    CleanupCreatedDirectories(createdProfileDirectories);
                 }
             }
         }
@@ -208,15 +211,16 @@ namespace PsdLayoutTool2
         private static void SaveProfileClone(
             string profilePath,
             PsdHierarchyProfile workingProfile,
-            Action<PsdPrefabTransactionStage> failureInjector)
+            Action<PsdPrefabTransactionStage> failureInjector,
+            List<string> createdDirectories)
         {
             Invoke(failureInjector, PsdPrefabTransactionStage.BeforeProfileCopy);
             PsdHierarchyProfile persistent = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
             if (persistent == null)
             {
                 string directory = Path.GetDirectoryName(profilePath);
-                if (!string.IsNullOrEmpty(directory) && !AssetDatabase.IsValidFolder(directory))
-                    throw new InvalidOperationException("Profile directory does not exist: " + directory);
+                if (!string.IsNullOrEmpty(directory))
+                    EnsureAssetDirectory(directory, createdDirectories);
                 PsdHierarchyProfile created = UnityEngine.Object.Instantiate(workingProfile);
                 created.name = Path.GetFileNameWithoutExtension(profilePath);
                 AssetDatabase.CreateAsset(created, profilePath);
@@ -230,6 +234,42 @@ namespace PsdLayoutTool2
             Invoke(failureInjector, PsdPrefabTransactionStage.DuringProfileCopy);
             Invoke(failureInjector, PsdPrefabTransactionStage.AfterProfileCopy);
             AssetDatabase.SaveAssetIfDirty(persistent);
+        }
+
+        private static void EnsureAssetDirectory(string directory, List<string> createdDirectories)
+        {
+            string normalized = NormalizeAssetPath(directory).TrimEnd('/');
+            if (!normalized.Equals("Assets", StringComparison.Ordinal) &&
+                !normalized.StartsWith("Assets/", StringComparison.Ordinal))
+                throw new InvalidOperationException("Profile directory must be inside Assets: " + normalized);
+
+            string[] segments = normalized.Split('/');
+            string current = "Assets";
+            for (int index = 1; index < segments.Length; index++)
+            {
+                string next = current + "/" + segments[index];
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    string guid = AssetDatabase.CreateFolder(current, segments[index]);
+                    if (string.IsNullOrEmpty(guid) || !AssetDatabase.IsValidFolder(next))
+                        throw new InvalidOperationException("Failed to create Profile directory: " + next);
+                    createdDirectories.Add(next);
+                }
+                current = next;
+            }
+        }
+
+        private static void CleanupCreatedDirectories(IList<string> createdDirectories)
+        {
+            for (int index = createdDirectories.Count - 1; index >= 0; index--)
+            {
+                string path = createdDirectories[index];
+                string fullPath = ToFullPath(path);
+                if (!AssetDatabase.IsValidFolder(path) ||
+                    (Directory.Exists(fullPath) && Directory.EnumerateFileSystemEntries(fullPath).Any()))
+                    continue;
+                AssetDatabase.DeleteAsset(path);
+            }
         }
 
         private static void VerifyPersistedProfile(string profilePath, PsdHierarchyProfile expected)
@@ -382,7 +422,6 @@ namespace PsdLayoutTool2
                     AssetDatabase.DeleteAsset(assetPath);
                     DeleteFile(fullPath);
                     DeleteFile(fullPath + ".meta");
-                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
                     return;
                 }
                 string directory = Path.GetDirectoryName(fullPath);
