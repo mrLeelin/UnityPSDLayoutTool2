@@ -144,6 +144,15 @@
         private static Dictionary<Layer, LayerImportInfo> currentLayerInfos;
 
         /// <summary>
+        /// Generated Unity UI leaves keyed by Photoshop's durable layer ID for
+        /// the active import only. The hierarchy organizer consumes a copy of
+        /// this registry when Task 6 has loaded the existing target Prefab;
+        /// this importer never applies a plan to, or saves, the temporary
+        /// candidate hierarchy directly.
+        /// </summary>
+        private static Dictionary<string, RectTransform> currentGeneratedUiNodesByStableId;
+
+        /// <summary>
         /// Total number of layers to export (for progress bar).
         /// </summary>
         private static int progressTotalLayers;
@@ -768,6 +777,9 @@
                 importRootGameObject = null;
                 currentGroupGameObject = null;
                 currentGroupLayoutContext = default(UiLayoutContext);
+                currentGeneratedUiNodesByStableId = UseUnityUI
+                    ? new Dictionary<string, RectTransform>(StringComparer.Ordinal)
+                    : null;
 
                 if ((LayoutInScene || CreatePrefab) && hasVisibleRuntimeObjects)
                 {
@@ -849,6 +861,7 @@
                 EditorUtility.ClearProgressBar();
                 ClearCurrentImportSelection();
                 currentLayerInfos = null;
+                currentGeneratedUiNodesByStableId = null;
                 PsdLogger.EndImportSession(sessionResult);
             }
         }
@@ -3249,6 +3262,7 @@
                     }
 
                     currentGroupLayoutContext = ApplyLayerUILayout(groupTransform, layer, info.AnchorPreset);
+                    RegisterGeneratedUiNode(layer, groupTransform);
                 }
                 else
                 {
@@ -4207,6 +4221,7 @@
 
             RectTransform uiTransform = uiObject.GetComponent<RectTransform>();
             ApplyLayerUILayout(uiTransform, layer, preset);
+            RegisterGeneratedUiNode(layer, uiTransform);
 
             Image uiImage = uiObject.AddComponent<Image>();
             uiImage.sprite = CreateSprite(layer);
@@ -4231,6 +4246,7 @@
 
             RectTransform uiTransform = uiObject.GetComponent<RectTransform>();
             ApplyLayerUILayout(uiTransform, layer, preset);
+            RegisterGeneratedUiNode(layer, uiTransform);
 
             if (UseTextMeshPro)
             {
@@ -4680,6 +4696,44 @@
         }
 
         /// <summary>
+        /// Records the generated object identity without adding a marker
+        /// component to the Prefab. Only native non-zero Photoshop layer IDs
+        /// are durable enough for incremental hierarchy ownership. A zero-ID
+        /// fallback is intentionally omitted so rename/reorder cannot silently
+        /// bind an old plan to the wrong object.
+        /// </summary>
+        private static void RegisterGeneratedUiNode(Layer layer, RectTransform transform)
+        {
+            if (layer == null || transform == null || currentGeneratedUiNodesByStableId == null || layer.Id == 0U)
+            {
+                return;
+            }
+
+            string stableId = layer.Id.ToString(CultureInfo.InvariantCulture);
+            RectTransform existing;
+            if (currentGeneratedUiNodesByStableId.TryGetValue(stableId, out existing) && existing != transform)
+            {
+                throw new InvalidOperationException(
+                    "Duplicate durable PSD layer ID '" + stableId + "' generated more than one primary UI object.");
+            }
+
+            currentGeneratedUiNodesByStableId[stableId] = transform;
+        }
+
+        /// <summary>
+        /// Returns a detached view of the current import registry. The method is
+        /// an inert integration seam: it performs no hierarchy mutation and no
+        /// Prefab save. Task 6 may call it only while its transactional merge is
+        /// synchronizing candidate values into the loaded existing Prefab.
+        /// </summary>
+        internal static Dictionary<string, RectTransform> CaptureGeneratedUiNodeRegistry()
+        {
+            return currentGeneratedUiNodesByStableId == null
+                ? new Dictionary<string, RectTransform>(StringComparer.Ordinal)
+                : new Dictionary<string, RectTransform>(currentGeneratedUiNodesByStableId, StringComparer.Ordinal);
+        }
+
+        /// <summary>
         /// Applies stretch anchors with zero offsets to a RectTransform.
         /// </summary>
         /// <param name="transform">Target RectTransform.</param>
@@ -4896,6 +4950,7 @@
 
                 rectTransform.SetParent(currentGroupGameObject.transform, false);
                 ApplyLayerUILayout(rectTransform, layer, info.AnchorPreset);
+                RegisterGeneratedUiNode(layer, rectTransform);
                 if (PsdCommonPrefabVisualFallbackPolicy.RequiresSourceVisualFallback(HasRenderableCommonPrefabVisual(instance)))
                 {
                     Image fallback = CreateCommonPrefabSourceFallback(layer);
@@ -5013,6 +5068,7 @@
             uiObject.transform.SetParent(currentGroupGameObject.transform, false);
             RectTransform transform = uiObject.GetComponent<RectTransform>();
             ApplyLayerUILayout(transform, layer, info.AnchorPreset);
+            RegisterGeneratedUiNode(layer, transform);
 
             Image image = uiObject.AddComponent<Image>();
             image.sprite = sprite;
