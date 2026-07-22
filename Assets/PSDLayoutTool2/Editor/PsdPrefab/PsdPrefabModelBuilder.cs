@@ -1,7 +1,6 @@
 namespace PsdLayoutTool2
 {
     using System;
-    using System.Globalization;
     using System.Text.RegularExpressions;
     using PhotoshopFile;
     using UnityEngine;
@@ -111,9 +110,7 @@ namespace PsdLayoutTool2
             string parentId,
             int siblingIndex)
         {
-            string stableId = layer.Id != 0U
-                ? layer.Id.ToString(CultureInfo.InvariantCulture)
-                : BuildFallbackStableId(parentId, siblingIndex, layer.Name);
+            string stableId = PsdStableLayerIdUtility.Create(layer.Id, parentId, siblingIndex, layer.Name).value;
             var node = new PsdPrefabNodeModel
             {
                 stableId = stableId,
@@ -151,7 +148,7 @@ namespace PsdLayoutTool2
                 };
             }
 
-            node.contentFingerprint = BuildContentFingerprint(node);
+            node.contentFingerprint = PsdHierarchyFingerprints.Content(node);
             node.assetFingerprint = node.contentFingerprint;
             model.nodes.Add(node);
 
@@ -187,37 +184,9 @@ namespace PsdLayoutTool2
             return bounds == null ? default(Rect) : new Rect(bounds.x, bounds.y, bounds.width, bounds.height);
         }
 
-        private static string BuildFallbackStableId(string parentId, int siblingIndex, string name)
-        {
-            string input = (parentId ?? string.Empty) + "/" + siblingIndex + "/" + RemoveNineSliceTag(name ?? string.Empty);
-            return "native_" + ComputeFnv1a(input);
-        }
-
         private static string RemoveNineSliceTag(string name)
         {
             return Regex.Replace(name ?? string.Empty, NineSliceTagPattern, string.Empty, RegexOptions.IgnoreCase);
-        }
-
-        private static string BuildContentFingerprint(PsdPrefabNodeModel node)
-        {
-            string text = node.text == null ? string.Empty : node.text.contents;
-            string input = node.stableId + "|" + node.kind + "|" + node.bounds + "|" + text;
-            return ComputeFnv1a(input);
-        }
-
-        private static string ComputeFnv1a(string value)
-        {
-            unchecked
-            {
-                uint hash = 2166136261u;
-                foreach (char character in value ?? string.Empty)
-                {
-                    hash ^= character;
-                    hash *= 16777619u;
-                }
-
-                return hash.ToString("x8");
-            }
         }
 
         /// <summary>
