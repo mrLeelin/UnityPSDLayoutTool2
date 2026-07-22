@@ -37,7 +37,7 @@ namespace PsdLayoutTool2
 
             string materialPath = materialFolder + "/PSDTextMaterial_" + ComputeFnv1a(signature) + ".mat";
             Material material = new Material(baseMaterial);
-            ApplyMaterialProperties(material, text.effect, text.fontSize, font.faceInfo.pointSize);
+            ApplyMaterialProperties(material, text.effect, text.fontSize);
             try
             {
                 for (int variant = 0; ; variant++)
@@ -58,9 +58,10 @@ namespace PsdLayoutTool2
 
                     material.name = Path.GetFileNameWithoutExtension(candidatePath);
                     AssetDatabase.CreateAsset(material, candidatePath);
+                    Material createdMaterial = material;
                     material = null;
-                    AssetDatabase.SaveAssets();
-                    return AssetDatabase.LoadAssetAtPath<Material>(candidatePath);
+                    AssetDatabase.SaveAssetIfDirty(createdMaterial);
+                    return createdMaterial;
                 }
             }
             catch (Exception ex)
@@ -192,30 +193,27 @@ namespace PsdLayoutTool2
         private static void ApplyMaterialProperties(
             Material material,
             PsdPrefabTextEffectModel effect,
-            float fontSize,
-            float fontPointSize)
+            float fontSize)
         {
             effect = effect ?? new PsdPrefabTextEffectModel();
             bool hasOutline = effect.hasOutline && effect.outlineWidth > 0.001f;
             bool hasShadow = effect.hasShadow;
-            float gradientScale = GetMaterialFloat(material, "_GradientScale", 1f);
-            float scaleRatioA = GetMaterialFloat(material, "_ScaleRatioA", 1f);
-            bool usesHalfWidthOutline = material.shader != null &&
-                material.shader.name.IndexOf("Mobile", StringComparison.OrdinalIgnoreCase) >= 0;
-            float outlineWidth = ConvertPsdPixelsToOutlineWidth(
+            // 这里只计算候选材质应该具有的文字效果参数。
+            // GetOrCreate 会先用这些参数与已有材质做只读比较：完全匹配时直接复用，
+            // 不匹配时创建新的材质变体，绝不会把计算结果回写到已有字体材质。
+            float outlineWidth = PsdTextEffectConversion.ConvertOutline(
                 effect.outlineWidth,
-                fontSize,
-                fontPointSize,
-                gradientScale,
-                scaleRatioA,
-                usesHalfWidthOutline);
+                fontSize);
             float shadowOffsetX = NormalizePsdPixelValue(effect.shadowOffsetX, fontSize, true);
             float shadowOffsetY = NormalizePsdPixelValue(effect.shadowOffsetY, fontSize, true);
             float shadowSoftness = NormalizePsdPixelValue(effect.shadowSoftness, fontSize);
             float shadowDilate = NormalizePsdPixelValue(effect.shadowDilate, fontSize, true);
 
             SetMaterialFloat(material, "_OutlineWidth", hasOutline ? outlineWidth : 0f);
-            SetMaterialFloat(material, "_FaceDilate", 0f);
+            SetMaterialFloat(
+                material,
+                "_FaceDilate",
+                hasOutline ? PsdTextEffectConversion.ConvertFaceDilate(outlineWidth) : 0f);
             SetMaterialColor(material, "_OutlineColor", hasOutline ? effect.outlineColor : Color.black);
             SetMaterialFloat(material, "_UnderlayOffsetX", hasShadow ? shadowOffsetX : 0f);
             SetMaterialFloat(material, "_UnderlayOffsetY", hasShadow ? shadowOffsetY : 0f);
@@ -224,31 +222,6 @@ namespace PsdLayoutTool2
             SetMaterialColor(material, "_UnderlayColor", hasShadow ? effect.shadowColor : Color.black);
             SetKeyword(material, "OUTLINE_ON", hasOutline);
             SetKeyword(material, "UNDERLAY_ON", hasShadow);
-        }
-
-        /// <summary>
-        /// Converts Photoshop's pixel stroke radius to TMP's normalized SDF
-        /// outline property. TMP scales the property by the glyph scale and the
-        /// font atlas gradient range; Mobile shaders additionally apply 0.5.
-        /// </summary>
-        private static float ConvertPsdPixelsToOutlineWidth(
-            float pixelWidth,
-            float fontSize,
-            float fontPointSize,
-            float gradientScale,
-            float scaleRatioA,
-            bool usesHalfWidthOutline)
-        {
-            if (pixelWidth <= 0f || fontSize <= 0f || fontPointSize <= 0f ||
-                gradientScale <= 0f || scaleRatioA <= 0f)
-            {
-                return 0f;
-            }
-
-            float shaderWidthFactor = usesHalfWidthOutline ? 0.5f : 1f;
-            float normalized = pixelWidth * fontPointSize /
-                (fontSize * gradientScale * scaleRatioA * shaderWidthFactor);
-            return Mathf.Clamp01(normalized);
         }
 
         private static float NormalizePsdPixelValue(float pixelValue, float fontSize, bool signed = false)
@@ -273,13 +246,6 @@ namespace PsdLayoutTool2
             {
                 material.SetFloat(property, value);
             }
-        }
-
-        private static float GetMaterialFloat(Material material, string property, float fallback)
-        {
-            return material != null && material.HasProperty(property)
-                ? material.GetFloat(property)
-                : fallback;
         }
 
         private static void SetMaterialColor(Material material, string property, Color value)
