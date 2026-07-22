@@ -208,6 +208,91 @@ namespace PsdLayoutTool2.Tests
             Assert.That(roundTrip.sourcePsdGuid, Is.EqualTo("guid-123"));
         }
 
+        [Test]
+        public void ValidUniqueGroupKeySurvivesMembershipChanges()
+        {
+            PsdPrefabDocumentModel document = Document(
+                Node("101", "A", 0, Rect.zero, "a"),
+                Node("102", "B", 1, Rect.zero, "b"),
+                Node("103", "C", 2, Rect.zero, "c"));
+            PsdHierarchyProfile profile = PsdHierarchyProfile.Create(
+                document,
+                new[] { new PsdHierarchyProfileGroup { key = "main-root", stableLayerIds = new List<string> { "101", "102" } } },
+                null,
+                "guid-123");
+
+            profile.groups[0].stableLayerIds.Add("103");
+            profile.Reconcile(document);
+
+            Assert.That(profile.groups[0].key, Is.EqualTo("main-root"));
+        }
+
+        [Test]
+        public void ConflictingGroupKeysAreRepairedDeterministically()
+        {
+            PsdPrefabDocumentModel document = Document(
+                Node("101", "A", 0, Rect.zero, "a"),
+                Node("102", "B", 1, Rect.zero, "b"));
+            PsdHierarchyProfile profile = PsdHierarchyProfile.Create(
+                document,
+                new[]
+                {
+                    new PsdHierarchyProfileGroup { key = "shared-key", stableLayerIds = new List<string> { "101" } },
+                    new PsdHierarchyProfileGroup { key = "shared-key", stableLayerIds = new List<string> { "102" } }
+                },
+                null,
+                "guid-123");
+            string repairedKey = profile.groups[1].key;
+
+            profile.Reconcile(document);
+            profile.Reconcile(document);
+
+            Assert.That(profile.groups[0].key, Is.EqualTo("shared-key"));
+            Assert.That(repairedKey, Is.EqualTo(PsdHierarchyProfile.BuildGeneratedGroupKey(new[] { "102" })));
+            Assert.That(profile.groups[1].key, Is.EqualTo(repairedKey));
+            Assert.That(profile.groups.Select(group => group.key).Distinct().Count(), Is.EqualTo(2));
+        }
+
+        [Test]
+        public void NativeDocumentFingerprintIsOrderIndependentAndDetectsStaleContent()
+        {
+            PsdPrefabNodeModel nodeA = Node("101", "A", 0, new Rect(0, 0, 10, 10), "pixels-a");
+            PsdPrefabNodeModel nodeB = Node("102", "B", 1, new Rect(10, 0, 10, 10), "pixels-b");
+            PsdPrefabDocumentModel original = Document(nodeA, nodeB);
+            PsdPrefabDocumentModel reorderedEnumeration = Document(nodeB, nodeA);
+            original.sourceFingerprint = PsdHierarchyFingerprints.Document(original);
+            reorderedEnumeration.sourceFingerprint = PsdHierarchyFingerprints.Document(reorderedEnumeration);
+            PsdHierarchyProfile profile = Profile(original, "101", "102");
+
+            PsdPrefabDocumentModel changed = Document(
+                Node("101", "A", 0, new Rect(0, 0, 10, 10), "pixels-changed"),
+                Node("102", "B", 1, new Rect(10, 0, 10, 10), "pixels-b"));
+            changed.sourceFingerprint = PsdHierarchyFingerprints.Document(changed);
+
+            Assert.That(original.sourceFingerprint, Is.Not.Empty);
+            Assert.That(reorderedEnumeration.sourceFingerprint, Is.EqualTo(original.sourceFingerprint));
+            Assert.That(profile.IsStale("guid-123", reorderedEnumeration.sourceFingerprint), Is.False);
+            Assert.That(profile.IsStale("guid-123", changed.sourceFingerprint), Is.True);
+        }
+
+        [Test]
+        public void SchemaCompatibilityDistinguishesCurrentOldAndFutureProfiles()
+        {
+            PsdHierarchyProfile profile = Profile(Document(Node("101", "A", 0, Rect.zero, "a")), "101");
+
+            profile.schemaVersion = PsdHierarchyProfile.CurrentSchemaVersion;
+            Assert.That(profile.CheckSchema().status, Is.EqualTo(PsdHierarchyProfileSchemaStatus.Current));
+            Assert.That(profile.CheckSchema().canApply, Is.True);
+
+            profile.schemaVersion = PsdHierarchyProfile.CurrentSchemaVersion - 1;
+            Assert.That(profile.CheckSchema().status, Is.EqualTo(PsdHierarchyProfileSchemaStatus.RequiresRebuild));
+            Assert.That(profile.CheckSchema().canApply, Is.False);
+
+            profile.schemaVersion = PsdHierarchyProfile.CurrentSchemaVersion + 1;
+            Assert.That(profile.CheckSchema().status, Is.EqualTo(PsdHierarchyProfileSchemaStatus.UnsupportedFuture));
+            Assert.That(profile.CheckSchema().canApply, Is.False);
+        }
+
         private static PsdHierarchyProfile Profile(PsdPrefabDocumentModel document, params string[] members)
         {
             return PsdHierarchyProfile.Create(

@@ -100,6 +100,35 @@ namespace PsdLayoutTool2
             return PsdStableLayerIdUtility.ComputeFnv1a(value);
         }
 
+        /// <summary>
+        /// Produces one source fingerprint for a native PSD document. Nodes are
+        /// sorted by their complete fingerprint tuple, so collection enumeration
+        /// order cannot create false stale results while sibling order remains
+        /// represented inside each node's structure fingerprint.
+        /// </summary>
+        public static string Document(PsdPrefabDocumentModel document)
+        {
+            if (document == null)
+            {
+                return string.Empty;
+            }
+
+            var value = new StringBuilder();
+            Append(value, document.width.ToString(CultureInfo.InvariantCulture));
+            Append(value, document.height.ToString(CultureInfo.InvariantCulture));
+            Append(value, Float(document.resolution));
+            IEnumerable<string> nodeValues = (document.nodes ?? new List<PsdPrefabNodeModel>())
+                .Where(node => node != null)
+                .Select(node => (node.stableId ?? string.Empty) + ":" + Structure(node) + ":" + Content(node) + ":" + Geometry(node))
+                .OrderBy(node => node, System.StringComparer.Ordinal);
+            foreach (string nodeValue in nodeValues)
+            {
+                Append(value, nodeValue);
+            }
+
+            return PsdStableLayerIdUtility.ComputeFnv1a(value.ToString());
+        }
+
         private static void Append(StringBuilder target, string value)
         {
             value = value ?? string.Empty;

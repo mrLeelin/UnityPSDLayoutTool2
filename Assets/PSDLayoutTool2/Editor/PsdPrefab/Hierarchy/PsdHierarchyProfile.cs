@@ -32,7 +32,9 @@ namespace PsdLayoutTool2
                 .OrderBy(id => id, StringComparer.Ordinal)
                 .ToList();
             var value = new StringBuilder("hierarchy-group-v1|");
-            Append(value, PsdHierarchyProfile.BuildGeneratedGroupKey(durableMembers));
+            Append(value, PsdHierarchyProfile.IsValidGroupKey(key)
+                ? key
+                : PsdHierarchyProfile.BuildGeneratedGroupKey(durableMembers));
             foreach (string stableId in durableMembers)
             {
                 Append(value, stableId);
@@ -67,6 +69,19 @@ namespace PsdLayoutTool2
         public readonly List<string> unsortedNewStableIds = new List<string>();
         public readonly List<string> unsortedUnstableIds = new List<string>();
         public readonly List<string> pendingMissingStableIds = new List<string>();
+    }
+
+    public enum PsdHierarchyProfileSchemaStatus
+    {
+        Current,
+        RequiresRebuild,
+        UnsupportedFuture
+    }
+
+    public struct PsdHierarchyProfileSchemaResult
+    {
+        public PsdHierarchyProfileSchemaStatus status;
+        public bool canApply;
     }
 
     /// <summary>
@@ -108,6 +123,7 @@ namespace PsdLayoutTool2
                 .ToList();
 
             var ownedStableIds = new HashSet<string>(StringComparer.Ordinal);
+            var usedGroupKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (PsdHierarchyProfileGroup source in sourceGroups ?? Enumerable.Empty<PsdHierarchyProfileGroup>())
             {
                 if (source == null)
@@ -124,11 +140,7 @@ namespace PsdLayoutTool2
                     continue;
                 }
 
-                string key = BuildGeneratedGroupKey(members);
-                if (profile.groups.Any(group => string.Equals(group.key, key, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
+                string key = ResolveUniqueGroupKey(source.key, members, usedGroupKeys);
 
                 var group = new PsdHierarchyProfileGroup
                 {
@@ -153,9 +165,34 @@ namespace PsdLayoutTool2
 
         public bool IsStale(string psdGuid, string fingerprint)
         {
-            return schemaVersion != CurrentSchemaVersion ||
+            return !CheckSchema().canApply ||
                    !string.Equals(sourcePsdGuid ?? string.Empty, psdGuid ?? string.Empty, StringComparison.Ordinal) ||
                    !string.Equals(sourceFingerprint ?? string.Empty, fingerprint ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Explicit schema gate for callers loading a persisted Profile. Older
+        /// profiles require a deterministic rebuild from the PSD; future schemas
+        /// are rejected so an older tool cannot silently discard new decisions.
+        /// </summary>
+        public PsdHierarchyProfileSchemaResult CheckSchema()
+        {
+            if (schemaVersion == CurrentSchemaVersion)
+            {
+                return new PsdHierarchyProfileSchemaResult
+                {
+                    status = PsdHierarchyProfileSchemaStatus.Current,
+                    canApply = true
+                };
+            }
+
+            return new PsdHierarchyProfileSchemaResult
+            {
+                status = schemaVersion < CurrentSchemaVersion
+                    ? PsdHierarchyProfileSchemaStatus.RequiresRebuild
+                    : PsdHierarchyProfileSchemaStatus.UnsupportedFuture,
+                canApply = false
+            };
         }
 
         public PsdHierarchyReconciliationResult Reconcile(PsdPrefabDocumentModel document, bool confirmMissingCleanup = false)
@@ -163,6 +200,12 @@ namespace PsdLayoutTool2
             if (document == null)
             {
                 throw new ArgumentNullException("document");
+            }
+
+            PsdHierarchyProfileSchemaResult schema = CheckSchema();
+            if (!schema.canApply)
+            {
+                throw new InvalidOperationException("Hierarchy Profile schema cannot be applied: " + schema.status);
             }
 
             NormalizePersistedCollections();
@@ -235,6 +278,16 @@ namespace PsdLayoutTool2
             return "generated_" + PsdStableLayerIdUtility.ComputeFnv1a(canonical);
         }
 
+        internal static bool IsValidGroupKey(string key)
+        {
+            if (string.IsNullOrEmpty(key) || key.Length > 128 || key.StartsWith("fallback_", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return key.All(character => char.IsLetterOrDigit(character) || character == '_' || character == '-' || character == '.');
+        }
+
         private static PsdHierarchyProfileNode Snapshot(PsdPrefabNodeModel node)
         {
             return new PsdHierarchyProfileNode
@@ -252,6 +305,7 @@ namespace PsdLayoutTool2
                 .GroupBy(node => node.stableId, StringComparer.Ordinal).Select(group => group.First()).ToList();
             var normalizedGroups = new List<PsdHierarchyProfileGroup>();
             var ownedStableIds = new HashSet<string>(StringComparer.Ordinal);
+            var usedGroupKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (PsdHierarchyProfileGroup group in groups.Where(value => value != null))
             {
                 List<string> members = DurableDistinct(group.stableLayerIds)
@@ -264,7 +318,7 @@ namespace PsdLayoutTool2
                 }
 
                 group.stableLayerIds = members;
-                group.key = BuildGeneratedGroupKey(members);
+                group.key = ResolveUniqueGroupKey(group.key, members, usedGroupKeys);
                 normalizedGroups.Add(group);
             }
             groups = normalizedGroups;
@@ -290,6 +344,34 @@ namespace PsdLayoutTool2
                 .Where(PsdStableLayerIdUtility.IsPersistable)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
+        }
+
+        private static string ResolveUniqueGroupKey(
+            string preferredKey,
+            IEnumerable<string> members,
+            HashSet<string> usedKeys)
+        {
+            if (IsValidGroupKey(preferredKey) && usedKeys.Add(preferredKey))
+            {
+                return preferredKey;
+            }
+
+            string generated = BuildGeneratedGroupKey(members);
+            if (usedKeys.Add(generated))
+            {
+                return generated;
+            }
+
+            // A hash collision or pre-existing generated key is repaired with a
+            // deterministic ordinal suffix. Enumeration order is already stable.
+            for (int suffix = 2; ; suffix++)
+            {
+                string candidate = generated + "_" + suffix;
+                if (usedKeys.Add(candidate))
+                {
+                    return candidate;
+                }
+            }
         }
 
         private static void AddUnique(List<string> values, string value)

@@ -103,6 +103,8 @@ namespace PsdLayoutTool2
                 AddNativeNode(model, layer, string.Empty, index);
             }
 
+            model.sourceFingerprint = PsdHierarchyFingerprints.Document(model);
+
             return model;
         }
 
