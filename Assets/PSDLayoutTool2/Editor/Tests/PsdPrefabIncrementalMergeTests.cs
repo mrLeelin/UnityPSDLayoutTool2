@@ -71,11 +71,7 @@ namespace PsdLayoutTool2.Tests
             GameObject source = Root("Root");
             RectTransform retained = Child(source, "Old", "101");
             retained.gameObject.AddComponent<Image>();
-            PsdPrefabIncrementalCustomProbe retainedCustom = retained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
-            retainedCustom.value = 7;
             RectTransform business = Child(retained.gameObject, "Business", null);
-            PsdPrefabIncrementalReferenceProbe probe = source.AddComponent<PsdPrefabIncrementalReferenceProbe>();
-            probe.target = retained.gameObject;
             PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
             UnityEngine.Object.DestroyImmediate(source);
             long retainedId = LocalId(TargetPath, "Old");
@@ -125,7 +121,12 @@ namespace PsdLayoutTool2.Tests
             {
                 RectTransform loadedRetained = loaded.transform.Find("Old") as RectTransform;
                 RectTransform loadedBusiness = loaded.transform.Find("Old/Business") as RectTransform;
-                PsdPrefabIncrementalReferenceProbe loadedProbe = loaded.GetComponent<PsdPrefabIncrementalReferenceProbe>();
+                PsdPrefabIncrementalCustomProbe loadedCustom =
+                    loadedRetained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
+                loadedCustom.value = 7;
+                PsdPrefabIncrementalReferenceProbe loadedProbe =
+                    loaded.AddComponent<PsdPrefabIncrementalReferenceProbe>();
+                loadedProbe.target = loadedRetained.gameObject;
                 Type[] componentOrder = loadedRetained.GetComponents<Component>().Select(component => component.GetType()).ToArray();
                 Color materialColorBefore = material.color;
                 PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
@@ -335,7 +336,6 @@ namespace PsdLayoutTool2.Tests
             GameObject source = Root("Root");
             RectTransform retained = Child(source, "Old Text", null);
             retained.gameObject.AddComponent<TextMeshProUGUI>();
-            retained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>().value = 5;
             PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
             UnityEngine.Object.DestroyImmediate(source);
             long localId = LocalId(TargetPath, "Old Text");
@@ -365,6 +365,7 @@ namespace PsdLayoutTool2.Tests
             try
             {
                 RectTransform loadedTextRect = loaded.transform.Find("Old Text") as RectTransform;
+                loadedTextRect.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>().value = 5;
                 Type[] beforeOrder = loadedTextRect.GetComponents<Component>().Select(component => component.GetType()).ToArray();
                 PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
                     TargetPath, loaded, candidate,
@@ -408,9 +409,7 @@ namespace PsdLayoutTool2.Tests
             Outline oldOutline = retained.gameObject.AddComponent<Outline>();
             Shadow oldShadow = retained.gameObject.AddComponent<Shadow>();
             AspectRatioFitter oldAspect = retained.gameObject.AddComponent<AspectRatioFitter>();
-            Button oldButton = retained.gameObject.AddComponent<Button>();
-            PsdPrefabIncrementalCustomProbe handler = retained.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
-            UnityEventTools.AddPersistentListener(oldButton.onClick, handler.HandleClick);
+            retained.gameObject.AddComponent<Button>();
             PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
             UnityEngine.Object.DestroyImmediate(source);
             PsdHierarchyProfileNode record = Node("101", LocalId(TargetPath, "Legacy"), "Root/Legacy");
@@ -447,6 +446,11 @@ namespace PsdLayoutTool2.Tests
             GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
             try
             {
+                RectTransform loadedLegacy = loaded.transform.Find("Legacy") as RectTransform;
+                PsdPrefabIncrementalCustomProbe handler =
+                    loadedLegacy.gameObject.AddComponent<PsdPrefabIncrementalCustomProbe>();
+                UnityEventTools.AddPersistentListener(
+                    loadedLegacy.GetComponent<Button>().onClick, handler.HandleClick);
                 PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
                     TargetPath, loaded, candidate,
                     new Dictionary<string, RectTransform> { { "101", candidateRect } }, profile, EmptyPlan());
@@ -510,10 +514,6 @@ namespace PsdLayoutTool2.Tests
             RectTransform retained = Child(source, "Legacy", null);
             Outline outline = retained.gameObject.AddComponent<Outline>();
             AspectRatioFitter aspect = retained.gameObject.AddComponent<AspectRatioFitter>();
-            PsdPrefabIncrementalNestedReferenceProbe references =
-                source.AddComponent<PsdPrefabIncrementalNestedReferenceProbe>();
-            references.outlines.Add(outline);
-            references.nested.aspectRatioFitter = aspect;
             PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
             UnityEngine.Object.DestroyImmediate(source);
 
@@ -533,7 +533,9 @@ namespace PsdLayoutTool2.Tests
                 Outline loadedOutline = loadedLegacy.GetComponent<Outline>();
                 AspectRatioFitter loadedAspect = loadedLegacy.GetComponent<AspectRatioFitter>();
                 PsdPrefabIncrementalNestedReferenceProbe loadedReferences =
-                    loaded.GetComponent<PsdPrefabIncrementalNestedReferenceProbe>();
+                    loaded.AddComponent<PsdPrefabIncrementalNestedReferenceProbe>();
+                loadedReferences.outlines.Add(loadedOutline);
+                loadedReferences.nested.aspectRatioFitter = loadedAspect;
 
                 // Prove the hidden list/array element is scanned independently.
                 loadedReferences.nested.aspectRatioFitter = null;
@@ -703,7 +705,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(AssetDatabase.AssetPathToGUID(TargetPath), Is.EqualTo(targetGuid));
             Assert.That(LocalId(TargetPath, "Fresh"), Is.EqualTo(originalLocalId));
             Assert.That(saved.nodes[0].localFileId, Is.EqualTo(originalLocalId));
-            Assert.That(saved.nodes[0].lastKnownPath, Is.EqualTo("Root/Fresh"));
+            Assert.That(saved.nodes[0].lastKnownPath, Is.EqualTo("Target/Fresh"),
+                "Unity names loaded Prefab contents from the target asset filename.");
             Assert.That(saved.targetPrefabPath, Is.EqualTo(TargetPath));
             Assert.That(saved.targetPrefabGuid, Is.EqualTo(targetGuid));
             Assert.That(saved.nodes[0].importerOwnedComponentTypes, Is.EqualTo(new[] { typeof(Image).FullName }));

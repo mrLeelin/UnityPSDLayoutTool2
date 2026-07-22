@@ -4,7 +4,6 @@ namespace PsdLayoutTool2
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
-    using Newtonsoft.Json;
     using PhotoshopFile;
     using UnityEditor;
     using UnityEngine;
@@ -243,7 +242,7 @@ namespace PsdLayoutTool2
             sourceGuid = psdGuid ?? string.Empty;
             sourcePath = Normalize(psdPath);
             targetPath = Normalize(prefabPath);
-            plan = PsdHierarchyPlanJson.Parse(JsonConvert.SerializeObject(validatedPlan));
+            plan = ClonePlan(validatedPlan);
         }
 
         public static bool HasMatch(string psdGuid, string prefabPath)
@@ -273,6 +272,44 @@ namespace PsdLayoutTool2
         private static string Normalize(string value)
         {
             return (value ?? string.Empty).Replace('\\', '/');
+        }
+
+        private static PsdHierarchyPlan ClonePlan(PsdHierarchyPlan source)
+        {
+            var clone = new PsdHierarchyPlan
+            {
+                schemaVersion = source.schemaVersion,
+                sourcePsdGuid = source.sourcePsdGuid,
+                sourceFingerprint = source.sourceFingerprint,
+                contentFingerprint = source.contentFingerprint,
+                structureFingerprint = source.structureFingerprint,
+                geometryFingerprint = source.geometryFingerprint
+            };
+            foreach (PsdHierarchyPlanGroup group in source.groups ?? new List<PsdHierarchyPlanGroup>())
+            {
+                if (group == null) continue;
+                clone.groups.Add(new PsdHierarchyPlanGroup
+                {
+                    key = group.key,
+                    parentKey = group.parentKey,
+                    memberStableIds = new List<string>(group.memberStableIds ?? new List<string>()),
+                    displayName = group.displayName,
+                    evidence = group.evidence,
+                    confidence = group.confidence
+                });
+            }
+            foreach (PsdHierarchyPlanRename rename in source.renames ?? new List<PsdHierarchyPlanRename>())
+            {
+                if (rename == null) continue;
+                clone.renames.Add(new PsdHierarchyPlanRename
+                {
+                    stableId = rename.stableId,
+                    name = rename.name,
+                    evidence = rename.evidence,
+                    confidence = rename.confidence
+                });
+            }
+            return clone;
         }
     }
 }

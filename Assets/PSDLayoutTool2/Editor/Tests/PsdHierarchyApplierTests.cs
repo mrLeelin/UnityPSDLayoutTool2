@@ -390,7 +390,7 @@ namespace PsdLayoutTool2.Tests
             string before = GraphSignature(root);
             int injected = 0;
 
-            Assert.Throws<InvalidOperationException>(() => PsdHierarchyApplier.Apply(
+            Assert.That(() => PsdHierarchyApplier.Apply(
                 root,
                 Plan(),
                 Registry(leaf),
@@ -404,7 +404,7 @@ namespace PsdLayoutTool2.Tests
                         return;
                     }
                     throw new InvalidOperationException("injected removed-group failure");
-                }));
+                }), Throws.InstanceOf<InvalidOperationException>());
 
             Assert.That(old == null, Is.False);
             Assert.That(GraphSignature(root), Is.EqualTo(before));
@@ -500,7 +500,7 @@ namespace PsdLayoutTool2.Tests
             string before = GraphSignature(root);
             int injected = 0;
 
-            Assert.Throws<InvalidOperationException>(() => PsdHierarchyApplier.Apply(
+            Assert.That(() => PsdHierarchyApplier.Apply(
                 root,
                 Plan(Group("g", "", "Changed", "101")),
                 Registry(first),
@@ -514,7 +514,7 @@ namespace PsdLayoutTool2.Tests
                         return;
                     }
                     throw new InvalidOperationException("injected middle failure");
-                }));
+                }), Throws.InstanceOf<InvalidOperationException>());
 
             Assert.That(GraphSignature(root), Is.EqualTo(before));
             Assert.That(root.GetComponentsInChildren<RectTransform>(true).Any(value => value.name == "Changed"), Is.False);

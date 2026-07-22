@@ -94,7 +94,14 @@ namespace PsdLayoutTool2
             TopologicalGroups(groups).ToList();
             Dictionary<string, RectTransform> ownedGroups = ReadOwnedGroups(root, groups, leaves, existingGroupsByKey);
             Dictionary<RectTransform, string> oldKeysByTransform = ownedGroups.ToDictionary(pair => pair.Value, pair => pair.Key);
-            foreach (RectTransform leaf in leaves.Values) ValidateMovable(root, leaf);
+            // A retained generated object may legitimately own Button/Selectable
+            // components while only its importer-owned values are refreshed.
+            // Protected-boundary checks are required only for leaves the plan
+            // actually reparents into an organizer group.
+            foreach (string stableId in groups.Values
+                         .SelectMany(group => group.memberStableIds ?? new List<string>())
+                         .Distinct(StringComparer.Ordinal))
+                ValidateMovable(root, leaves[stableId]);
 
             PsdHierarchyApplySnapshot verification = PsdHierarchyApplyVerifier.Capture(root, leaves, ownedGroups.Values);
             List<TransformState> rollbackStates = CaptureGraph(root);
