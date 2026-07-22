@@ -672,12 +672,11 @@
                 // stale-file deletion. A known Profile with a missing target is
                 // an error, never permission to fall back to whole-tree save.
                 PsdHierarchyProfile boundHierarchyProfile = null;
-                if (CreatePrefab && UseUnityUI && !string.IsNullOrEmpty(prefabRelativePath))
+                if (CreatePrefab && !string.IsNullOrEmpty(prefabRelativePath))
                 {
                     string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
-                    string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabRelativePath, sourceGuid);
-                    boundHierarchyProfile = PsdPrefabTransactionalSave.ResolveBoundProfileForImport(
-                        profilePath, prefabRelativePath);
+                    boundHierarchyProfile = ResolveHierarchyProfileBeforePrefabImport(
+                        sourceGuid, prefabRelativePath, UseUnityUI);
                 }
 
                 if (CreatePrefab)
@@ -1352,6 +1351,26 @@
         }
 
         /// <summary>
+        /// Resolves the source-GUID Profile before any Prefab conflict,
+        /// deletion or save operation. A Profile created for the Unity UI
+        /// incremental workflow cannot safely fall back to scene-object mode.
+        /// </summary>
+        public static PsdHierarchyProfile ResolveHierarchyProfileBeforePrefabImport(
+            string sourcePsdGuid,
+            string prefabPath,
+            bool useUnityUI)
+        {
+            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourcePsdGuid);
+            PsdHierarchyProfile profile = PsdPrefabTransactionalSave.ResolveBoundProfileForImport(
+                profilePath, prefabPath);
+            if (profile != null && !useUnityUI)
+                throw new InvalidOperationException(
+                    "Hierarchy Profile incremental import is unsupported in Scene Objects mode. " +
+                    "Switch back to Unity UI mode before importing this PSD: " + profilePath);
+            return profile;
+        }
+
+        /// <summary>
         /// Applies a persisted hierarchy Profile to the exact configured target
         /// Prefab. Returning false means no Profile was adopted and preserves
         /// the original importer save behavior; a stale or ambiguous Profile
@@ -1364,12 +1383,14 @@
             GameObject candidateRoot,
             IReadOnlyDictionary<string, RectTransform> candidateRegistry)
         {
-            if (!UseUnityUI || string.IsNullOrEmpty(prefabPath))
+            if (string.IsNullOrEmpty(prefabPath))
                 return false;
 
             string sourceGuid = AssetDatabase.AssetPathToGUID(sourcePsdPath);
             string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
-            PsdHierarchyProfile persisted = PsdPrefabTransactionalSave.ResolveBoundProfileForImport(profilePath, prefabPath);
+            PsdHierarchyProfile persisted = ResolveHierarchyProfileBeforePrefabImport(
+                sourceGuid, prefabPath, UseUnityUI);
+            if (!UseUnityUI) return false;
             if (persisted == null) return false;
             if (!persisted.CheckSchema().canApply)
                 throw new InvalidOperationException("Hierarchy Profile schema is stale or unsupported: " + profilePath);

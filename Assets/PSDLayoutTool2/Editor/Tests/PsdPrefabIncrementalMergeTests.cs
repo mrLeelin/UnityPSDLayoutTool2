@@ -504,6 +504,65 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void MissingPreviouslyOwnedComponentsFailClosedForListAndNestedBusinessReferences()
+        {
+            GameObject source = Root("Root");
+            RectTransform retained = Child(source, "Legacy", null);
+            Outline outline = retained.gameObject.AddComponent<Outline>();
+            AspectRatioFitter aspect = retained.gameObject.AddComponent<AspectRatioFitter>();
+            PsdPrefabIncrementalNestedReferenceProbe references =
+                source.AddComponent<PsdPrefabIncrementalNestedReferenceProbe>();
+            references.outlines.Add(outline);
+            references.nested.aspectRatioFitter = aspect;
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+
+            PsdHierarchyProfileNode record = Node("101", LocalId(TargetPath, "Legacy"), "Root/Legacy");
+            record.importerOwnedComponentTypes = new List<string>
+            {
+                typeof(Outline).FullName,
+                typeof(AspectRatioFitter).FullName
+            };
+            PsdHierarchyProfile profile = Profile(record);
+            GameObject candidate = Root("Root");
+            RectTransform candidateRect = Child(candidate, "Legacy", null);
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                RectTransform loadedLegacy = loaded.transform.Find("Legacy") as RectTransform;
+                Outline loadedOutline = loadedLegacy.GetComponent<Outline>();
+                AspectRatioFitter loadedAspect = loadedLegacy.GetComponent<AspectRatioFitter>();
+                PsdPrefabIncrementalNestedReferenceProbe loadedReferences =
+                    loaded.GetComponent<PsdPrefabIncrementalNestedReferenceProbe>();
+
+                // Prove the hidden list/array element is scanned independently.
+                loadedReferences.nested.aspectRatioFitter = null;
+                Assert.Throws<PsdPrefabIncrementalMergeException>(() => PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateRect } }, profile, EmptyPlan()));
+                Assert.That(loadedLegacy.GetComponent<Outline>(), Is.Not.Null);
+                Assert.That(loadedLegacy.GetComponent<AspectRatioFitter>(), Is.Not.Null,
+                    "A deep-reference failure must occur before any previously-owned component is removed.");
+
+                // Then isolate the nested serializable reference. Both stale
+                // components must still be present after the second failure.
+                loadedReferences.outlines.Clear();
+                loadedReferences.nested.aspectRatioFitter = loadedAspect;
+                Assert.Throws<PsdPrefabIncrementalMergeException>(() => PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateRect } }, profile, EmptyPlan()));
+                Assert.That(loadedLegacy.GetComponent<Outline>(), Is.SameAs(loadedOutline));
+                Assert.That(loadedLegacy.GetComponent<AspectRatioFitter>(), Is.SameAs(loadedAspect));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
         public void NewNodeCreatesOnlyAllowlistedComponentsAndSafeStaleOwnedEffectIsRemoved()
         {
             GameObject source = Root("Root");
@@ -557,6 +616,42 @@ namespace PsdLayoutTool2.Tests
             Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath), Is.Null);
             Assert.That(PsdPrefabTransactionalSave.ResolveBoundProfileForImport(
                 Folder + "/Absent.asset", TargetPath), Is.Null);
+        }
+
+        [Test]
+        public void BoundProfileRejectsNonUiModeBeforePrefabOrProfileBytesCanChange()
+        {
+            const string sourceGuid = "mode-switch-source-guid";
+            string fixedProfilePath = PsdPrefabTransactionalSave.GetProfilePath(TargetPath, sourceGuid);
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            PsdHierarchyProfile profile = Profile();
+            profile.sourcePsdGuid = sourceGuid;
+            profile.targetPrefabPath = TargetPath;
+            profile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+            string profileDirectory = Path.GetDirectoryName(FullPath(fixedProfilePath));
+            Directory.CreateDirectory(profileDirectory);
+            AssetDatabase.Refresh();
+            AssetDatabase.CreateAsset(profile, fixedProfilePath);
+            AssetDatabase.SaveAssets();
+            byte[] prefabBefore = File.ReadAllBytes(FullPath(TargetPath));
+            byte[] profileBefore = File.ReadAllBytes(FullPath(fixedProfilePath));
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    PsdImporter.ResolveHierarchyProfileBeforePrefabImport(sourceGuid, TargetPath, false));
+                Assert.That(File.ReadAllBytes(FullPath(TargetPath)), Is.EqualTo(prefabBefore));
+                Assert.That(File.ReadAllBytes(FullPath(fixedProfilePath)), Is.EqualTo(profileBefore));
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(fixedProfilePath);
+            }
+
+            Assert.That(PsdImporter.ResolveHierarchyProfileBeforePrefabImport(
+                "mode-switch-absent-guid", TargetPath, false), Is.Null,
+                "A non-UI import without a Profile must retain the legacy save path.");
         }
 
         [Test]
@@ -815,5 +910,18 @@ namespace PsdLayoutTool2.Tests
     {
         public int value;
         public void HandleClick() { value++; }
+    }
+
+    [Serializable]
+    public sealed class PsdPrefabIncrementalNestedReferences
+    {
+        public AspectRatioFitter aspectRatioFitter;
+    }
+
+    public sealed class PsdPrefabIncrementalNestedReferenceProbe : MonoBehaviour
+    {
+        [HideInInspector]
+        public List<Outline> outlines = new List<Outline>();
+        public PsdPrefabIncrementalNestedReferences nested = new PsdPrefabIncrementalNestedReferences();
     }
 }

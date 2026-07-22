@@ -533,10 +533,12 @@ namespace PsdLayoutTool2
                 if (owner == null || owner == target) continue;
                 var serialized = new SerializedObject(owner);
                 SerializedProperty property = serialized.GetIterator();
-                bool enterChildren = true;
-                while (property.Next(enterChildren))
+                // Next (rather than NextVisible) includes hidden serialized
+                // fields. Passing true on every iteration descends through
+                // arrays, lists and nested serializable objects as well as
+                // their direct owner fields.
+                while (property.Next(true))
                 {
-                    enterChildren = false;
                     if (property.propertyType == SerializedPropertyType.ObjectReference &&
                         property.objectReferenceValue == target)
                         throw new PsdPrefabIncrementalMergeException(
