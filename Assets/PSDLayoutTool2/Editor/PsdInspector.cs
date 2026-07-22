@@ -40,11 +40,6 @@
         private const string OutputModePrefKey = "PsdLayoutTool2.OutputMode";
 
         /// <summary>
-        /// EditorPrefs key for output folder name.
-        /// </summary>
-        private const string OutputFolderNamePrefKey = "PsdLayoutTool2.OutputFolderName";
-
-        /// <summary>
         /// EditorPrefs key for prefab output mode.
         /// </summary>
         private const string PrefabModePrefKey = "PsdLayoutTool2.PrefabMode";
@@ -53,11 +48,6 @@
         /// EditorPrefs key for target canvas hierarchy path.
         /// </summary>
         private const string TargetCanvasPathPrefKey = "PsdLayoutTool2.TargetCanvasPath";
-
-        /// <summary>
-        /// EditorPrefs key for scaling generated UI to target canvas size.
-        /// </summary>
-        private const string ScaleToTargetCanvasPrefKey = "PsdLayoutTool2.ScaleToTargetCanvas";
 
         /// <summary>
         /// EditorPrefs key for preserving aspect ratio while scaling to target canvas.
@@ -165,10 +155,10 @@
                 PsdImporter.OutputMode = (PsdImporter.OutputDirectoryMode)EditorPrefs.GetInt(OutputModePrefKey, (int)PsdImporter.OutputDirectoryMode.PsdDirectory);
             }
 
-            if (EditorPrefs.HasKey(OutputFolderNamePrefKey))
-            {
-                PsdImporter.OutputFolderName = EditorPrefs.GetString(OutputFolderNamePrefKey, string.Empty);
-            }
+            // A custom output name belongs to the PSD currently being imported,
+            // not to the editor globally. Leave it empty by default so the
+            // importer resolves it from the selected PSD file name.
+            PsdImporter.OutputFolderName = string.Empty;
 
             if (EditorPrefs.HasKey(PrefabModePrefKey))
             {
@@ -180,10 +170,9 @@
                 PsdImporter.TargetCanvasPath = EditorPrefs.GetString(TargetCanvasPathPrefKey, string.Empty);
             }
 
-            if (EditorPrefs.HasKey(ScaleToTargetCanvasPrefKey))
-            {
-                PsdImporter.ScaleToTargetCanvas = EditorPrefs.GetBool(ScaleToTargetCanvasPrefKey, true);
-            }
+            // PSD pixels are the default coordinate system. Do not restore an
+            // older global preference that could silently rescale a new PSD.
+            PsdImporter.ScaleToTargetCanvas = false;
 
             if (EditorPrefs.HasKey(PreserveAspectPrefKey))
             {
@@ -260,6 +249,14 @@
 
                     GUILayout.Label(Localize("<b>PSD 布局工具 2</b>", "<b>PSD Layout Tool 2</b>"), guiStyle, GUILayout.Height(23));
 
+                    // Keep the primary action above the native TextureImporter preview.  Unity can reserve
+                    // most of the Inspector height for that preview, which otherwise makes the action buttons
+                    // at the bottom of this custom inspector unreachable.
+                    if (GUILayout.Button(Localize("生成预制体", "Generate Prefab"), GUILayout.Height(26)))
+                    {
+                        PsdImporter.GeneratePrefab(assetPath);
+                    }
+
                     GUIContent maximumDepthLabel = LocalizedContent(
                         "最大深度（Z）",
                         "Maximum Depth (Z)",
@@ -317,8 +314,8 @@
                         GUIContent scaleToCanvasLabel = LocalizedContent(
                             "匹配目标 Canvas 尺寸",
                             "Scale To Target Canvas",
-                            "开启后会把 PSD 坐标与尺寸按目标 Canvas 尺寸缩放映射。\n关闭后保持 PSD 1:1 像素映射。",
-                            "When enabled, PSD positions and sizes are scaled to target canvas size.\nWhen disabled, keeps strict 1:1 PSD pixel mapping.");
+                            "默认关闭，保持 PSD 1:1 像素尺寸。仅在明确需要适配目标 Canvas 时开启。",
+                            "Disabled by default to keep strict 1:1 PSD pixel sizes. Enable only when target Canvas scaling is explicitly required.");
                         PsdImporter.ScaleToTargetCanvas = EditorGUILayout.Toggle(scaleToCanvasLabel, PsdImporter.ScaleToTargetCanvas);
 
                         EditorGUI.BeginDisabledGroup(!PsdImporter.ScaleToTargetCanvas);
@@ -405,10 +402,8 @@
                     if (EditorGUI.EndChangeCheck())
                     {
                         EditorPrefs.SetInt(OutputModePrefKey, (int)PsdImporter.OutputMode);
-                        EditorPrefs.SetString(OutputFolderNamePrefKey, PsdImporter.OutputFolderName ?? string.Empty);
                         EditorPrefs.SetInt(PrefabModePrefKey, (int)PsdImporter.PrefabMode);
                         EditorPrefs.SetString(TargetCanvasPathPrefKey, PsdImporter.TargetCanvasPath ?? string.Empty);
-                        EditorPrefs.SetBool(ScaleToTargetCanvasPrefKey, PsdImporter.ScaleToTargetCanvas);
                         EditorPrefs.SetBool(PreserveAspectPrefKey, PsdImporter.PreserveAspectWhenScalingToCanvas);
                         EditorPrefs.SetBool(AutoAnchorByNamePrefKey, PsdImporter.EnableAutoAnchorByName);
                         EditorPrefs.SetBool(RootGlobalAnchorPrefKey, PsdImporter.RootUseGlobalAnchorByDefault);
@@ -451,9 +446,9 @@
                         PsdNineSliceWindow.Open(AssetDatabase.GetAssetPath(Selection.activeObject));
                     }
 
-                    if (GUILayout.Button(Localize("配置公共资源库", "Configure Common Asset Library")))
+                    if (GUILayout.Button(Localize("生成/刷新公共资源映射表", "Generate / Refresh Common Asset Catalog")))
                     {
-                        SettingsService.OpenProjectSettings("Project/PSD Layout Tool/Common Asset Library");
+                        SettingsService.OpenProjectSettings("Project/PSD Layout Tool/Common Asset Catalog");
                     }
 
                     if (GUILayout.Button(Localize("在当前场景中布局", "Layout In Current Scene")))

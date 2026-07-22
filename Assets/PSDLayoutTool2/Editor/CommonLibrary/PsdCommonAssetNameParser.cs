@@ -27,6 +27,22 @@ namespace PsdLayoutTool2
             return TryParsePrefix(layerName, TexturePrefix, PsdCommonAssetKind.Texture, out reference);
         }
 
+        /// <summary>
+        /// Reads the key from a public prefab asset name during catalog refresh.
+        /// </summary>
+        public static bool TryParsePrefabAssetKey(string assetName, out string key)
+        {
+            return TryParseAssetKey(assetName, PrefabPrefix, out key);
+        }
+
+        /// <summary>
+        /// Reads the key from a public texture asset name during catalog refresh.
+        /// </summary>
+        public static bool TryParseTextureAssetKey(string assetName, out string key)
+        {
+            return TryParseAssetKey(assetName, TexturePrefix, out key);
+        }
+
         private static bool TryParsePrefix(
             string layerName,
             string prefix,
@@ -47,6 +63,18 @@ namespace PsdLayoutTool2
 
             reference = new PsdCommonAssetReference(kind, key);
             return true;
+        }
+
+        private static bool TryParseAssetKey(string assetName, string prefix, out string key)
+        {
+            key = string.Empty;
+            if (string.IsNullOrEmpty(assetName) || !assetName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            key = assetName.Substring(prefix.Length).Trim();
+            return !string.IsNullOrEmpty(key);
         }
     }
 }

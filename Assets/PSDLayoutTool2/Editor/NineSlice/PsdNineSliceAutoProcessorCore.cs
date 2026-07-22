@@ -2,13 +2,15 @@ namespace PsdLayoutTool2
 {
     /// <summary>
     /// Pure name-rule and raster conversion. Keeping this outside Unity API
-    /// code makes the crop contract directly regression-testable.
+    /// code makes the border contract directly regression-testable.
     /// </summary>
     public static class PsdNineSliceAutoProcessor
     {
         /// <summary>
-        /// Applies an explicit border or analyzes a tagged raster, then returns
-        /// the minimally cropped source and its matching border.
+        /// Applies an explicit border or analyzes a tagged raster, then keeps
+        /// the four protected edges plus Unity's two-pixel stretch-center sample.
+        /// The generated Sprite is therefore physically reduced like the Figma
+        /// export pipeline, while the Prefab Rect remains at the PSD size.
         /// </summary>
         public static bool TryProcessRaster(
             PsdNineSliceRaster source,
@@ -50,6 +52,17 @@ namespace PsdLayoutTool2
             }
 
             cropped = PsdNineSliceCropper.CropToMinimum(source, border);
+            if (!rule.HasExplicitBorder)
+            {
+                float meanChannelDifference;
+                if (!PsdNineSliceCropSafety.IsSafeToCrop(source, cropped, border, out meanChannelDifference))
+                {
+                    cropped = source;
+                    reason = "Preserved the full source because a name-driven crop would alter baked artwork (mean channel difference=" +
+                        meanChannelDifference.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + ").";
+                }
+            }
+
             return true;
         }
 

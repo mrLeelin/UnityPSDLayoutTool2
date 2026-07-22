@@ -7,7 +7,7 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdNineSliceCropper
     {
-        private const int StretchSampleSize = 2;
+        private const int StretchSampleSize = PsdNineSliceBorder.MinimumStretchCenterPixels;
 
         /// <summary>
         /// Keeps protected corners and a two-pixel sample of every stretchable

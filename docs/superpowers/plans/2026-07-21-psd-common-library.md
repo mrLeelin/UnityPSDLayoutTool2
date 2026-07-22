@@ -24,13 +24,13 @@
 ### Task 2: Settings and exact resolver
 
 **Files:**
-- Create: `Assets/PSDLayoutTool2/Editor/CommonLibrary/PsdCommonAssetLibrarySettings.cs`
+- Create: `Assets/PSDLayoutTool2/Editor/CommonLibrary/PsdCommonAssetCatalog.cs`
 - Create: `Assets/PSDLayoutTool2/Editor/CommonLibrary/PsdCommonAssetResolver.cs`
-- Create: `Assets/PSDLayoutTool2/Editor/CommonLibrary/PsdCommonAssetLibrarySettingsProvider.cs`
+- Create: `Assets/PSDLayoutTool2/Editor/CommonLibrary/PsdCommonAssetCatalogSettingsProvider.cs`
 
-- [ ] Create the ScriptableObject that stores prefab and texture root folders at `Assets/PSDLayoutTool2Settings/PsdCommonAssetLibrary.asset`.
-- [ ] Implement exact filename-key indexing only below configured roots; fail lookup on zero or multiple matches.
-- [ ] Add Project Settings UI with root-folder selection and a default-library creation action.
+- [ ] Create the ScriptableObject that stores direct Prefab and Sprite mappings at `Assets/PSDLayoutTool2Settings/PsdCommonAssetCatalog.asset`.
+- [ ] Scan project-wide `Common_Prefab_*` and `Common_Texture_*` resource names only when the catalog refreshes; fail lookup on zero or multiple catalog entries.
+- [ ] Add Project Settings UI with a catalog generation and refresh action.
 
 ### Task 3: Importer integration
 
@@ -48,6 +48,6 @@
 - Create: `Assets/PSDLayoutTool2/Editor/CommonLibrary/PsdCommonAssetLibraryPostprocessor.cs`
 - Modify: `Assets/PSDLayoutTool2/Editor/Tests/PsdCommonAssetTests.cs`
 
-- [ ] Invalidate the in-memory resolver index only when assets under configured roots change.
+- [ ] Incrementally apply only Common-named asset changes to the catalog; reserve full scan for explicit catalog generation/repair.
 - [ ] Run pure parsing tests, resolver validation tests where possible, and `git diff --check`.
 - [ ] Do not launch/restart Unity; hand runtime import verification to the user.

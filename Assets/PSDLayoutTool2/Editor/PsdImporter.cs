@@ -90,6 +90,7 @@
         /// of truth for future incremental updates.
         /// </summary>
         private static Dictionary<Layer, Vector4> currentAutomaticNineSliceBordersByLayer;
+        private static HashSet<Layer> currentAutomaticNineSliceBordersInTargetCoordinates;
 
         /// <summary>
         /// Whether the embedded manifest is the authoritative 9-slice source
@@ -335,7 +336,7 @@
             OutputMode = OutputDirectoryMode.PsdDirectory;
             OutputFolderName = string.Empty;
             PrefabMode = PrefabOutputMode.SiblingToOutputFolder;
-            ScaleToTargetCanvas = true;
+            ScaleToTargetCanvas = false;
             PreserveAspectWhenScalingToCanvas = true;
             EnableAutoAnchorByName = true;
             RootUseGlobalAnchorByDefault = true;
@@ -370,6 +371,8 @@
         /// Gets or sets the optional base TMP material used to create text-style materials.
         /// </summary>
         public static Material TextMeshProBaseMaterial { get; set; }
+
+        private static bool tmpFontFallbackWarningEmitted;
 
         /// <summary>
         /// Gets or sets the hierarchy path of the target canvas to align generated UI under.
@@ -532,7 +535,9 @@
                 currentLayerInfos = null;
                 currentNineSliceBordersByLayerId = new Dictionary<uint, Vector4>();
                 currentAutomaticNineSliceBordersByLayer = new Dictionary<Layer, Vector4>();
+                currentAutomaticNineSliceBordersInTargetCoordinates = new HashSet<Layer>();
                 useEmbeddedNineSliceMetadata = false;
+                tmpFontFallbackWarningEmitted = false;
                 string normalizedAssetPath = asset.Replace('\\', '/');
                 string fullPath = Path.Combine(GetFullProjectPath(), normalizedAssetPath);
 
@@ -3424,21 +3429,52 @@
                         byte[] processedPng;
                         PsdNineSliceBorder appliedBorder;
                         string reason;
-                        if (PsdNineSliceUnityAutoProcessor.TryProcess(
-                                texture,
-                                nineSliceRule,
-                                out processedPng,
-                                out appliedBorder,
-                                out reason))
+                        bool processed = PsdNineSliceUnityAutoProcessor.TryProcess(
+                            texture,
+                            nineSliceRule,
+                            GetTargetCanvasScaleX(),
+                            GetTargetCanvasScaleY(),
+                            out processedPng,
+                            out appliedBorder,
+                            out reason);
+                        if (!processed && nineSliceRule.HasExplicitBorder)
+                        {
+                            PsdNineSliceNameRule fallbackRule;
+                            if (PsdNineSliceNameRules.TryParse(layer.Name, out fallbackRule) &&
+                                !fallbackRule.HasExplicitBorder)
+                            {
+                                processed = PsdNineSliceUnityAutoProcessor.TryProcess(
+                                    texture,
+                                    fallbackRule,
+                                    GetTargetCanvasScaleX(),
+                                    GetTargetCanvasScaleY(),
+                                    out processedPng,
+                                    out appliedBorder,
+                                    out reason);
+                                if (processed)
+                                {
+                                    nineSliceRule = fallbackRule;
+                                    PsdLogger.Info(
+                                        "Ignored incompatible explicit 9-slice metadata and used the PSD name rule. Layer: " +
+                                        DescribeLayerForLog(layer));
+                                }
+                            }
+                        }
+
+                        if (processed)
                         {
                             png = processedPng;
-                            RegisterAutomaticNineSliceBorder(layer, PsdNineSliceTextureProcessor.ToUnityBorder(appliedBorder));
+                            RegisterAutomaticNineSliceBorder(
+                                layer,
+                                PsdNineSliceTextureProcessor.ToUnityBorder(appliedBorder),
+                                UseTargetCanvasCoordinates && ScaleToTargetCanvas);
                             PsdLogger.Info(
-                                "Auto 9-slice crop from PSD name. mode=" + nineSliceRule.Mode +
+                                "Auto 9-slice conversion from PSD name. mode=" + nineSliceRule.Mode +
                                 ", border(left,top,right,bottom)=" +
                                 appliedBorder.Left + "," + appliedBorder.Top + "," +
                                 appliedBorder.Right + "," + appliedBorder.Bottom +
-                                ", layer=" + DescribeLayerForLog(layer));
+                                ", layer=" + DescribeLayerForLog(layer) +
+                                (string.IsNullOrEmpty(reason) ? string.Empty : ", " + reason));
                         }
                         else
                         {
@@ -3542,6 +3578,10 @@
                 PsdLogger.Info("Apply TextureImporter sprite settings: " + relativePathToSprite);
                 textureImporter.textureType = TextureImporterType.Sprite;
                 textureImporter.mipmapEnabled = false;
+                // PSD layer color bytes are authored for display. The project
+                // uses Linear rendering, so these generated UI sprites must
+                // retain sRGB sampling instead of depending on importer defaults.
+                textureImporter.sRGBTexture = true;
                 textureImporter.spriteImportMode = SpriteImportMode.Single;
                 textureImporter.spritePivot = new Vector2(0.5f, 0.5f);
                 textureImporter.maxTextureSize = 2048;
@@ -3553,14 +3593,19 @@
                 }
 
                 Vector4 nineSliceBorder;
-                if (TryGetNineSliceBorder(layer, out nineSliceBorder))
+                Texture2D generatedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(relativePathToSprite);
+                if (TryGetNineSliceBorder(layer, out nineSliceBorder) &&
+                    IsNineSliceBorderValidForGeneratedTexture(generatedTexture, nineSliceBorder, relativePathToSprite))
                 {
+                    Vector4 canvasBorder = IsAutomaticNineSliceBorderInTargetCoordinates(layer)
+                        ? nineSliceBorder
+                        : ScaleNineSliceBorderForTargetCanvas(nineSliceBorder);
                     // Unity expects (left, bottom, right, top), while the PSD
                     // tag uses the more author-friendly (left, top, right, bottom).
-                    textureImporter.spriteBorder = nineSliceBorder;
+                    textureImporter.spriteBorder = canvasBorder;
                     PsdLogger.Info(
-                        "Apply 9-slice border (left,bottom,right,top)=" +
-                        nineSliceBorder + ": " + relativePathToSprite);
+                        "Apply 9-slice border (left,bottom,right,top), raw=" +
+                        nineSliceBorder + ", canvas=" + canvasBorder + ": " + relativePathToSprite);
                 }
                 else
                 {
@@ -3982,7 +4027,7 @@
             Font font = GetFontForLayer(layer);
 
             Text textUI = uiObject.AddComponent<Text>();
-            textUI.text = layer.Text;
+            textUI.text = GetLegacyUiText(layer.Text, layer.TextStyle);
             textUI.font = font;
 
             float fontSize = GetUIFontSize(layer);
@@ -4020,7 +4065,7 @@
         {
             TextMeshProUGUI textUI = uiObject.AddComponent<TextMeshProUGUI>();
             textUI.text = layer.Text ?? string.Empty;
-            textUI.font = TextMeshProFont != null ? TextMeshProFont : TMP_Settings.defaultFontAsset;
+            textUI.font = ResolveUsableTextMeshProFont();
             textUI.fontSize = Mathf.Max(1f, GetUIFontSize(layer));
             textUI.color = ApplyLayerOpacity(layer.FillColor, layer);
             textUI.enableWordWrapping = false;
@@ -4028,6 +4073,7 @@
             textUI.raycastTarget = false;
             textUI.richText = false;
             textUI.alignment = GetTextMeshProAlignment(layer.Justification);
+            ApplyTextMeshProCapitalization(textUI, layer.TextStyle);
 
             if (textUI.font == null)
             {
@@ -4050,6 +4096,33 @@
 
             ApplyTextMeshProLineHeight(textUI, layer);
             ApplyTextMeshProPsdBoundsFontSize(textUI, layer);
+        }
+
+        private static TMP_FontAsset ResolveUsableTextMeshProFont()
+        {
+            TMP_FontAsset configured = TextMeshProFont;
+            if (IsUsableTextMeshProFont(configured))
+            {
+                return configured;
+            }
+
+            TMP_FontAsset fallback = TMP_Settings.defaultFontAsset;
+            if (configured != null && !tmpFontFallbackWarningEmitted)
+            {
+                tmpFontFallbackWarningEmitted = true;
+                PsdLogger.Warning(
+                    "Configured TMP font has no usable atlas/material; using TMP default font for this import. " +
+                    "Regenerate or select a valid TMP Font Asset. configured=" + configured.name +
+                    ", fallback=" + (fallback == null ? "<none>" : fallback.name));
+            }
+
+            return fallback;
+        }
+
+        private static bool IsUsableTextMeshProFont(TMP_FontAsset font)
+        {
+            return font != null && font.atlasTexture != null && font.material != null &&
+                font.characterTable != null && font.characterTable.Count > 0;
         }
 
         /// <summary>
@@ -4101,6 +4174,35 @@
                 default:
                     return TextAlignmentOptions.Midline;
             }
+        }
+
+        private static void ApplyTextMeshProCapitalization(TextMeshProUGUI textUI, PsdTextStyle style)
+        {
+            if (textUI == null || style == null)
+            {
+                return;
+            }
+
+            if (style.Capitalization == PsdTextCapitalization.AllCaps)
+            {
+                textUI.fontStyle |= FontStyles.UpperCase;
+            }
+            else if (style.Capitalization == PsdTextCapitalization.SmallCaps)
+            {
+                textUI.fontStyle |= FontStyles.SmallCaps;
+            }
+        }
+
+        private static string GetLegacyUiText(string text, PsdTextStyle style)
+        {
+            if (string.IsNullOrEmpty(text) || style == null ||
+                (style.Capitalization != PsdTextCapitalization.AllCaps &&
+                 style.Capitalization != PsdTextCapitalization.SmallCaps))
+            {
+                return text ?? string.Empty;
+            }
+
+            return text.ToUpperInvariant();
         }
 
         private static void ApplyTextMeshProLineHeight(TextMeshProUGUI textUI, Layer layer)
@@ -4277,7 +4379,11 @@
         private static UiLayoutContext ApplyRootUILayout(RectTransform rootTransform)
         {
             Vector2 rootRectSize = GetRootRectSize();
-            if (RootUseGlobalAnchorByDefault)
+            // A direct 1:1 PSD import must keep a root with the authored PSD
+            // dimensions. Stretching it to an unrelated target Canvas silently
+            // changes every child layout and crops tall PSDs. Global stretch is
+            // only appropriate when the user explicitly chose Canvas scaling.
+            if (RootUseGlobalAnchorByDefault && (!UseTargetCanvasCoordinates || ScaleToTargetCanvas))
             {
                 ApplyStretchLayout(rootTransform);
             }
@@ -4419,7 +4525,7 @@
             if (!hasExplicitBorder)
             {
                 border = image.sprite.border;
-                if (border.x <= 0.0f && border.y <= 0.0f && border.z <= 0.0f && border.w <= 0.0f)
+                if (!PsdNineSliceImportPolicy.HasSpriteBorder(border.x, border.y, border.z, border.w))
                 {
                     return;
                 }
@@ -4548,11 +4654,111 @@
 
                 rectTransform.SetParent(currentGroupGameObject.transform, false);
                 ApplyLayerUILayout(rectTransform, layer, info.AnchorPreset);
+                if (PsdCommonPrefabVisualFallbackPolicy.RequiresSourceVisualFallback(HasRenderableCommonPrefabVisual(instance)))
+                {
+                    Image fallback = CreateCommonPrefabSourceFallback(layer);
+                    fallback.gameObject.name = GetRuntimeObjectName(layer) + "__PsdFallback";
+                    fallback.transform.SetSiblingIndex(instance.transform.GetSiblingIndex());
+                    PsdLogger.Warning(
+                        "Common Prefab has no renderable visual; retained PSD layer visual as fallback: " +
+                        DescribeLayerForLog(layer));
+                }
+
                 return;
             }
 
             instance.transform.SetParent(currentGroupGameObject.transform, false);
             ApplyCommonWorldPosition(instance.transform, layer);
+        }
+
+        /// <summary>
+        /// Creates the source visual used only when a Common Prefab resolves but
+        /// has no visible graphics. Prefer the PSD merged crop, because its
+        /// pixels represent Photoshop's final result; fall back to the raw
+        /// layer image when the document format cannot provide that crop.
+        /// </summary>
+        private static Image CreateCommonPrefabSourceFallback(Layer layer)
+        {
+            Sprite sprite = CreateMergedFallbackSprite(layer) ?? CreateSprite(layer);
+            GameObject uiObject = new GameObject(GetRuntimeObjectName(layer), typeof(RectTransform));
+            uiObject.transform.SetParent(currentGroupGameObject.transform, false);
+
+            LayerImportInfo info = GetLayerInfo(layer);
+            AnchorNamePreset preset = info != null ? info.AnchorPreset : AnchorNamePreset.None;
+            RectTransform transform = uiObject.GetComponent<RectTransform>();
+            ApplyLayerUILayout(transform, layer, preset);
+
+            Image image = uiObject.AddComponent<Image>();
+            image.sprite = sprite;
+            ApplyImageLayoutBehavior(image, preset);
+            return image;
+        }
+
+        /// <summary>
+        /// Exports a cropped PSD merged-image fallback Sprite for an unusable
+        /// Common Prefab.
+        /// </summary>
+        private static Sprite CreateMergedFallbackSprite(Layer layer)
+        {
+            Texture2D texture = ImageDecoder.DecodeMergedImageCrop(layer);
+            if (texture == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                string file = Path.Combine(currentPath, GetTextureBaseName(layer) + "__MergedFallback.png");
+                byte[] png = texture.EncodeToPNG();
+                if (png == null || png.Length == 0)
+                {
+                    return null;
+                }
+
+                // This is an importer-owned recovery asset, not an artist-editable
+                // output. Always replace it so an incremental import cannot retain
+                // an outdated merged crop after PSD or importer changes.
+                File.WriteAllBytes(file, png);
+                return ImportSprite(GetRelativePath(file), PsdName, null);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
+        /// <summary>
+        /// Determines whether a resolved Common Prefab already contains a
+        /// visible visual asset. Components without a Sprite or Texture cannot
+        /// reproduce the PSD layer and therefore need a source-image fallback.
+        /// </summary>
+        private static bool HasRenderableCommonPrefabVisual(GameObject instance)
+        {
+            foreach (Image image in instance.GetComponentsInChildren<Image>(true))
+            {
+                if (image.enabled && image.sprite != null && image.color.a > 0f)
+                {
+                    return true;
+                }
+            }
+
+            foreach (RawImage image in instance.GetComponentsInChildren<RawImage>(true))
+            {
+                if (image.enabled && image.texture != null && image.color.a > 0f)
+                {
+                    return true;
+                }
+            }
+
+            foreach (SpriteRenderer spriteRenderer in instance.GetComponentsInChildren<SpriteRenderer>(true))
+            {
+                if (spriteRenderer.enabled && spriteRenderer.sprite != null && spriteRenderer.color.a > 0f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void CreateCommonUIImage(Layer layer, LayerImportInfo info, Sprite sprite)
@@ -4565,6 +4771,7 @@
             Image image = uiObject.AddComponent<Image>();
             image.sprite = sprite;
             ApplyImageLayoutBehavior(image, info.AnchorPreset);
+            ApplyNineSliceImageBehavior(image, layer);
         }
 
         private static void CreateCommonSpriteGameObject(Layer layer, Sprite sprite)
@@ -4655,6 +4862,16 @@
         private static bool TryGetNineSliceConversionRule(Layer layer, out PsdNineSliceNameRule rule)
         {
             rule = null;
+            // A PSD may retain an older XMP border that was inferred by a previous
+            // exporter version.  A current authoring name is the explicit intent
+            // for this import: its numeric form supplies the border directly and
+            // its bare jiugong form requests a fresh pixel analysis in Unity.
+            // Only use embedded data when the layer has no authoring tag.
+            if (layer != null && PsdNineSliceNameRules.TryParse(layer.Name, out rule))
+            {
+                return true;
+            }
+
             Vector4 explicitBorder;
             if (TryGetNineSliceBorder(layer, out explicitBorder))
             {
@@ -4668,10 +4885,10 @@
                 return true;
             }
 
-            return layer != null && PsdNineSliceNameRules.TryParse(layer.Name, out rule);
+            return false;
         }
 
-        private static void RegisterAutomaticNineSliceBorder(Layer layer, Vector4 border)
+        private static void RegisterAutomaticNineSliceBorder(Layer layer, Vector4 border, bool isInTargetCoordinates)
         {
             if (layer == null)
             {
@@ -4684,6 +4901,20 @@
             }
 
             currentAutomaticNineSliceBordersByLayer[layer] = border;
+            if (isInTargetCoordinates)
+            {
+                currentAutomaticNineSliceBordersInTargetCoordinates.Add(layer);
+            }
+            else
+            {
+                currentAutomaticNineSliceBordersInTargetCoordinates.Remove(layer);
+            }
+        }
+
+        private static bool IsAutomaticNineSliceBorderInTargetCoordinates(Layer layer)
+        {
+            return layer != null && currentAutomaticNineSliceBordersInTargetCoordinates != null &&
+                currentAutomaticNineSliceBordersInTargetCoordinates.Contains(layer);
         }
 
         private static void ClearAutomaticNineSliceBorder(Layer layer)
@@ -4691,6 +4922,10 @@
             if (layer != null && currentAutomaticNineSliceBordersByLayer != null)
             {
                 currentAutomaticNineSliceBordersByLayer.Remove(layer);
+                if (currentAutomaticNineSliceBordersInTargetCoordinates != null)
+                {
+                    currentAutomaticNineSliceBordersInTargetCoordinates.Remove(layer);
+                }
             }
         }
 
@@ -4761,7 +4996,9 @@
         {
             if (layer.Rect.width <= 0f || layer.Rect.height <= 0f ||
                 border.x < 0f || border.y < 0f || border.z < 0f || border.w < 0f ||
-                border.x + border.z > layer.Rect.width || border.y + border.w > layer.Rect.height)
+                border.x + border.z > layer.Rect.width || border.y + border.w > layer.Rect.height ||
+                border.x + border.z + PsdNineSliceBorder.MinimumStretchCenterPixels > layer.Rect.width ||
+                border.y + border.w + PsdNineSliceBorder.MinimumStretchCenterPixels > layer.Rect.height)
             {
                 PsdLogger.Warning(
                     "Ignore invalid 9-slice border for layer: " + DescribeLayerForLog(layer) +
@@ -4770,6 +5007,51 @@
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Prevents metadata expressed for an old PSD rectangle from being
+        /// applied to the final PNG produced for this import.
+        /// </summary>
+        private static bool IsNineSliceBorderValidForGeneratedTexture(
+            Texture2D texture,
+            Vector4 border,
+            string assetPath)
+        {
+            if (texture == null || texture.width <= 0 || texture.height <= 0 ||
+                border.x < 0f || border.y < 0f || border.z < 0f || border.w < 0f ||
+                border.x + border.z + PsdNineSliceBorder.MinimumStretchCenterPixels > texture.width ||
+                border.y + border.w + PsdNineSliceBorder.MinimumStretchCenterPixels > texture.height)
+            {
+                PsdLogger.Warning(
+                    "Ignore invalid 9-slice border for generated PNG: " + assetPath +
+                    ", texture=" + (texture == null ? "<missing>" : texture.width + "x" + texture.height) +
+                    ", border=" + border);
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Keeps the Sprite border in the coordinate system used by the
+        /// generated RectTransform when a target Canvas rescales PSD pixels.
+        /// </summary>
+        private static Vector4 ScaleNineSliceBorderForTargetCanvas(Vector4 border)
+        {
+            if (!UseTargetCanvasCoordinates)
+            {
+                return border;
+            }
+
+            PsdNineSliceBorder scaledBorder = new PsdNineSliceBorder(
+                Mathf.RoundToInt(border.x),
+                Mathf.RoundToInt(border.w),
+                Mathf.RoundToInt(border.z),
+                Mathf.RoundToInt(border.y)).Scale(
+                GetTargetCanvasScaleX(),
+                GetTargetCanvasScaleY());
+            return PsdNineSliceTextureProcessor.ToUnityBorder(scaledBorder);
         }
 
         /// <summary>
@@ -4873,7 +5155,12 @@
         {
             if (UseTargetCanvasCoordinates)
             {
-                return RootUseGlobalAnchorByDefault ? TargetCanvasSize : GetScaledRootSize();
+                // A global-stretch root only takes the target Canvas dimensions
+                // when the user explicitly requested Canvas scaling. In direct
+                // 1:1 mode this must remain the authored PSD size.
+                return RootUseGlobalAnchorByDefault && ScaleToTargetCanvas
+                    ? TargetCanvasSize
+                    : GetScaledRootSize();
             }
 
             return new Vector2(CanvasSize.x / PixelsToUnits, CanvasSize.y / PixelsToUnits);

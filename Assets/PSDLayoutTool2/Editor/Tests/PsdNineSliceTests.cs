@@ -8,6 +8,33 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdNineSliceTests
     {
         [Test]
+        public void BorderValidationRequiresTwoPixelStretchCenter()
+        {
+            var border = new PsdNineSliceBorder(44, 44, 44, 44);
+
+            Assert.That(border.IsValidFor(90, 90), Is.True);
+            Assert.That(new PsdNineSliceBorder(45, 45, 45, 45).IsValidFor(90, 90), Is.False);
+        }
+
+        [Test]
+        public void BorderScalesWithTargetCanvasCoordinates()
+        {
+            PsdNineSliceBorder scaled = new PsdNineSliceBorder(59, 59, 59, 59).Scale(0.513f, 0.513f);
+
+            Assert.That(scaled.Left, Is.EqualTo(30));
+            Assert.That(scaled.Top, Is.EqualTo(30));
+            Assert.That(scaled.Right, Is.EqualTo(30));
+            Assert.That(scaled.Bottom, Is.EqualTo(30));
+        }
+
+        [Test]
+        public void ExistingCommonSpriteBorderRequiresSlicedImageBehavior()
+        {
+            Assert.That(PsdNineSliceImportPolicy.HasSpriteBorder(68f, 70f, 68f, 149f), Is.True);
+            Assert.That(PsdNineSliceImportPolicy.HasSpriteBorder(0f, 0f, 0f, 0f), Is.False);
+        }
+
+        [Test]
         public void AnalyzeFindsUniformSixPixelFrame()
         {
             PsdNineSliceRaster raster = CreateFramedRaster(48, 40, 6);
@@ -19,6 +46,38 @@ namespace PsdLayoutTool2.Tests
             Assert.That(inference.Border.Right, Is.EqualTo(6));
             Assert.That(inference.Border.Bottom, Is.EqualTo(6));
             Assert.That(inference.Confidence, Is.EqualTo(PsdNineSliceConfidence.Medium));
+        }
+
+        [Test]
+        public void AnalyzeProtectsWidePanelRoundedCornersBelowTwelvePercent()
+        {
+            const int width = 100;
+            const int height = 140;
+            const int cornerInset = 8;
+            byte[] pixels = new byte[width * height * 4];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    bool inCorner = (x < cornerInset || x >= width - cornerInset) &&
+                        (y < cornerInset || y >= height - cornerInset);
+                    bool opaque = !inCorner ||
+                        (x >= cornerInset && x < width - cornerInset) ||
+                        (y >= cornerInset && y < height - cornerInset);
+                    int index = (y * width + x) * 4;
+                    pixels[index] = 100;
+                    pixels[index + 1] = 150;
+                    pixels[index + 2] = 200;
+                    pixels[index + 3] = opaque ? (byte)255 : (byte)0;
+                }
+            }
+
+            PsdNineSliceInference inference;
+            Assert.That(PsdNineSliceAnalyzer.TryInfer(new PsdNineSliceRaster(width, height, pixels), out inference), Is.True);
+            Assert.That(inference.Border.Left, Is.GreaterThanOrEqualTo(10));
+            Assert.That(inference.Border.Top, Is.GreaterThanOrEqualTo(10));
+            Assert.That(inference.Border.Right, Is.GreaterThanOrEqualTo(10));
+            Assert.That(inference.Border.Bottom, Is.GreaterThanOrEqualTo(10));
         }
 
         [Test]
@@ -67,7 +126,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void AutomaticRuleCropsSourceAndReturnsMatchingBorder()
+        public void AutomaticRuleCropsToMinimumAndReturnsMatchingBorder()
         {
             PsdNineSliceRaster source = CreateCoordinateRaster(16, 14);
             PsdNineSliceNameRule rule = new PsdNineSliceNameRule(
@@ -84,6 +143,36 @@ namespace PsdLayoutTool2.Tests
             Assert.That(border.Bottom, Is.EqualTo(2));
             Assert.That(cropped.Width, Is.EqualTo(10));
             Assert.That(cropped.Height, Is.EqualTo(8));
+            Assert.That(cropped.GetRed(0, 0), Is.EqualTo(source.GetRed(0, 0)));
+            Assert.That(cropped.GetRed(9, 7), Is.EqualTo(source.GetRed(15, 13)));
+        }
+
+        [Test]
+        public void CropSafetyKeepsFlatNineSliceBackgroundAndRejectsBakedArtwork()
+        {
+            PsdNineSliceBorder border = new PsdNineSliceBorder(4, 4, 4, 4);
+            PsdNineSliceRaster background = CreateFramedRaster(24, 24, 4);
+            PsdNineSliceRaster backgroundCrop = PsdNineSliceCropper.CropToMinimum(background, border);
+            float backgroundDifference;
+            Assert.That(PsdNineSliceCropSafety.IsSafeToCrop(background, backgroundCrop, border, out backgroundDifference), Is.True);
+
+            byte[] artworkPixels = (byte[])background.Pixels.Clone();
+            for (int y = 8; y < 16; y++)
+            {
+                for (int x = 8; x < 16; x++)
+                {
+                    int offset = (y * 24 + x) * 4;
+                    artworkPixels[offset] = 255;
+                    artworkPixels[offset + 1] = 240;
+                    artworkPixels[offset + 2] = 20;
+                }
+            }
+
+            PsdNineSliceRaster artwork = new PsdNineSliceRaster(24, 24, artworkPixels);
+            PsdNineSliceRaster artworkCrop = PsdNineSliceCropper.CropToMinimum(artwork, border);
+            float artworkDifference;
+            Assert.That(PsdNineSliceCropSafety.IsSafeToCrop(artwork, artworkCrop, border, out artworkDifference), Is.False);
+            Assert.That(artworkDifference, Is.GreaterThan(backgroundDifference));
         }
 
         [Test]

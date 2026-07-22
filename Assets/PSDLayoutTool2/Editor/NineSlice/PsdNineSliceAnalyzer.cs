@@ -18,7 +18,11 @@ namespace PsdLayoutTool2
         private const float RepeatMergeMultiplier = 1.5f;
         private const float MergedMaximumRatio = 0.20f;
         private const int MergedMaximumPixels = 96;
-        private const float RoundRectInsetRatio = 0.12f;
+        // Tall phone panels often have a visually significant corner radius
+        // that is below 12% of their very wide short axis (for example,
+        // 83px on a 1008px panel).  Five percent still ignores antialiasing
+        // noise while preserving those authored rounded corners.
+        private const float RoundRectInsetRatio = 0.05f;
         private const float RoundRectSafetyMultiplier = 1.25f;
         private const int RoundRectMinimumCenter = 20;
 

@@ -22,7 +22,7 @@ namespace PsdLayoutTool2
                 return null;
             }
 
-            baseMaterial = baseMaterial != null ? baseMaterial : font.material;
+            baseMaterial = IsCompatibleWithFont(baseMaterial, font) ? baseMaterial : font.material;
             if (baseMaterial == null)
             {
                 return null;
@@ -75,6 +75,11 @@ namespace PsdLayoutTool2
             SetMaterialColor(material, "_UnderlayColor", hasShadow ? effect.shadowColor : Color.black);
             SetKeyword(material, "OUTLINE_ON", hasOutline);
             SetKeyword(material, "UNDERLAY_ON", hasShadow);
+        }
+
+        private static bool IsCompatibleWithFont(Material material, TMP_FontAsset font)
+        {
+            return material != null && font != null && font.atlasTexture != null && material.mainTexture == font.atlasTexture;
         }
 
         private static void SetMaterialFloat(Material material, string property, float value)

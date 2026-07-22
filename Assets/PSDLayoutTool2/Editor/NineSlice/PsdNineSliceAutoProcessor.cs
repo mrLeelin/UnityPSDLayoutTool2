@@ -11,6 +11,102 @@ namespace PsdLayoutTool2
     public static class PsdNineSliceUnityAutoProcessor
     {
         /// <summary>
+        /// Scales the source raster into the same pixel coordinate system as
+        /// the generated RectTransform before deriving the Sprite border.
+        /// This keeps a physically cropped PNG and its border aligned when a
+        /// PSD is fitted into a smaller target Canvas.
+        /// </summary>
+        public static bool TryProcess(
+            Texture2D source,
+            PsdNineSliceNameRule rule,
+            float horizontalScale,
+            float verticalScale,
+            out byte[] png,
+            out PsdNineSliceBorder border,
+            out string reason)
+        {
+            png = null;
+            border = null;
+            reason = string.Empty;
+            if (source == null || horizontalScale <= 0f || verticalScale <= 0f)
+            {
+                reason = "The source texture or target Canvas scale is invalid.";
+                return false;
+            }
+
+            if (Mathf.Approximately(horizontalScale, 1f) && Mathf.Approximately(verticalScale, 1f))
+            {
+                return TryProcess(source, rule, out png, out border, out reason);
+            }
+
+            PsdNineSliceRaster sourceRaster;
+            PsdNineSliceRaster sourceResult;
+            PsdNineSliceBorder sourceBorder;
+            if (!TryBuildSourceConversion(source, rule, out sourceRaster, out sourceResult, out sourceBorder, out reason))
+            {
+                return false;
+            }
+
+            Texture2D scaled = Resize(source, horizontalScale, verticalScale);
+            try
+            {
+                border = sourceBorder.Scale(horizontalScale, verticalScale);
+                PsdNineSliceRaster scaledRaster = ToTopLeftRaster(scaled);
+                if (!border.IsValidFor(scaledRaster.Width, scaledRaster.Height))
+                {
+                    reason = "The target Canvas scale leaves no valid 9-slice center.";
+                    border = null;
+                    return false;
+                }
+
+                // The source safety pass may have deliberately kept a baked
+                // card/label raster whole. It still needs target-canvas
+                // resampling, but must not be cropped after that decision.
+                if (sourceResult.Width == sourceRaster.Width && sourceResult.Height == sourceRaster.Height)
+                {
+                    png = EncodeTopLeftRaster(scaledRaster);
+                    return png != null && png.Length > 0;
+                }
+
+                PsdNineSliceNameRule scaledRule = new PsdNineSliceNameRule(rule.Mode, border);
+                return TryProcess(scaled, scaledRule, out png, out border, out reason);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(scaled);
+            }
+        }
+
+        private static bool TryBuildSourceConversion(
+            Texture2D source,
+            PsdNineSliceNameRule rule,
+            out PsdNineSliceRaster sourceRaster,
+            out PsdNineSliceRaster sourceResult,
+            out PsdNineSliceBorder sourceBorder,
+            out string reason)
+        {
+            sourceRaster = null;
+            sourceResult = null;
+            sourceBorder = null;
+            reason = string.Empty;
+            try
+            {
+                sourceRaster = ToTopLeftRaster(source);
+                return PsdNineSliceAutoProcessor.TryProcessRaster(
+                    sourceRaster,
+                    rule,
+                    out sourceResult,
+                    out sourceBorder,
+                    out reason);
+            }
+            catch (Exception exception)
+            {
+                reason = "Unable to analyze generated PSD pixels: " + exception.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Infers or applies a border, crops the raster to Unity's minimal
         /// sliced source, and returns PNG bytes plus the matching border.
         /// </summary>
@@ -119,6 +215,36 @@ namespace PsdLayoutTool2
             finally
             {
                 UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
+        private static Texture2D Resize(Texture2D source, float horizontalScale, float verticalScale)
+        {
+            int width = Mathf.Max(1, Mathf.RoundToInt(source.width * horizontalScale));
+            int height = Mathf.Max(1, Mathf.RoundToInt(source.height * verticalScale));
+            Color32[] sourcePixels = source.GetPixels32();
+            Color32[] targetPixels = new Color32[width * height];
+            for (int y = 0; y < height; y++)
+            {
+                int sourceY = Mathf.Min(source.height - 1, Mathf.FloorToInt(y / verticalScale));
+                for (int x = 0; x < width; x++)
+                {
+                    int sourceX = Mathf.Min(source.width - 1, Mathf.FloorToInt(x / horizontalScale));
+                    targetPixels[(y * width) + x] = sourcePixels[(sourceY * source.width) + sourceX];
+                }
+            }
+
+            Texture2D resized = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            try
+            {
+                resized.SetPixels32(targetPixels);
+                resized.Apply();
+                return resized;
+            }
+            catch
+            {
+                UnityEngine.Object.DestroyImmediate(resized);
+                throw;
             }
         }
     }

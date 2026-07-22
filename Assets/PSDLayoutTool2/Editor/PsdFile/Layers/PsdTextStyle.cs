@@ -9,6 +9,9 @@ namespace PhotoshopFile
     /// </summary>
     public sealed class PsdTextStyle
     {
+        /// <summary>Gets or sets Photoshop's capitalization presentation.</summary>
+        public PsdTextCapitalization Capitalization { get; set; }
+
         /// <summary>Gets or sets the line height in PSD pixels.</summary>
         public float LineHeight { get; set; }
 
@@ -42,6 +45,7 @@ namespace PhotoshopFile
             return new PsdTextStyle
             {
                 LineHeight = fontSize > 0f ? fontSize * 1.2f : 0f,
+                Capitalization = PsdTextCapitalization.Normal,
                 StrokeColor = Color.black,
                 ShadowColor = Color.black,
                 ShadowDistance = 1f,

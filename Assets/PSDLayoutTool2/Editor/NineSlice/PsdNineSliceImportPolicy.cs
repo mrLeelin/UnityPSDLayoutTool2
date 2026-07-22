@@ -16,5 +16,14 @@ namespace PsdLayoutTool2
             PsdNineSliceNameRule rule;
             return !PsdNineSliceNameRules.TryParse(layerName, out rule);
         }
+
+        /// <summary>
+        /// Determines whether an already imported Sprite carries a usable
+        /// border, including a Sprite resolved from the Common Texture catalog.
+        /// </summary>
+        public static bool HasSpriteBorder(float left, float bottom, float right, float top)
+        {
+            return left > 0f || bottom > 0f || right > 0f || top > 0f;
+        }
     }
 }

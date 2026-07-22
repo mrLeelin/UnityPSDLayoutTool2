@@ -2,24 +2,14 @@ namespace PsdLayoutTool2
 {
     using System;
     using System.Collections.Generic;
-    using System.IO;
     using UnityEditor;
     using UnityEngine;
 
     /// <summary>
-    /// Cached, exact-key resolver for assets below configured common-library roots.
+    /// Exact-key resolver backed by the generated Common Asset Catalog.
     /// </summary>
     public static class PsdCommonAssetResolver
     {
-        private static readonly Dictionary<PsdCommonAssetKind, Dictionary<string, List<UnityEngine.Object>>> Index =
-            new Dictionary<PsdCommonAssetKind, Dictionary<string, List<UnityEngine.Object>>>();
-        private static bool isDirty = true;
-
-        public static void Invalidate()
-        {
-            isDirty = true;
-        }
-
         public static bool TryResolve(
             PsdCommonAssetReference reference,
             out UnityEngine.Object asset,
@@ -33,22 +23,27 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            PsdCommonAssetLibrarySettings settings = PsdCommonAssetLibrarySettings.Load();
-            if (settings == null)
+            PsdCommonAssetCatalog catalog = PsdCommonAssetCatalog.Load();
+            if (catalog == null)
             {
-                error = "Common Asset Library is not configured. Open Project Settings > PSD Layout Tool > Common Asset Library.";
+                error = "Common Asset Catalog is missing. Open Project Settings > PSD Layout Tool > Common Asset Catalog and generate it.";
                 return false;
             }
 
-            EnsureIndex(settings);
-            Dictionary<string, List<UnityEngine.Object>> byKey;
-            if (!Index.TryGetValue(reference.Kind, out byKey) || !byKey.TryGetValue(reference.Key, out List<UnityEngine.Object> matches))
+            if (catalog.needsRefresh)
             {
-                error = "Common " + reference.Kind + " was not found for key '" + reference.Key + "'.";
+                error = "Common Asset Catalog is out of date. Refresh it in Project Settings before importing Common_* layers.";
                 return false;
             }
 
-            if (matches.Count != 1)
+            List<UnityEngine.Object> matches = FindMatches(catalog, reference);
+            if (matches.Count == 0)
+            {
+                error = "Common " + reference.Kind + " was not found for key '" + reference.Key + "' in the catalog.";
+                return false;
+            }
+
+            if (matches.Count > 1)
             {
                 error = "Common " + reference.Kind + " key '" + reference.Key + "' is ambiguous: " + matches.Count + " assets share that exact name.";
                 return false;
@@ -58,82 +53,41 @@ namespace PsdLayoutTool2
             return true;
         }
 
-        private static void EnsureIndex(PsdCommonAssetLibrarySettings settings)
+        private static List<UnityEngine.Object> FindMatches(PsdCommonAssetCatalog catalog, PsdCommonAssetReference reference)
         {
-            if (!isDirty)
+            var matches = new List<UnityEngine.Object>();
+            if (reference.Kind == PsdCommonAssetKind.Prefab)
             {
-                return;
-            }
-
-            Index.Clear();
-            Index[PsdCommonAssetKind.Prefab] = BuildPrefabIndex(settings);
-            Index[PsdCommonAssetKind.Texture] = BuildSpriteIndex(settings);
-            isDirty = false;
-        }
-
-        private static Dictionary<string, List<UnityEngine.Object>> BuildPrefabIndex(PsdCommonAssetLibrarySettings settings)
-        {
-            var result = CreateKeyMap();
-            foreach (string root in settings.GetRootPaths(PsdCommonAssetKind.Prefab))
-            {
-                foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { root }))
+                foreach (PsdCommonPrefabCatalogEntry entry in catalog.prefabs)
                 {
-                    string path = AssetDatabase.GUIDToAssetPath(guid);
-                    GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-                    if (prefab != null)
+                    if (entry != null && entry.prefab != null &&
+                        string.Equals(entry.key, reference.Key, StringComparison.OrdinalIgnoreCase) &&
+                        IsPublicEntry(entry.assetPath, entry.prefab))
                     {
-                        Add(result, Path.GetFileNameWithoutExtension(path), prefab);
+                        matches.Add(entry.prefab);
+                    }
+                }
+            }
+            else
+            {
+                foreach (PsdCommonTextureCatalogEntry entry in catalog.textures)
+                {
+                    if (entry != null && entry.sprite != null &&
+                        string.Equals(entry.key, reference.Key, StringComparison.OrdinalIgnoreCase) &&
+                        IsPublicEntry(entry.assetPath, entry.sprite))
+                    {
+                        matches.Add(entry.sprite);
                     }
                 }
             }
 
-            return result;
+            return matches;
         }
 
-        private static Dictionary<string, List<UnityEngine.Object>> BuildSpriteIndex(PsdCommonAssetLibrarySettings settings)
+        private static bool IsPublicEntry(string assetPath, UnityEngine.Object asset)
         {
-            var result = CreateKeyMap();
-            foreach (string root in settings.GetRootPaths(PsdCommonAssetKind.Texture))
-            {
-                foreach (string guid in AssetDatabase.FindAssets(string.Empty, new[] { root }))
-                {
-                    string path = AssetDatabase.GUIDToAssetPath(guid);
-                    foreach (UnityEngine.Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
-                    {
-                        Sprite sprite = asset as Sprite;
-                        if (sprite != null)
-                        {
-                            Add(result, sprite.name, sprite);
-                        }
-                    }
-                }
-            }
-
-            return result;
-        }
-
-        private static Dictionary<string, List<UnityEngine.Object>> CreateKeyMap()
-        {
-            return new Dictionary<string, List<UnityEngine.Object>>(StringComparer.OrdinalIgnoreCase);
-        }
-
-        private static void Add(
-            Dictionary<string, List<UnityEngine.Object>> target,
-            string key,
-            UnityEngine.Object asset)
-        {
-            if (string.IsNullOrEmpty(key) || asset == null)
-            {
-                return;
-            }
-
-            if (!target.TryGetValue(key, out List<UnityEngine.Object> items))
-            {
-                items = new List<UnityEngine.Object>();
-                target.Add(key, items);
-            }
-
-            items.Add(asset);
+            string path = string.IsNullOrEmpty(assetPath) ? AssetDatabase.GetAssetPath(asset) : assetPath;
+            return PsdCommonCatalogPathPolicy.IsPublicAssetPath(path);
         }
     }
 }

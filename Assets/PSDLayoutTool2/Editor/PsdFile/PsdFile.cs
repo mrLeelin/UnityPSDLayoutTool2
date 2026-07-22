@@ -134,7 +134,12 @@
         /// <summary>
         /// Gets or sets the 2D array containing the ImageData
         /// </summary>
-        private byte[][] ImageData { get; set; }
+        /// <summary>
+        /// Gets the decoded merged-image channels. This is internal because it
+        /// is only used by the importer when a PSD layer needs its final
+        /// composited visual as a safe fallback.
+        /// </summary>
+        internal byte[][] ImageData { get; private set; }
 
         /// <summary>
         /// Gets or sets the ImageCompression

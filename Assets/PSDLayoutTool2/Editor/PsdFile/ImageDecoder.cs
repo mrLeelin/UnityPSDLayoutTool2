@@ -9,6 +9,76 @@
     public static class ImageDecoder
     {
         /// <summary>
+        /// Decodes the final PSD composite inside an art-layer rectangle. This
+        /// is used only when a resolved Common Prefab has no renderable visual
+        /// and the raw layer pixels cannot faithfully reproduce Photoshop's
+        /// merged output (for example, smart-object or background content).
+        /// </summary>
+        /// <param name="layer">The layer that defines the crop rectangle.</param>
+        /// <returns>The cropped merged texture, or null when unsupported.</returns>
+        public static Texture2D DecodeMergedImageCrop(Layer layer)
+        {
+            if (layer == null || layer.PsdFile == null ||
+                layer.Rect.width <= 0 || layer.Rect.height <= 0 ||
+                layer.PsdFile.ColorMode != ColorModes.RGB ||
+                layer.PsdFile.ImageData == null || layer.PsdFile.ImageData.Length < 3)
+            {
+                return null;
+            }
+
+            int left = (int)layer.Rect.x;
+            int top = (int)layer.Rect.y;
+            int width = (int)layer.Rect.width;
+            int height = (int)layer.Rect.height;
+            if (width <= 0 || height <= 0)
+            {
+                return null;
+            }
+
+            int bytesPerChannelSample = layer.PsdFile.Depth == 16 ? 2 : 1;
+            byte[][] channels = layer.PsdFile.ImageData;
+            int requiredLength = layer.PsdFile.Width * layer.PsdFile.Height * bytesPerChannelSample;
+            if (channels[0].Length < requiredLength || channels[1].Length < requiredLength || channels[2].Length < requiredLength)
+            {
+                return null;
+            }
+
+            Texture2D texture = new Texture2D(width, height, TextureFormat.ARGB32, false);
+            Color32[] colors = new Color32[width * height];
+            bool hasAlpha = channels.Length > 3 && channels[3].Length >= requiredLength;
+            for (int y = 0; y < height; y++)
+            {
+                int textureRow = (height - 1 - y) * width;
+                int sourceY = top + y;
+                if (sourceY < 0 || sourceY >= layer.PsdFile.Height)
+                {
+                    continue;
+                }
+
+                int sourceRow = sourceY * layer.PsdFile.Width;
+                for (int x = 0; x < width; x++)
+                {
+                    int sourceX = left + x;
+                    if (sourceX < 0 || sourceX >= layer.PsdFile.Width)
+                    {
+                        continue;
+                    }
+
+                    int sourceIndex = (sourceRow + sourceX) * bytesPerChannelSample;
+                    colors[textureRow + x] = new Color32(
+                        channels[0][sourceIndex],
+                        channels[1][sourceIndex],
+                        channels[2][sourceIndex],
+                        hasAlpha ? channels[3][sourceIndex] : byte.MaxValue);
+                }
+            }
+
+            texture.SetPixels32(colors);
+            texture.Apply();
+            return texture;
+        }
+
+        /// <summary>
         /// Decodes a <see cref="Layer"/> into a <see cref="Texture2D"/>.
         /// </summary>
         /// <param name="layer">The <see cref="Layer"/> to decode.</param>

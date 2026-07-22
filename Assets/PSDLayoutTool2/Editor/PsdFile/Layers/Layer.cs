@@ -120,13 +120,20 @@
                 }
             }
 
+            // Photoshop commonly writes lfx2 before TySh. Read all text data
+            // first, otherwise ReadTextLayer replaces TextStyle and silently
+            // discards the already parsed stroke/shadow values.
             foreach (AdjustmentLayerInfo adjustmentLayerInfo in AdjustmentInfo)
             {
                 if (adjustmentLayerInfo.Key == "TySh")
                 {
                     ReadTextLayer(adjustmentLayerInfo.DataReader);
                 }
-                else if (adjustmentLayerInfo.Key == "lfx2" || adjustmentLayerInfo.Key == "lrFX")
+            }
+
+            foreach (AdjustmentLayerInfo adjustmentLayerInfo in AdjustmentInfo)
+            {
+                if (adjustmentLayerInfo.Key == "lfx2" || adjustmentLayerInfo.Key == "lrFX")
                 {
                     ReadLayerEffects(adjustmentLayerInfo.RawData);
                 }
@@ -380,6 +387,12 @@
             }
             TextStyle.LineHeight = FontSize > 0f ? FontSize * 1.2f : 0f;
 
+            int fontCaps;
+            if (TrySeekFromStart(dataReader, "/FontCaps") && TryReadAsciiInt(dataReader, out fontCaps))
+            {
+                TextStyle.Capitalization = PsdTextCapitalizationResolver.FromPhotoshopFontCaps(fontCaps);
+            }
+
             // read the font fill color
             FillColor = Color.white;
             if (TrySeekFromStart(dataReader, "/FillColor") && dataReader.TrySeek("/Values"))
@@ -508,46 +521,48 @@
 
             bool enabled;
             double value;
-            if (TryReadBool(data, "FrFX", out enabled))
+            int effectStart;
+            if (TryReadEffectEnabled(data, "FrFX", out enabled, out effectStart))
             {
                 TextStyle.StrokeEnabled = enabled;
-                if (TryReadUnitValue(data, "Sz  ", out value))
+                if (TryReadUnitValue(data, "Sz  ", effectStart, out value))
                 {
                     TextStyle.StrokeWidth = Mathf.Max(0f, (float)value);
                 }
 
                 Color effectColor;
-                if (TryReadColor(data, "Clr ", out effectColor))
+                if (TryReadColor(data, "Clr ", effectStart, out effectColor))
                 {
                     TextStyle.StrokeColor = effectColor;
                 }
             }
 
-            if (TryReadBool(data, "dsdw", out enabled))
+            if (TryReadEffectEnabled(data, "DrSh", out enabled, out effectStart) ||
+                TryReadEffectEnabled(data, "dsdw", out enabled, out effectStart))
             {
                 TextStyle.ShadowEnabled = enabled;
-                if (TryReadUnitValue(data, "Dstn", out value))
+                if (TryReadUnitValue(data, "Dstn", effectStart, out value))
                 {
                     TextStyle.ShadowDistance = Mathf.Max(0f, (float)value);
                 }
 
-                if (TryReadUnitValue(data, "lagl", out value))
+                if (TryReadUnitValue(data, "lagl", effectStart, out value))
                 {
                     TextStyle.ShadowAngle = (float)value;
                 }
 
-                if (TryReadUnitValue(data, "blur", out value))
+                if (TryReadUnitValue(data, "blur", effectStart, out value))
                 {
                     TextStyle.ShadowBlur = Mathf.Max(0f, (float)value);
                 }
 
                 Color effectColor;
-                if (TryReadColor(data, "Clr ", out effectColor))
+                if (TryReadColor(data, "Clr ", effectStart, out effectColor))
                 {
                     TextStyle.ShadowColor = effectColor;
                 }
 
-                if (TryReadUnitValue(data, "Opct", out value))
+                if (TryReadUnitValue(data, "Opct", effectStart, out value))
                 {
                     Color shadowColor = TextStyle.ShadowColor;
                     shadowColor.a = Mathf.Clamp01((float)value / 100f);
@@ -558,27 +573,46 @@
 
         private static bool TryReadBool(byte[] data, string key, out bool value)
         {
+            int ignoredStart;
+            return TryReadEffectEnabled(data, key, out value, out ignoredStart);
+        }
+
+        private static bool TryReadEffectEnabled(byte[] data, string key, out bool value, out int effectStart)
+        {
             value = false;
-            int keyIndex = FindAscii(data, key);
-            if (keyIndex < 0)
+            effectStart = -1;
+            int searchStart = 0;
+            while (searchStart < data.Length)
             {
-                return false;
+                int keyIndex = FindAscii(data, key, searchStart, data.Length);
+                if (keyIndex < 0)
+                {
+                    return false;
+                }
+
+                int boolIndex = FindAscii(data, "bool", keyIndex + key.Length, Math.Min(data.Length, keyIndex + 96));
+                if (boolIndex >= 0 && boolIndex + 4 < data.Length)
+                {
+                    value = data[boolIndex + 4] != 0;
+                    effectStart = keyIndex;
+                    return true;
+                }
+
+                searchStart = keyIndex + key.Length;
             }
 
-            int boolIndex = FindAscii(data, "bool", keyIndex + key.Length, Math.Min(data.Length, keyIndex + 32));
-            if (boolIndex < 0 || boolIndex + 4 >= data.Length)
-            {
-                return false;
-            }
-
-            value = data[boolIndex + 4] != 0;
-            return true;
+            return false;
         }
 
         private static bool TryReadUnitValue(byte[] data, string key, out double value)
         {
+            return TryReadUnitValue(data, key, 0, out value);
+        }
+
+        private static bool TryReadUnitValue(byte[] data, string key, int start, out double value)
+        {
             value = 0d;
-            int keyIndex = FindAscii(data, key);
+            int keyIndex = FindAscii(data, key, start, Math.Min(data.Length, start + 768));
             if (keyIndex < 0)
             {
                 return false;
@@ -602,8 +636,13 @@
 
         private static bool TryReadColor(byte[] data, string key, out Color color)
         {
+            return TryReadColor(data, key, 0, out color);
+        }
+
+        private static bool TryReadColor(byte[] data, string key, int start, out Color color)
+        {
             color = Color.black;
-            int keyIndex = FindAscii(data, key);
+            int keyIndex = FindAscii(data, key, start, Math.Min(data.Length, start + 768));
             if (keyIndex < 0)
             {
                 return false;

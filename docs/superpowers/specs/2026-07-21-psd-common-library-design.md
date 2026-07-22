@@ -2,7 +2,7 @@
 
 ## Goal
 
-Resolve `Common_Prefab_<Key>` and `Common_Texture_<Key>` PSD layers from a configured Unity common library instead of exporting duplicate PSD pixels.
+Resolve `Common_Prefab_<Key>` and `Common_Texture_<Key>` PSD layers from a generated Unity Asset Catalog instead of exporting duplicate PSD pixels.
 
 ## Rules
 
@@ -10,17 +10,17 @@ Resolve `Common_Prefab_<Key>` and `Common_Texture_<Key>` PSD layers from a confi
 - `Common_Texture_<Key>` resolves an exact Sprite/Texture key and creates a normal image/sprite renderer using the PSD layout.
 - Missing configuration, missing key, or duplicate key is an import error. The importer never silently exports the PSD layer as a fallback image.
 - Common layers do not export PNG files. A common prefab folder consumes its subtree, so children are not emitted a second time.
-- The library index is built only from configured folder roots. It caches exact key-to-GUID mappings and is invalidated by asset changes under those roots.
+- Catalog refresh scans the project for public asset names beginning with `Common_Prefab_` and `Common_Texture_`, then stores exact key-to-GUID mappings. Daily PSD import reads only the catalog.
 
 ## Persistence
 
-- `Assets/PSDLayoutTool2Settings/PsdCommonAssetLibrary.asset` stores prefab and texture root folders and is versioned in Git.
-- Unity GUIDs are stored and resolved by the AssetDatabase; moving a resource keeps existing nested prefab and Sprite references valid.
+- `Assets/PSDLayoutTool2Settings/PsdCommonAssetCatalog.asset` stores direct Prefab and Sprite references and is versioned in Git.
+- Unity GUIDs and current paths are stored in the catalog. `AssetPostprocessor` incrementally updates only Common-named added, changed, moved, renamed, or deleted assets; moving a resource keeps existing nested prefab and Sprite references valid. The explicit Generate/Refresh action remains the full-scan repair path.
 - PSD `lyid` continues to control normal incremental import identity. No generated JSON mapping is added.
 
 ## Configuration
 
-`Project Settings > PSD Layout Tool > Common Asset Library` selects or creates the settings asset. The default library folders are `Assets/UI/Common/Prefabs` and `Assets/UI/Common/Textures`.
+`Project Settings > PSD Layout Tool > Common Asset Catalog` generates or refreshes the catalog from Common-named resources anywhere in the project.
 
 ## Validation
 
