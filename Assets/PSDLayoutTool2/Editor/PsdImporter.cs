@@ -18,6 +18,25 @@
     using TMPro;
 
     /// <summary>
+    /// Exact overwrite authority granted by the explicit hierarchy Apply flow.
+    /// It may update generated non-Prefab assets plus one configured Prefab,
+    /// but never authorizes stale-file deletion or a sibling Prefab.
+    /// </summary>
+    internal sealed class PsdHierarchyExplicitImportSelection
+    {
+        private readonly HashSet<string> pathsToUpdate =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        internal HashSet<string> PathsToUpdate { get { return pathsToUpdate; } }
+        internal IReadOnlyCollection<string> PathsToDelete { get { return Array.Empty<string>(); } }
+
+        internal bool ShouldUpdate(string path)
+        {
+            return pathsToUpdate.Contains((path ?? string.Empty).Replace('\\', '/'));
+        }
+    }
+
+    /// <summary>
     /// Handles all of the importing for a PSD file (exporting textures, creating prefabs, etc).
     /// </summary>
     public static class PsdImporter
@@ -763,8 +782,13 @@
                     // Apply is already an explicit update command. Keep it synchronous so the
                     // process-local plan cannot leak across an asynchronous conflict dialog, and
                     // do not infer permission to delete stale generated files.
-                    effectiveSelection = CreateDefaultConflictSelection(conflictAnalysis);
-                    effectiveSelection.PathsToDelete.Clear();
+                    PsdHierarchyExplicitImportSelection hierarchySelection =
+                        CreateExplicitHierarchyApplySelection(
+                            conflictAnalysis.SameNamePaths,
+                            conflictAnalysis.DeletedPaths,
+                            conflictAnalysis.PrefabFullPath);
+                    effectiveSelection = new ImportConflictSelection { Confirmed = true };
+                    effectiveSelection.PathsToUpdate.UnionWith(hierarchySelection.PathsToUpdate);
                 }
                 else if (!skipConflictPrompt && conflictAnalysis.HasExistingTargets)
                 {
@@ -1051,6 +1075,30 @@
                 selection.PathsToDelete.Add(NormalizePath(path));
             }
 
+            return selection;
+        }
+
+        /// <summary>
+        /// Creates the narrow overwrite authority for an explicit organizer
+        /// Apply. Generated textures/animations may refresh, the exact resolved
+        /// Prefab is always writable, every other Prefab is excluded, and stale
+        /// deletion remains empty.
+        /// </summary>
+        internal static PsdHierarchyExplicitImportSelection CreateExplicitHierarchyApplySelection(
+            IEnumerable<string> sameNamePaths,
+            IEnumerable<string> stalePaths,
+            string exactPrefabFullPath)
+        {
+            var selection = new PsdHierarchyExplicitImportSelection();
+            foreach (string path in sameNamePaths ?? Enumerable.Empty<string>())
+            {
+                string normalized = NormalizePath(path);
+                if (!string.Equals(Path.GetExtension(normalized), ".prefab", StringComparison.OrdinalIgnoreCase))
+                    selection.PathsToUpdate.Add(normalized);
+            }
+
+            string exact = NormalizePath(exactPrefabFullPath);
+            if (!string.IsNullOrEmpty(exact)) selection.PathsToUpdate.Add(exact);
             return selection;
         }
 

@@ -785,13 +785,14 @@ namespace PsdLayoutTool2
         private CancellationTokenSource cancellation;
         private Vector2 scroll;
         private bool confirmMissingCleanup;
+        private Action<PsdHierarchyPlan> applyHandler;
 
-        public event Action<PsdHierarchyPlan> applyRequested;
-
-        public static PsdHierarchyOrganizerWindow Open(PsdHierarchyOrganizerPreviewModel previewModel)
+        public static PsdHierarchyOrganizerWindow Open(
+            PsdHierarchyOrganizerPreviewModel previewModel,
+            Action<PsdHierarchyPlan> applyHandler = null)
         {
             var window = GetWindow<PsdHierarchyOrganizerWindow>(true, "PSD Hierarchy Preview", true);
-            window.model = previewModel ?? throw new ArgumentNullException("previewModel");
+            window.ReplaceContext(previewModel, applyHandler);
             window.minSize = new Vector2(720f, 480f);
             window.Show();
             return window;
@@ -799,7 +800,32 @@ namespace PsdLayoutTool2
 
         private void OnDisable()
         {
+            ClearContext();
+        }
+
+        internal void ReplaceContext(
+            PsdHierarchyOrganizerPreviewModel previewModel,
+            Action<PsdHierarchyPlan> handler)
+        {
             CancelRunningRequest();
+            model = previewModel ?? throw new ArgumentNullException("previewModel");
+            applyHandler = handler;
+            confirmMissingCleanup = false;
+            scroll = Vector2.zero;
+        }
+
+        internal void ClearContext()
+        {
+            CancelRunningRequest();
+            applyHandler = null;
+            model = null;
+            confirmMissingCleanup = false;
+        }
+
+        internal void DispatchApply(PsdHierarchyPlan plan)
+        {
+            Action<PsdHierarchyPlan> current = applyHandler;
+            if (current != null) current(plan);
         }
 
         private void OnGUI()
@@ -857,7 +883,7 @@ namespace PsdLayoutTool2
                 string error;
                 if (model.TryCreateValidatedApplyPlan(out freshPlan, out error))
                 {
-                    applyRequested?.Invoke(freshPlan);
+                    DispatchApply(freshPlan);
                 }
                 else if (!string.IsNullOrEmpty(error))
                 {

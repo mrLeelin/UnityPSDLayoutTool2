@@ -174,10 +174,10 @@ namespace PsdLayoutTool2
 
             PsdHierarchyOrganizerInput input = BuildFromAssets(
                 sourcePsdPath, targetPath, new CodexCliHierarchyRunner());
-            PsdHierarchyOrganizerWindow window = PsdHierarchyOrganizerWindow.Open(input.previewModel);
-            window.applyRequested += plan => PsdImporter.GeneratePrefabWithHierarchyPlan(
-                input.sourcePsdPath, input.sourcePsdGuid, input.targetPrefabPath, plan);
-            return window;
+            return PsdHierarchyOrganizerWindow.Open(
+                input.previewModel,
+                plan => PsdImporter.GeneratePrefabWithHierarchyPlan(
+                    input.sourcePsdPath, input.sourcePsdGuid, input.targetPrefabPath, plan));
         }
 
         private static PsdHierarchyPlan CreatePlan(PsdHierarchyProfile profile, string sourceGuid)
