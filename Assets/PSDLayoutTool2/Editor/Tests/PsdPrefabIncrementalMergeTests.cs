@@ -458,7 +458,9 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(actual.GetComponent<Text>().text, Is.EqualTo("增量旧版文本"));
                 Assert.That(actual.GetComponent<Text>().fontSize, Is.EqualTo(31));
                 Assert.That(actual.GetComponent<Outline>().effectDistance, Is.EqualTo(new Vector2(3f, -4f)));
-                Assert.That(actual.GetComponent<Shadow>().effectColor, Is.EqualTo(Color.blue));
+                Shadow actualShadow = actual.GetComponents<Shadow>()
+                    .Single(component => component.GetType() == typeof(Shadow));
+                Assert.That(actualShadow.effectColor, Is.EqualTo(Color.blue));
                 Assert.That(actual.GetComponent<AspectRatioFitter>().aspectRatio, Is.EqualTo(1.75f));
                 Assert.That(actual.GetComponent<Button>().targetGraphic, Is.SameAs(actual.GetComponent<Text>()));
                 Assert.That(actual.GetComponent<Button>().interactable, Is.False);
