@@ -198,6 +198,105 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void RemovingNestedOldGroupsPromotesAllLeavesAndProjectChildThenDestroysShellsDeepestFirst()
+        {
+            RectTransform outer = OwnedGroup("Outer", root, 0);
+            RectTransform inner = OwnedGroup("Inner", outer, 0);
+            RectTransform first = LeafUnder(inner, "A", 0, new Vector2(-20f, 0f));
+            RectTransform second = LeafUnder(inner, "B", 1, new Vector2(20f, 0f));
+            first.gameObject.AddComponent<Image>();
+            second.gameObject.AddComponent<Image>();
+            RectTransform project = LeafUnder(inner, "Business", 2, new Vector2(40f, 0f));
+            project.gameObject.AddComponent<Image>();
+            PsdHierarchyReferenceProbe probe = project.gameObject.AddComponent<PsdHierarchyReferenceProbe>();
+            probe.target = first.gameObject;
+            var oldGroups = new Dictionary<string, RectTransform> { { "outer", outer }, { "inner", inner } };
+
+            PsdHierarchyApplier.Apply(root, Plan(), Registry(first, second), oldGroups);
+
+            Assert.That(first.parent, Is.SameAs(root));
+            Assert.That(second.parent, Is.SameAs(root));
+            Assert.That(project.parent, Is.SameAs(root));
+            Assert.That(probe.target, Is.SameAs(first.gameObject));
+            Assert.That(inner == null, Is.True);
+            Assert.That(outer == null, Is.True);
+        }
+
+        [Test]
+        public void VerifierFailureWhileRemovingNestedShellsRestoresBothGroupsAndFullHierarchy()
+        {
+            RectTransform outer = OwnedGroup("Outer", root, 0);
+            RectTransform inner = OwnedGroup("Inner", outer, 0);
+            RectTransform first = LeafUnder(inner, "A", 0, Vector2.zero);
+            first.gameObject.AddComponent<Image>();
+            RectTransform project = LeafUnder(inner, "Business", 1, new Vector2(30f, 0f));
+            project.gameObject.AddComponent<Image>();
+            string before = GraphSignature(root);
+
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root,
+                Plan(),
+                Registry(first),
+                new Dictionary<string, RectTransform> { { "outer", outer }, { "inner", inner } },
+                stage =>
+                {
+                    if (stage == PsdHierarchyApplyStage.BeforeVerification) project.SetSiblingIndex(0);
+                }));
+
+            Assert.That(outer == null, Is.False);
+            Assert.That(inner == null, Is.False);
+            Assert.That(GraphSignature(root), Is.EqualTo(before));
+            Assert.That(inner.parent, Is.SameAs(outer));
+            Assert.That(first.parent, Is.SameAs(inner));
+            Assert.That(project.parent, Is.SameAs(inner));
+        }
+
+        [Test]
+        public void UnnestingExistingInnerGroupRestoresSiblingByMinimumDescendantVisualRank()
+        {
+            RectTransform outer = OwnedGroup("Outer", root, 0);
+            RectTransform inner = OwnedGroup("Inner", outer, 0);
+            RectTransform first = LeafUnder(inner, "A", 0, Vector2.zero);
+            RectTransform second = LeafUnder(outer, "C", 1, new Vector2(20f, 0f));
+            RectTransform other = Leaf("Other", 1, new Vector2(40f, 0f));
+            first.gameObject.AddComponent<Image>();
+            second.gameObject.AddComponent<Image>();
+            other.gameObject.AddComponent<Image>();
+            var oldGroups = new Dictionary<string, RectTransform> { { "outer", outer }, { "inner", inner } };
+            PsdHierarchyPlan plan = Plan(
+                Group("outer", "", "Outer", "102"),
+                Group("inner", "", "Inner", "101"));
+
+            PsdHierarchyApplier.Apply(root, plan, Registry(first, second), oldGroups);
+
+            Assert.That(inner.parent, Is.SameAs(root));
+            Assert.That(outer.parent, Is.SameAs(root));
+            Assert.That(inner.GetSiblingIndex(), Is.LessThan(outer.GetSiblingIndex()));
+            Assert.That(outer.GetSiblingIndex(), Is.LessThan(other.GetSiblingIndex()));
+        }
+
+        [Test]
+        public void SerializedReferenceToDisappearedGroupFailsClosedAndRestoresHierarchy()
+        {
+            RectTransform old = OwnedGroup("Old", root, 0);
+            RectTransform leaf = LeafUnder(old, "A", 0, Vector2.zero);
+            leaf.gameObject.AddComponent<Image>();
+            PsdHierarchyReferenceProbe probe = rootObject.AddComponent<PsdHierarchyReferenceProbe>();
+            probe.target = leaf.gameObject;
+            probe.rectTarget = old;
+            string before = GraphSignature(root);
+
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root, Plan(), Registry(leaf), new Dictionary<string, RectTransform> { { "old", old } }));
+
+            Assert.That(GraphSignature(root), Is.EqualTo(before));
+            Assert.That(old == null, Is.False);
+            Assert.That(leaf.parent, Is.SameAs(old));
+            Assert.That(probe.target, Is.SameAs(leaf.gameObject));
+            Assert.That(probe.rectTarget, Is.SameAs(old));
+        }
+
+        [Test]
         public void MemberRemovedFromReusedGroupIsPromotedWithoutAffectingRemainingMember()
         {
             RectTransform old = OwnedGroup("Old", root, 0);
@@ -542,5 +641,6 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdHierarchyReferenceProbe : MonoBehaviour
     {
         public GameObject target;
+        public RectTransform rectTarget;
     }
 }

@@ -124,7 +124,8 @@ namespace PsdLayoutTool2
                         failureInjector);
                 }
 
-                EnforcePlanGroupParents(groups, result.groupsByKey, logicalRootParents, oldKeysByTransform);
+                EnforcePlanGroupParents(
+                    groups, result.groupsByKey, logicalRootParents, oldKeysByTransform, rollbackStates, groupRanks);
                 EvacuateRemovedMembersFromSurvivingGroups(
                     groups, ownedGroups, oldKeysByTransform, leaves, rollbackStates, result.groupsByKey);
 
@@ -134,6 +135,7 @@ namespace PsdLayoutTool2
                 Invoke(failureInjector, PsdHierarchyApplyStage.BeforeVerification);
                 VerifyHierarchyConformance(
                     groups, leaves, ownedGroups, result.groupsByKey, logicalRootParents);
+                ValidateNoSerializedReferencesToDisappearedGroups(root, groups, ownedGroups);
                 PsdHierarchyApplyVerifier.VerifyUnchanged(verification, root, leaves);
 
                 foreach (KeyValuePair<string, RectTransform> oldGroup in ownedGroups
@@ -276,7 +278,9 @@ namespace PsdLayoutTool2
             Dictionary<string, PsdHierarchyPlanGroup> groups,
             Dictionary<string, RectTransform> planTransforms,
             Dictionary<string, RectTransform> logicalRootParents,
-            Dictionary<RectTransform, string> oldKeysByTransform)
+            Dictionary<RectTransform, string> oldKeysByTransform,
+            List<TransformState> rollbackStates,
+            Dictionary<string, int> groupRanks)
         {
             foreach (PsdHierarchyPlanGroup group in TopologicalGroups(groups))
             {
@@ -293,6 +297,8 @@ namespace PsdLayoutTool2
                 }
                 if (transform.parent != desired) transform.SetParent(desired, false);
                 ConfigureIdentityContainer(transform);
+                SetSiblingByOriginalRank(
+                    transform, desired, groupRanks[group.key], rollbackStates, planTransforms, groupRanks);
             }
         }
 
@@ -425,13 +431,13 @@ namespace PsdLayoutTool2
             Dictionary<string, RectTransform> planGroups,
             Dictionary<string, int> groupRanks)
         {
-            int original = states.FindIndex(state => state.transform == transform);
-            if (original >= 0) return original;
             if (planGroups != null && groupRanks != null)
             {
                 foreach (KeyValuePair<string, RectTransform> pair in planGroups)
                     if (pair.Value == transform) return groupRanks[pair.Key];
             }
+            int original = states.FindIndex(state => state.transform == transform);
+            if (original >= 0) return original;
             return int.MaxValue;
         }
 
@@ -458,11 +464,61 @@ namespace PsdLayoutTool2
             var disappeared = new HashSet<RectTransform>(oldGroups.Where(pair => !groups.ContainsKey(pair.Key))
                 .Select(pair => pair.Value));
             foreach (RectTransform old in disappeared)
-                if (old.childCount != 0) Fail("A disappeared generated group still owns children.");
+                if (!ContainsOnlyDisappearedEmptyShells(old, disappeared, new HashSet<RectTransform>()))
+                    Fail("A disappeared generated group still owns a non-generated or non-empty child.");
             foreach (RectTransform leaf in leaves.Values)
                 for (Transform cursor = leaf.parent; cursor != null; cursor = cursor.parent)
                     if (cursor is RectTransform && disappeared.Contains((RectTransform)cursor))
                         Fail("A PSD leaf retains disappeared generated ancestry.");
+        }
+
+        private static bool ContainsOnlyDisappearedEmptyShells(
+            RectTransform group,
+            HashSet<RectTransform> disappeared,
+            HashSet<RectTransform> visiting)
+        {
+            if (!visiting.Add(group)) return false;
+            for (int index = 0; index < group.childCount; index++)
+            {
+                RectTransform child = group.GetChild(index) as RectTransform;
+                if (child == null || !disappeared.Contains(child) ||
+                    !ContainsOnlyDisappearedEmptyShells(child, disappeared, visiting))
+                    return false;
+            }
+            visiting.Remove(group);
+            return true;
+        }
+
+        private static void ValidateNoSerializedReferencesToDisappearedGroups(
+            RectTransform root,
+            Dictionary<string, PsdHierarchyPlanGroup> groups,
+            Dictionary<string, RectTransform> oldGroups)
+        {
+            var forbidden = new HashSet<UnityEngine.Object>();
+            foreach (KeyValuePair<string, RectTransform> pair in oldGroups.Where(item => !groups.ContainsKey(item.Key)))
+            {
+                forbidden.Add(pair.Value.gameObject);
+                foreach (Component component in pair.Value.GetComponents<Component>()) forbidden.Add(component);
+            }
+            if (forbidden.Count == 0) return;
+
+            foreach (Component component in root.GetComponentsInChildren<Component>(true))
+            {
+                if (component == null || component is Transform || forbidden.Contains(component)) continue;
+                var serialized = new SerializedObject(component);
+                SerializedProperty property = serialized.GetIterator();
+                bool enterChildren = true;
+                while (property.NextVisible(enterChildren))
+                {
+                    enterChildren = false;
+                    if (property.propertyType == SerializedPropertyType.ObjectReference &&
+                        property.objectReferenceValue != null && forbidden.Contains(property.objectReferenceValue))
+                    {
+                        Fail("Project component '" + component.GetType().FullName +
+                             "' still references a disappeared generated group at property '" + property.propertyPath + "'.");
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -514,18 +570,14 @@ namespace PsdLayoutTool2
 
             RectTransform container;
             bool reused = ownedGroups.TryGetValue(groupKey, out container);
-            int groupRank;
-            if (reused)
-            {
-                TransformState state = rollbackStates.First(item => item.transform == container);
-                groupRank = rollbackStates.IndexOf(state);
-            }
-            else
+            int groupRank = atoms.Min(atom => atom.rank);
+            // Identity comes from the Profile mapping, while draw order comes
+            // from the minimum planned descendant visual/member.
+            if (!reused)
             {
                 Transform[] parents = atoms.Select(atom => atom.transform.parent).Distinct().ToArray();
                 if (parents.Length != 1 || !(parents[0] is RectTransform))
                     Fail("Group '" + groupKey + "' atomic children do not share one current RectTransform parent.");
-                groupRank = atoms.Min(atom => atom.rank);
                 container = CreateContainer((RectTransform)parents[0], group.displayName);
                 created.Add(container);
                 result.createdGroupKeys.Add(groupKey);
