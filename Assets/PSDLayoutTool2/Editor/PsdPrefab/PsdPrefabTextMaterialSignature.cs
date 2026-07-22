@@ -18,6 +18,7 @@ namespace PsdLayoutTool2
             {
                 fontAssetPath ?? string.Empty,
                 baseMaterialPath ?? string.Empty,
+                Mathf.RoundToInt(text.fontSize * 100f).ToString("000000"),
                 effect.hasOutline ? "outline" : "no-outline",
                 ColorUtility.ToHtmlStringRGBA(effect.outlineColor),
                 Mathf.RoundToInt(effect.outlineWidth * 100f).ToString("0000"),

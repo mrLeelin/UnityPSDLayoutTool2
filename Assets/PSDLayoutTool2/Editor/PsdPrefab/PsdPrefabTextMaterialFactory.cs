@@ -2,9 +2,11 @@ namespace PsdLayoutTool2
 {
     using System;
     using System.IO;
+    using System.Linq;
     using TMPro;
     using UnityEditor;
     using UnityEngine;
+    using UnityEngine.Rendering;
 
     /// <summary>
     /// Creates and reuses TMP materials for PSD text styles.
@@ -14,8 +16,7 @@ namespace PsdLayoutTool2
         public static Material GetOrCreate(
             PsdPrefabTextModel text,
             TMP_FontAsset font,
-            Material baseMaterial,
-            string outputFolder)
+            Material baseMaterial)
         {
             if (text == null || font == null)
             {
@@ -31,50 +32,234 @@ namespace PsdLayoutTool2
             string fontPath = AssetDatabase.GetAssetPath(font);
             string baseMaterialPath = AssetDatabase.GetAssetPath(baseMaterial);
             string signature = PsdPrefabTextMaterialSignature.Build(text, fontPath, baseMaterialPath);
-            string materialFolder = outputFolder + "/TextMaterials";
+            string materialFolder = GetCommonMaterialFolder(baseMaterial, font);
             EnsureAssetFolder(materialFolder);
 
             string materialPath = materialFolder + "/PSDTextMaterial_" + ComputeFnv1a(signature) + ".mat";
-            Material existing = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
-            if (existing != null)
-            {
-                return existing;
-            }
-
-            Material material = new Material(baseMaterial)
-            {
-                name = System.IO.Path.GetFileNameWithoutExtension(materialPath)
-            };
-            ApplyMaterialProperties(material, text.effect);
+            Material material = new Material(baseMaterial);
+            ApplyMaterialProperties(material, text.effect, text.fontSize, font.faceInfo.pointSize);
             try
             {
-                AssetDatabase.CreateAsset(material, materialPath);
-                AssetDatabase.SaveAssets();
-                return AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+                for (int variant = 0; ; variant++)
+                {
+                    string candidatePath = variant == 0
+                        ? materialPath
+                        : Path.ChangeExtension(materialPath, null) + "_" + variant + ".mat";
+                    Material existing = AssetDatabase.LoadAssetAtPath<Material>(candidatePath);
+                    if (existing != null)
+                    {
+                        if (AreMaterialsEquivalent(existing, material))
+                        {
+                            return existing;
+                        }
+
+                        continue;
+                    }
+
+                    material.name = Path.GetFileNameWithoutExtension(candidatePath);
+                    AssetDatabase.CreateAsset(material, candidatePath);
+                    material = null;
+                    AssetDatabase.SaveAssets();
+                    return AssetDatabase.LoadAssetAtPath<Material>(candidatePath);
+                }
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("PSDLayoutTool2: Failed to create TMP material at " + materialPath + ": " + ex.Message);
                 return null;
             }
+            finally
+            {
+                if (material != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(material);
+                }
+            }
         }
 
-        private static void ApplyMaterialProperties(Material material, PsdPrefabTextEffectModel effect)
+        /// <summary>
+        /// Compares a generated candidate with an existing material without
+        /// modifying either asset. Name and hide flags are intentionally ignored.
+        /// </summary>
+        private static bool AreMaterialsEquivalent(Material existing, Material desired)
+        {
+            if (existing == null || desired == null || existing.shader != desired.shader ||
+                existing.renderQueue != desired.renderQueue ||
+                existing.enableInstancing != desired.enableInstancing ||
+                existing.doubleSidedGI != desired.doubleSidedGI ||
+                existing.globalIlluminationFlags != desired.globalIlluminationFlags)
+            {
+                return false;
+            }
+
+            string[] existingKeywords = existing.shaderKeywords.OrderBy(keyword => keyword, StringComparer.Ordinal).ToArray();
+            string[] desiredKeywords = desired.shaderKeywords.OrderBy(keyword => keyword, StringComparer.Ordinal).ToArray();
+            if (!existingKeywords.SequenceEqual(desiredKeywords))
+            {
+                return false;
+            }
+
+            Shader shader = desired.shader;
+            for (int index = 0; index < shader.GetPropertyCount(); index++)
+            {
+                int propertyId = shader.GetPropertyNameId(index);
+                ShaderPropertyType propertyType = shader.GetPropertyType(index);
+                switch (propertyType)
+                {
+                    case ShaderPropertyType.Color:
+                        if (!Approximately(existing.GetColor(propertyId), desired.GetColor(propertyId)))
+                        {
+                            return false;
+                        }
+                        break;
+                    case ShaderPropertyType.Vector:
+                        if (!Approximately(existing.GetVector(propertyId), desired.GetVector(propertyId)))
+                        {
+                            return false;
+                        }
+                        break;
+                    case ShaderPropertyType.Texture:
+                        if (existing.GetTexture(propertyId) != desired.GetTexture(propertyId) ||
+                            !Approximately(existing.GetTextureScale(propertyId), desired.GetTextureScale(propertyId)) ||
+                            !Approximately(existing.GetTextureOffset(propertyId), desired.GetTextureOffset(propertyId)))
+                        {
+                            return false;
+                        }
+                        break;
+                    default:
+                        if (!Mathf.Approximately(existing.GetFloat(propertyId), desired.GetFloat(propertyId)))
+                        {
+                            return false;
+                        }
+                        break;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool Approximately(Color left, Color right)
+        {
+            return Mathf.Approximately(left.r, right.r) &&
+                Mathf.Approximately(left.g, right.g) &&
+                Mathf.Approximately(left.b, right.b) &&
+                Mathf.Approximately(left.a, right.a);
+        }
+
+        private static bool Approximately(Vector4 left, Vector4 right)
+        {
+            return Mathf.Approximately(left.x, right.x) &&
+                Mathf.Approximately(left.y, right.y) &&
+                Mathf.Approximately(left.z, right.z) &&
+                Mathf.Approximately(left.w, right.w);
+        }
+
+        private static bool Approximately(Vector2 left, Vector2 right)
+        {
+            return Mathf.Approximately(left.x, right.x) &&
+                Mathf.Approximately(left.y, right.y);
+        }
+
+        /// <summary>
+        /// Resolves the shared location for generated TMP material variants.
+        /// Prefer the selected base material's folder so all PSD exports reuse
+        /// the project's common material library instead of creating a
+        /// TextMaterials folder beside every exported PSD.
+        /// </summary>
+        private static string GetCommonMaterialFolder(Material baseMaterial, TMP_FontAsset font)
+        {
+            string baseMaterialPath = AssetDatabase.GetAssetPath(baseMaterial);
+            if (IsWritableAssetPath(baseMaterialPath))
+            {
+                return Path.GetDirectoryName(baseMaterialPath).Replace('\\', '/');
+            }
+
+            string fontPath = AssetDatabase.GetAssetPath(font);
+            if (IsWritableAssetPath(fontPath))
+            {
+                return Path.GetDirectoryName(fontPath).Replace('\\', '/');
+            }
+
+            return "Assets/PSDLayoutTool2Settings/Common";
+        }
+
+        private static bool IsWritableAssetPath(string assetPath)
+        {
+            return !string.IsNullOrEmpty(assetPath) &&
+                assetPath.StartsWith("Assets/", StringComparison.Ordinal);
+        }
+
+        private static void ApplyMaterialProperties(
+            Material material,
+            PsdPrefabTextEffectModel effect,
+            float fontSize,
+            float fontPointSize)
         {
             effect = effect ?? new PsdPrefabTextEffectModel();
             bool hasOutline = effect.hasOutline && effect.outlineWidth > 0.001f;
             bool hasShadow = effect.hasShadow;
+            float gradientScale = GetMaterialFloat(material, "_GradientScale", 1f);
+            float scaleRatioA = GetMaterialFloat(material, "_ScaleRatioA", 1f);
+            bool usesHalfWidthOutline = material.shader != null &&
+                material.shader.name.IndexOf("Mobile", StringComparison.OrdinalIgnoreCase) >= 0;
+            float outlineWidth = ConvertPsdPixelsToOutlineWidth(
+                effect.outlineWidth,
+                fontSize,
+                fontPointSize,
+                gradientScale,
+                scaleRatioA,
+                usesHalfWidthOutline);
+            float shadowOffsetX = NormalizePsdPixelValue(effect.shadowOffsetX, fontSize, true);
+            float shadowOffsetY = NormalizePsdPixelValue(effect.shadowOffsetY, fontSize, true);
+            float shadowSoftness = NormalizePsdPixelValue(effect.shadowSoftness, fontSize);
+            float shadowDilate = NormalizePsdPixelValue(effect.shadowDilate, fontSize, true);
 
-            SetMaterialFloat(material, "_OutlineWidth", hasOutline ? effect.outlineWidth : 0f);
-            SetMaterialFloat(material, "_FaceDilate", hasOutline ? effect.outlineWidth * 0.5f : 0f);
+            SetMaterialFloat(material, "_OutlineWidth", hasOutline ? outlineWidth : 0f);
+            SetMaterialFloat(material, "_FaceDilate", 0f);
             SetMaterialColor(material, "_OutlineColor", hasOutline ? effect.outlineColor : Color.black);
-            SetMaterialFloat(material, "_UnderlayOffsetX", hasShadow ? effect.shadowOffsetX : 0f);
-            SetMaterialFloat(material, "_UnderlayOffsetY", hasShadow ? effect.shadowOffsetY : 0f);
-            SetMaterialFloat(material, "_UnderlaySoftness", hasShadow ? effect.shadowSoftness : 0f);
-            SetMaterialFloat(material, "_UnderlayDilate", hasShadow ? effect.shadowDilate : 0f);
+            SetMaterialFloat(material, "_UnderlayOffsetX", hasShadow ? shadowOffsetX : 0f);
+            SetMaterialFloat(material, "_UnderlayOffsetY", hasShadow ? shadowOffsetY : 0f);
+            SetMaterialFloat(material, "_UnderlaySoftness", hasShadow ? shadowSoftness : 0f);
+            SetMaterialFloat(material, "_UnderlayDilate", hasShadow ? shadowDilate : 0f);
             SetMaterialColor(material, "_UnderlayColor", hasShadow ? effect.shadowColor : Color.black);
             SetKeyword(material, "OUTLINE_ON", hasOutline);
             SetKeyword(material, "UNDERLAY_ON", hasShadow);
+        }
+
+        /// <summary>
+        /// Converts Photoshop's pixel stroke radius to TMP's normalized SDF
+        /// outline property. TMP scales the property by the glyph scale and the
+        /// font atlas gradient range; Mobile shaders additionally apply 0.5.
+        /// </summary>
+        private static float ConvertPsdPixelsToOutlineWidth(
+            float pixelWidth,
+            float fontSize,
+            float fontPointSize,
+            float gradientScale,
+            float scaleRatioA,
+            bool usesHalfWidthOutline)
+        {
+            if (pixelWidth <= 0f || fontSize <= 0f || fontPointSize <= 0f ||
+                gradientScale <= 0f || scaleRatioA <= 0f)
+            {
+                return 0f;
+            }
+
+            float shaderWidthFactor = usesHalfWidthOutline ? 0.5f : 1f;
+            float normalized = pixelWidth * fontPointSize /
+                (fontSize * gradientScale * scaleRatioA * shaderWidthFactor);
+            return Mathf.Clamp01(normalized);
+        }
+
+        private static float NormalizePsdPixelValue(float pixelValue, float fontSize, bool signed = false)
+        {
+            if (fontSize <= 0f)
+            {
+                return 0f;
+            }
+
+            float normalized = pixelValue / fontSize;
+            return signed ? Mathf.Clamp(normalized, -1f, 1f) : Mathf.Clamp01(normalized);
         }
 
         private static bool IsCompatibleWithFont(Material material, TMP_FontAsset font)
@@ -88,6 +273,13 @@ namespace PsdLayoutTool2
             {
                 material.SetFloat(property, value);
             }
+        }
+
+        private static float GetMaterialFloat(Material material, string property, float fallback)
+        {
+            return material != null && material.HasProperty(property)
+                ? material.GetFloat(property)
+                : fallback;
         }
 
         private static void SetMaterialColor(Material material, string property, Color value)

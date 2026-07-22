@@ -1,6 +1,7 @@
 namespace PsdLayoutTool2.Tests
 {
     using NUnit.Framework;
+    using UnityEditor;
 
     /// <summary>
     /// Regression coverage for the Unity-owned 9-slice pixel pipeline.
@@ -32,6 +33,14 @@ namespace PsdLayoutTool2.Tests
         {
             Assert.That(PsdNineSliceImportPolicy.HasSpriteBorder(68f, 70f, 68f, 149f), Is.True);
             Assert.That(PsdNineSliceImportPolicy.HasSpriteBorder(0f, 0f, 0f, 0f), Is.False);
+        }
+
+        [Test]
+        public void GeneratedNineSliceTextureMustPreserveExactPixelDimensions()
+        {
+            Assert.That(
+                PsdNineSliceImportPolicy.GeneratedTextureNpotScale,
+                Is.EqualTo(TextureImporterNPOTScale.None));
         }
 
         [Test]

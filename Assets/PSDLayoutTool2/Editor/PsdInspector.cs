@@ -45,6 +45,11 @@
         private const string PrefabModePrefKey = "PsdLayoutTool2.PrefabMode";
 
         /// <summary>
+        /// EditorPrefs key for selecting Canvas/Unity UI output mode.
+        /// </summary>
+        private const string UseUnityUIPrefKey = "PsdLayoutTool2.UseUnityUI";
+
+        /// <summary>
         /// EditorPrefs key for target canvas hierarchy path.
         /// </summary>
         private const string TargetCanvasPathPrefKey = "PsdLayoutTool2.TargetCanvasPath";
@@ -164,6 +169,11 @@
             {
                 PsdImporter.PrefabMode = (PsdImporter.PrefabOutputMode)EditorPrefs.GetInt(PrefabModePrefKey, (int)PsdImporter.PrefabOutputMode.SiblingToOutputFolder);
             }
+
+            bool hasSavedUseUnityUI = EditorPrefs.HasKey(UseUnityUIPrefKey);
+            PsdImporter.UseUnityUI = PsdImporterDefaults.ResolveUseUnityUI(
+                hasSavedUseUnityUI,
+                EditorPrefs.GetBool(UseUnityUIPrefKey, true));
 
             if (EditorPrefs.HasKey(TargetCanvasPathPrefKey))
             {
@@ -403,6 +413,7 @@
                     {
                         EditorPrefs.SetInt(OutputModePrefKey, (int)PsdImporter.OutputMode);
                         EditorPrefs.SetInt(PrefabModePrefKey, (int)PsdImporter.PrefabMode);
+                        EditorPrefs.SetBool(UseUnityUIPrefKey, PsdImporter.UseUnityUI);
                         EditorPrefs.SetString(TargetCanvasPathPrefKey, PsdImporter.TargetCanvasPath ?? string.Empty);
                         EditorPrefs.SetBool(PreserveAspectPrefKey, PsdImporter.PreserveAspectWhenScalingToCanvas);
                         EditorPrefs.SetBool(AutoAnchorByNamePrefKey, PsdImporter.EnableAutoAnchorByName);

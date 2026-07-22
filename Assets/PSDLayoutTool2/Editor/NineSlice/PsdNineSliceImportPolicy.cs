@@ -1,5 +1,7 @@
 namespace PsdLayoutTool2
 {
+    using UnityEditor;
+
     /// <summary>
     /// Defines the source-of-truth policy for generated Sprite borders.
     /// PSD/Figma names opt into automatic nine-slice; untagged layers must not
@@ -7,6 +9,15 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdNineSliceImportPolicy
     {
+        /// <summary>
+        /// Generated borders are expressed in PNG pixels, so Unity must not
+        /// resize non-power-of-two textures during import.
+        /// </summary>
+        public static TextureImporterNPOTScale GeneratedTextureNpotScale
+        {
+            get { return TextureImporterNPOTScale.None; }
+        }
+
         /// <summary>
         /// Determines whether a generated sprite with no resolved border is an
         /// ordinary PSD layer whose existing Sprite border must be cleared.

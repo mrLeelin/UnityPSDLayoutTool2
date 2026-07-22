@@ -5,6 +5,7 @@
     using System.Globalization;
     using System.IO;
     using System.Linq;
+    using System.Security.Cryptography;
     using System.Text;
     using System.Text.RegularExpressions;
     using PhotoshopFile;
@@ -339,6 +340,7 @@
         {
             MaximumDepth = 10;
             PixelsToUnits = 100;
+            UseUnityUI = PsdImporterDefaults.ResolveUseUnityUI(false, false);
             UseTextMeshPro = true;
             OutputMode = OutputDirectoryMode.PsdDirectory;
             OutputFolderName = string.Empty;
@@ -381,6 +383,10 @@
 
         private static bool tmpFontFallbackWarningEmitted;
         private static Dictionary<string, TMP_FontAsset> currentTmpFontFallbacksByPsdName;
+        private static Dictionary<string, string> currentPngPathByContentHash;
+        private static PsdTextureReuseIndex currentTextureReuseIndex;
+        private static HashSet<string> currentPendingRedundantTexturePaths;
+        private static string currentOutputRootDirectory;
 
         /// <summary>
         /// Gets or sets the hierarchy path of the target canvas to align generated UI under.
@@ -548,6 +554,10 @@
                 useEmbeddedNineSliceMetadata = false;
                 tmpFontFallbackWarningEmitted = false;
                 currentTmpFontFallbacksByPsdName = new Dictionary<string, TMP_FontAsset>(StringComparer.OrdinalIgnoreCase);
+                currentPngPathByContentHash = new Dictionary<string, string>(StringComparer.Ordinal);
+                currentTextureReuseIndex = new PsdTextureReuseIndex();
+                currentPendingRedundantTexturePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                currentOutputRootDirectory = string.Empty;
                 string normalizedAssetPath = asset.Replace('\\', '/');
                 string fullPath = Path.Combine(GetFullProjectPath(), normalizedAssetPath);
 
@@ -694,6 +704,7 @@
                 }
 
                 currentPath = outputFullPath;
+                currentOutputRootDirectory = outputFullPath;
                 PsdLogger.Step("Create output directory: " + currentPath);
                 Directory.CreateDirectory(currentPath);
 
@@ -775,6 +786,7 @@
                 PsdLogger.Step("Refresh AssetDatabase");
                 EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "刷新 AssetDatabase...", 0.98f);
                 AssetDatabase.ImportAsset(outputRelativePath, ImportAssetOptions.ForceSynchronousImport);
+                FinalizeRedundantTextureCleanup(prefabRelativePath);
             }
             catch (Exception exception)
             {
@@ -1154,7 +1166,7 @@
             {
                 for (int i = tree.Count - 1; i >= 0; i--)
                 {
-                    CollectExpectedGeneratedAssetPathsForLayer(tree[i], outputFullPath, expectedPaths);
+                    CollectExpectedGeneratedAssetPathsForLayer(tree[i], outputFullPath, outputFullPath, expectedPaths);
                 }
             }
 
@@ -1172,7 +1184,11 @@
         /// <param name="layer">Layer to inspect.</param>
         /// <param name="currentDirectory">Current output directory for this layer.</param>
         /// <param name="result">Destination set for generated assets.</param>
-        private static void CollectExpectedGeneratedAssetPathsForLayer(Layer layer, string currentDirectory, HashSet<string> result)
+        private static void CollectExpectedGeneratedAssetPathsForLayer(
+            Layer layer,
+            string outputRootDirectory,
+            string currentDirectory,
+            HashSet<string> result)
         {
             LayerImportInfo info = GetLayerInfo(layer);
             if (info == null)
@@ -1188,7 +1204,7 @@
 
             if (info.IsButtonGroup)
             {
-                CollectExpectedGeneratedAssetPathsForButtonGroup(layer, currentDirectory, result);
+                CollectExpectedGeneratedAssetPathsForButtonGroup(layer, outputRootDirectory, currentDirectory, result);
                 return;
             }
 
@@ -1197,7 +1213,7 @@
                 string childDirectory = Path.Combine(currentDirectory, GetOutputFolderName(layer));
                 for (int i = layer.Children.Count - 1; i >= 0; i--)
                 {
-                    CollectExpectedGeneratedAssetPathsForLayer(layer.Children[i], childDirectory, result);
+                    CollectExpectedGeneratedAssetPathsForLayer(layer.Children[i], outputRootDirectory, childDirectory, result);
                 }
 
                 if ((LayoutInScene || CreatePrefab) &&
@@ -1216,7 +1232,7 @@
 
             if (ShouldLayerEmitTextureFile(info))
             {
-                string texturePath = Path.Combine(currentDirectory, GetTextureBaseName(layer) + ".png");
+                string texturePath = GetTextureOutputPath(outputRootDirectory, layer);
                 result.Add(NormalizePath(texturePath));
             }
         }
@@ -1229,6 +1245,7 @@
         /// <param name="result">Destination set for generated assets.</param>
         private static void CollectExpectedGeneratedAssetPathsForButtonGroup(
             Layer layer,
+            string outputRootDirectory,
             string currentDirectory,
             HashSet<string> result)
         {
@@ -1240,7 +1257,7 @@
                     continue;
                 }
 
-                string path = Path.Combine(currentDirectory, GetTextureBaseName(child) + ".png");
+                string path = GetTextureOutputPath(outputRootDirectory, child);
                 result.Add(NormalizePath(path));
             }
         }
@@ -3211,8 +3228,7 @@
             UiLayoutContext oldLayoutContext = currentGroupLayoutContext;
 
             currentPath = Path.Combine(currentPath, GetOutputFolderName(layer));
-            PsdLogger.Info("Create folder output directory: " + currentPath);
-            Directory.CreateDirectory(currentPath);
+            PsdLogger.Info("Enter PSD group for runtime hierarchy: " + currentPath);
 
             bool createGroupObject =
                 (LayoutInScene || CreatePrefab) &&
@@ -3379,8 +3395,7 @@
             {
                 string oldPath = currentPath;
                 currentPath = Path.Combine(currentPath, GetOutputFolderName(layer));
-                PsdLogger.Info("Create texture-only output directory: " + currentPath);
-                Directory.CreateDirectory(currentPath);
+                PsdLogger.Info("Traverse texture-only PSD group: " + currentPath);
 
                 foreach (Layer child in layer.Children)
                 {
@@ -3408,7 +3423,7 @@
 
             if (layer.Children.Count == 0 && layer.Rect.width > 0 && layer.Rect.height > 0 && (!layer.IsTextLayer || allowTextLayer))
             {
-                file = Path.Combine(currentPath, GetTextureBaseName(layer) + ".png");
+                file = GetTextureOutputPath(currentOutputRootDirectory, layer);
                 if (!ShouldOverwriteExistingGeneratedFile(file))
                 {
                     PsdLogger.Info("Skip PNG write by overwrite selection: " + file + " | " + DescribeLayerForLog(layer));
@@ -3507,8 +3522,49 @@
                         return string.Empty;
                     }
 
+                    int pngWidth;
+                    int pngHeight;
+                    Color32[] pngPixels;
+                    string pngContentHash = ComputePngContentHash(png, out pngWidth, out pngHeight, out pngPixels);
+                    string borderContract = GetTextureBorderContract(layer);
+                    string contentHash = pngContentHash + "|" + borderContract;
+                    string existingFile;
+                    bool exactMatch = currentPngPathByContentHash.TryGetValue(contentHash, out existingFile);
+                    bool visualMatch = !exactMatch && currentTextureReuseIndex.TryFind(
+                        GetTextureBaseName(layer),
+                        pngContentHash,
+                        borderContract,
+                        pngWidth,
+                        pngHeight,
+                        pngPixels,
+                        out existingFile);
+                    if (exactMatch || visualMatch)
+                    {
+                        PsdLogger.Info(
+                            (exactMatch
+                                ? "Reuse identical PNG instead of exporting a duplicate: "
+                                : "Reuse same semantic-name PNG instead of exporting a duplicate: ") + file +
+                            " -> " + existingFile + " | " + DescribeLayerForLog(layer));
+                        if (!string.Equals(file, existingFile, StringComparison.OrdinalIgnoreCase) &&
+                            ShouldOverwriteExistingGeneratedFile(file))
+                        {
+                            currentPendingRedundantTexturePaths.Add(file);
+                        }
+                        return existingFile;
+                    }
+
                     PsdLogger.Step("Write PNG: " + file);
+                    Directory.CreateDirectory(Path.GetDirectoryName(file));
                     File.WriteAllBytes(file, png);
+                    currentPngPathByContentHash[contentHash] = file;
+                    currentTextureReuseIndex.Add(
+                        GetTextureBaseName(layer),
+                        pngContentHash,
+                        borderContract,
+                        pngWidth,
+                        pngHeight,
+                        pngPixels,
+                        file);
                 }
                 finally
                 {
@@ -3521,6 +3577,148 @@
             }
 
             return file;
+        }
+
+        private static string GetTextureOutputPath(string outputRootDirectory, Layer layer)
+        {
+            string textureDirectory = Path.Combine(outputRootDirectory, "Texture");
+            string textureName = GetTextureBaseName(layer) + "_" + layer.Id + ".png";
+            return Path.Combine(textureDirectory, textureName);
+        }
+
+        private static void FinalizeRedundantTextureCleanup(string prefabRelativePath)
+        {
+            if (currentPendingRedundantTexturePaths == null || currentPendingRedundantTexturePaths.Count == 0)
+            {
+                return;
+            }
+
+            HashSet<string> prefabDependencies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (CreatePrefab && !string.IsNullOrEmpty(prefabRelativePath))
+            {
+                GameObject savedPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabRelativePath);
+                if (savedPrefab == null)
+                {
+                    PsdLogger.Warning("Keep redundant PNGs because the generated Prefab could not be reloaded: " + prefabRelativePath);
+                    return;
+                }
+
+                string[] dependencies = AssetDatabase.GetDependencies(prefabRelativePath, true);
+                for (int i = 0; i < dependencies.Length; i++)
+                {
+                    prefabDependencies.Add(dependencies[i]);
+                }
+            }
+
+            int deletedCount = 0;
+            foreach (string redundantPath in currentPendingRedundantTexturePaths)
+            {
+                string assetPath = ToProjectAssetPath(redundantPath);
+                if (string.IsNullOrEmpty(assetPath) || prefabDependencies.Contains(assetPath))
+                {
+                    PsdLogger.Warning("Keep redundant PNG because the saved Prefab still references it: " + redundantPath);
+                    continue;
+                }
+
+                DeleteFileWithMeta(redundantPath);
+                deletedCount++;
+            }
+
+            if (deletedCount > 0)
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                PsdLogger.Info("Deleted redundant PNGs after Prefab dependency validation: " + deletedCount);
+            }
+        }
+
+        private static string ToProjectAssetPath(string fullPath)
+        {
+            string normalizedFullPath = NormalizePath(fullPath);
+            string projectRoot = NormalizePath(GetFullProjectPath()).TrimEnd('/');
+            if (!normalizedFullPath.StartsWith(projectRoot + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            return normalizedFullPath.Substring(projectRoot.Length + 1);
+        }
+
+        private static string GetTextureBorderContract(Layer layer)
+        {
+            Vector4 border;
+            if (!TryGetNineSliceBorder(layer, out border))
+            {
+                return "ordinary";
+            }
+
+            return "nine:" +
+                border.x.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+                border.y.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+                border.z.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+                border.w.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private static string ComputePngContentHash(byte[] png)
+        {
+            int width;
+            int height;
+            Color32[] pixels;
+            return ComputePngContentHash(png, out width, out height, out pixels);
+        }
+
+        private static string ComputePngContentHash(
+            byte[] png,
+            out int width,
+            out int height,
+            out Color32[] pixels)
+        {
+            width = 0;
+            height = 0;
+            pixels = null;
+            Texture2D decoded = new Texture2D(2, 2, TextureFormat.RGBA32, false, true);
+            try
+            {
+                if (!decoded.LoadImage(png, false))
+                {
+                    return ComputeRawHash(png);
+                }
+
+                width = decoded.width;
+                height = decoded.height;
+                pixels = decoded.GetPixels32();
+                byte[] canonical = new byte[8 + pixels.Length * 4];
+                Buffer.BlockCopy(BitConverter.GetBytes(decoded.width), 0, canonical, 0, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(decoded.height), 0, canonical, 4, 4);
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    int offset = 8 + i * 4;
+                    canonical[offset] = pixels[i].a == 0 ? (byte)0 : pixels[i].r;
+                    canonical[offset + 1] = pixels[i].a == 0 ? (byte)0 : pixels[i].g;
+                    canonical[offset + 2] = pixels[i].a == 0 ? (byte)0 : pixels[i].b;
+                    canonical[offset + 3] = pixels[i].a;
+                }
+
+                return ComputeRawHash(canonical);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(decoded);
+            }
+        }
+
+        private static string ComputeRawHash(byte[] bytes)
+        {
+            using (SHA256 algorithm = SHA256.Create())
+            {
+                byte[] hash = algorithm.ComputeHash(bytes);
+                StringBuilder builder = new StringBuilder(hash.Length * 2);
+                for (int i = 0; i < hash.Length; i++)
+                {
+                    builder.Append(hash[i].ToString("x2"));
+                }
+
+                return builder.ToString();
+            }
         }
 
         /// <summary>
@@ -3596,6 +3794,7 @@
                 textureImporter.spriteImportMode = SpriteImportMode.Single;
                 textureImporter.spritePivot = new Vector2(0.5f, 0.5f);
                 textureImporter.maxTextureSize = 2048;
+                textureImporter.npotScale = PsdNineSliceImportPolicy.GeneratedTextureNpotScale;
                 textureImporter.spritePixelsPerUnit = PixelsToUnits;
 
                 if (layer != null && layer.Id != 0U)
@@ -3604,9 +3803,11 @@
                 }
 
                 Vector4 nineSliceBorder;
-                Texture2D generatedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(relativePathToSprite);
+                int generatedWidth;
+                int generatedHeight;
+                textureImporter.GetSourceTextureWidthAndHeight(out generatedWidth, out generatedHeight);
                 if (TryGetNineSliceBorder(layer, out nineSliceBorder) &&
-                    IsNineSliceBorderValidForGeneratedTexture(generatedTexture, nineSliceBorder, relativePathToSprite))
+                    IsNineSliceBorderValidForGeneratedTexture(generatedWidth, generatedHeight, nineSliceBorder, relativePathToSprite))
                 {
                     Vector4 canvasBorder = IsAutomaticNineSliceBorderInTargetCoordinates(layer)
                         ? nineSliceBorder
@@ -4093,12 +4294,10 @@
             else
             {
                 PsdPrefabTextModel textModel = BuildTextModel(layer);
-                string outputFolder = GetRelativePath(currentPath);
                 Material material = PsdPrefabTextMaterialFactory.GetOrCreate(
                     textModel,
                     textUI.font,
-                    TextMeshProBaseMaterial,
-                    outputFolder);
+                    TextMeshProBaseMaterial);
                 if (material != null)
                 {
                     textUI.fontSharedMaterial = material;
@@ -4106,7 +4305,28 @@
             }
 
             ApplyTextMeshProLineHeight(textUI, layer);
-            ApplyTextMeshProPsdBoundsFontSize(textUI, layer);
+            RefreshTextMeshProRendering(textUI);
+        }
+
+        /// <summary>
+        /// Rebuilds TMP material references after the importer has assigned the
+        /// final font, material, spacing, and font size. This is especially
+        /// important for glyphs supplied by fallback font assets because TMP
+        /// creates their sub-materials while generating the mesh.
+        /// </summary>
+        private static void RefreshTextMeshProRendering(TextMeshProUGUI textUI)
+        {
+            if (textUI == null || textUI.font == null)
+            {
+                return;
+            }
+
+            textUI.UpdateMeshPadding();
+            textUI.SetMaterialDirty();
+            textUI.SetVerticesDirty();
+            textUI.SetLayoutDirty();
+            textUI.ForceMeshUpdate(true, true);
+            EditorUtility.SetDirty(textUI);
         }
 
         private static TMP_FontAsset ResolveUsableTextMeshProFont(Layer layer)
@@ -4185,43 +4405,6 @@
             }
 
             return matched;
-        }
-
-        /// <summary>
-        /// Fits TMP's font size to the PSD text layer bounds without changing the
-        /// RectTransform scale. Photoshop and TMP use different glyph metrics, so the
-        /// PSD-authored size is used as the starting point and then corrected through
-        /// TMP's measured preferred size.
-        /// </summary>
-        /// <param name="textUI">Generated TMP component.</param>
-        /// <param name="layer">Source PSD text layer.</param>
-        private static void ApplyTextMeshProPsdBoundsFontSize(TextMeshProUGUI textUI, Layer layer)
-        {
-            if (textUI == null || layer == null || textUI.fontSize <= 0f)
-            {
-                return;
-            }
-
-            textUI.ForceMeshUpdate(true, true);
-            Vector2 preferredSize = textUI.GetPreferredValues(
-                textUI.text,
-                float.PositiveInfinity,
-                float.PositiveInfinity);
-            Vector2 targetSize = textUI.rectTransform.rect.size;
-            if (preferredSize.x <= 0f || preferredSize.y <= 0f || targetSize.x <= 0f || targetSize.y <= 0f)
-            {
-                return;
-            }
-
-            float fittedRatio = Mathf.Min(
-                targetSize.x / preferredSize.x,
-                targetSize.y / preferredSize.y);
-            if (fittedRatio <= 0f || Mathf.Approximately(fittedRatio, 1f))
-            {
-                return;
-            }
-
-            textUI.fontSize = Mathf.Max(1f, textUI.fontSize * fittedRatio);
         }
 
         private static TextAlignmentOptions GetTextMeshProAlignment(TextJustification justification)
@@ -4582,15 +4765,10 @@
                 return;
             }
 
-            Vector4 border;
-            bool hasExplicitBorder = TryGetNineSliceBorder(layer, out border);
-            if (!hasExplicitBorder)
+            Vector4 border = image.sprite.border;
+            if (!PsdNineSliceImportPolicy.HasSpriteBorder(border.x, border.y, border.z, border.w))
             {
-                border = image.sprite.border;
-                if (!PsdNineSliceImportPolicy.HasSpriteBorder(border.x, border.y, border.z, border.w))
-                {
-                    return;
-                }
+                return;
             }
 
             image.type = Image.Type.Sliced;
@@ -4770,7 +4948,10 @@
 
             try
             {
-                string file = Path.Combine(currentPath, GetTextureBaseName(layer) + "__MergedFallback.png");
+                string textureDirectory = Path.Combine(currentOutputRootDirectory, "Texture");
+                string file = Path.Combine(
+                    textureDirectory,
+                    GetTextureBaseName(layer) + "_" + layer.Id + "__MergedFallback.png");
                 byte[] png = texture.EncodeToPNG();
                 if (png == null || png.Length == 0)
                 {
@@ -4780,6 +4961,7 @@
                 // This is an importer-owned recovery asset, not an artist-editable
                 // output. Always replace it so an incremental import cannot retain
                 // an outdated merged crop after PSD or importer changes.
+                Directory.CreateDirectory(textureDirectory);
                 File.WriteAllBytes(file, png);
                 return ImportSprite(GetRelativePath(file), PsdName, null);
             }
@@ -5138,18 +5320,19 @@
         /// applied to the final PNG produced for this import.
         /// </summary>
         private static bool IsNineSliceBorderValidForGeneratedTexture(
-            Texture2D texture,
+            int width,
+            int height,
             Vector4 border,
             string assetPath)
         {
-            if (texture == null || texture.width <= 0 || texture.height <= 0 ||
+            if (width <= 0 || height <= 0 ||
                 border.x < 0f || border.y < 0f || border.z < 0f || border.w < 0f ||
-                border.x + border.z + PsdNineSliceBorder.MinimumStretchCenterPixels > texture.width ||
-                border.y + border.w + PsdNineSliceBorder.MinimumStretchCenterPixels > texture.height)
+                border.x + border.z + PsdNineSliceBorder.MinimumStretchCenterPixels > width ||
+                border.y + border.w + PsdNineSliceBorder.MinimumStretchCenterPixels > height)
             {
                 PsdLogger.Warning(
                     "Ignore invalid 9-slice border for generated PNG: " + assetPath +
-                    ", texture=" + (texture == null ? "<missing>" : texture.width + "x" + texture.height) +
+                    ", texture=" + width + "x" + height +
                     ", border=" + border);
                 return false;
             }
