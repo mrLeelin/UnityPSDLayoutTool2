@@ -368,23 +368,38 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void ScriptableProfileSurvivesRealAssetDatabaseRoundTrip()
         {
-            const string folder = "Assets/__PsdHierarchyProfileTests";
-            const string path = folder + "/RoundTrip.asset";
+            string path = AssetDatabase.GenerateUniqueAssetPath(
+                "Assets/__PsdHierarchyProfileTest_" + System.Guid.NewGuid().ToString("N") + ".asset");
+            PsdHierarchyProfile profile = null;
             PsdHierarchyProfile loaded = null;
+            bool assetCreated = false;
+            bool cleanupSucceeded = true;
             try
             {
-                AssetDatabase.DeleteAsset(folder);
-                AssetDatabase.CreateFolder("Assets", "__PsdHierarchyProfileTests");
                 PsdPrefabDocumentModel document = Document(Node("101", "A", 0, Rect.zero, "pixels"));
                 document.sourceFingerprint = PsdHierarchyFingerprints.Document(document);
-                PsdHierarchyProfile profile = Profile(document, "101");
+                profile = Profile(document, "101");
                 AssetDatabase.CreateAsset(profile, path);
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
+                assetCreated = true;
+                AssetDatabase.SaveAssetIfDirty(profile);
+
+                // This value exists only in memory and is deliberately not marked
+                // dirty. A cached-object load would retain it; a disk import must
+                // restore the value saved immediately above.
+                profile.sourcePsdGuid = "memory-only-unsaved-sentinel";
+                Assert.That(EditorUtility.IsDirty(profile), Is.False);
+
+                // Unload the exact created object before importing again. Loading
+                // without this step can return Unity's in-memory cache and would
+                // not prove that ScriptableObject fields survived serialization.
+                Resources.UnloadAsset(profile);
+                profile = null;
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
 
                 loaded = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(path);
                 Assert.That(loaded, Is.Not.Null);
                 Assert.That(loaded.sourcePsdGuid, Is.EqualTo("guid-123"));
+                Assert.That(loaded.sourcePsdGuid, Is.Not.EqualTo("memory-only-unsaved-sentinel"));
                 Assert.That(loaded.sourceFingerprint, Is.EqualTo(document.sourceFingerprint));
                 Assert.That(loaded.groups[0].stableLayerIds, Is.EqualTo(new[] { "101" }));
                 Assert.That(loaded.CheckSchema().status, Is.EqualTo(PsdHierarchyProfileSchemaStatus.Current));
@@ -396,12 +411,26 @@ namespace PsdLayoutTool2.Tests
                     Resources.UnloadAsset(loaded);
                 }
 
-                AssetDatabase.DeleteAsset(folder);
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
+                if (profile != null)
+                {
+                    if (AssetDatabase.Contains(profile))
+                    {
+                        Resources.UnloadAsset(profile);
+                    }
+                    else
+                    {
+                        Object.DestroyImmediate(profile);
+                    }
+                }
+
+                if (assetCreated)
+                {
+                    cleanupSucceeded = AssetDatabase.DeleteAsset(path);
+                }
             }
 
-            Assert.That(AssetDatabase.IsValidFolder(folder), Is.False);
+            Assert.That(cleanupSucceeded, Is.True);
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(path), Is.Null);
         }
 
         private static PsdHierarchyProfile Profile(PsdPrefabDocumentModel document, params string[] members)
