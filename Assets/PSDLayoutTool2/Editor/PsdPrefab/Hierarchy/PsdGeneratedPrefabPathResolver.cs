@@ -74,6 +74,7 @@ namespace PsdLayoutTool2
             outputRootAssetPath = string.Empty;
             string normalizedPsdPath = NormalizeAssetPath(psdAssetPath);
             if (string.IsNullOrEmpty(normalizedPsdPath) ||
+                ContainsTraversalSegment(normalizedPsdPath) ||
                 (!normalizedPsdPath.Equals("Assets", StringComparison.Ordinal) &&
                  !normalizedPsdPath.StartsWith("Assets/", StringComparison.Ordinal)))
             {
@@ -106,6 +107,21 @@ namespace PsdLayoutTool2
         private static string NormalizeAssetPath(string path)
         {
             return string.IsNullOrWhiteSpace(path) ? string.Empty : path.Trim().Replace('\\', '/');
+        }
+
+        private static bool ContainsTraversalSegment(string assetPath)
+        {
+            string[] segments = assetPath.Split('/');
+            foreach (string segment in segments)
+            {
+                if (segment.Equals(".", StringComparison.Ordinal) ||
+                    segment.Equals("..", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static string MakeNameSafe(string name)
