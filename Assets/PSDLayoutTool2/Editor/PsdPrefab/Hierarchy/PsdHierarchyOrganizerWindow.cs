@@ -1115,28 +1115,71 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            var localIdByStableId = (profile.nodes ?? new List<PsdHierarchyProfileNode>())
-                .Where(node => node != null && node.localFileId > 0L)
+            var pathByStableId = (profile.nodes ?? new List<PsdHierarchyProfileNode>())
+                .Where(node => node != null && !string.IsNullOrEmpty(node.lastKnownPath))
                 .GroupBy(node => node.stableId, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.First().localFileId, StringComparer.Ordinal);
-            var targets = new List<UnityEngine.Object>();
-            foreach (Transform transform in prefabRoot.GetComponentsInChildren<Transform>(true))
+                .ToDictionary(group => group.Key, group => group.First().lastKnownPath, StringComparer.Ordinal);
+            var requestedPaths = new List<string>();
+            foreach (string stableId in requestedIds)
             {
-                string guid;
-                long localId;
-                if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(transform.gameObject, out guid, out localId)) continue;
-                if (requestedIds.Any(stableId => localIdByStableId.TryGetValue(stableId, out long expectedId) && expectedId == localId))
-                    targets.Add(transform.gameObject);
+                string path;
+                if (pathByStableId.TryGetValue(stableId, out path)) requestedPaths.Add(path);
             }
-            if (targets.Count == 0)
+            if (requestedPaths.Count == 0)
             {
                 ShowNotification(new GUIContent("这些图层尚未写入目标 Prefab。请先应用并重新导入。"));
                 return;
             }
 
             AssetDatabase.OpenAsset(prefabRoot);
+            EditorApplication.delayCall += () => SelectOpenedPrefabStageMembers(requestedPaths);
+        }
+
+        private void SelectOpenedPrefabStageMembers(List<string> requestedPaths)
+        {
+            UnityEditor.SceneManagement.PrefabStage stage = UnityEditor.SceneManagement.PrefabStageUtility.GetCurrentPrefabStage();
+            if (stage == null || !string.Equals(stage.assetPath, model.targetPrefabPath, StringComparison.Ordinal))
+            {
+                ShowNotification(new GUIContent("Prefab 已打开，但尚未准备好定位。请再次点击 Ping。"));
+                return;
+            }
+
+            Transform[] stageNodes = stage.prefabContentsRoot.GetComponentsInChildren<Transform>(true);
+            var stageObjects = new List<UnityEngine.Object>(stageNodes.Length);
+            foreach (Transform node in stageNodes) stageObjects.Add(node.gameObject);
+            IReadOnlyList<UnityEngine.Object> targets;
+            try
+            {
+                targets = PsdHierarchyPrefabStageSelection.ResolveStageTargets(
+                    requestedPaths,
+                    stageNodes.Select(node => BuildHierarchyPath(node, stage.prefabContentsRoot.transform)).ToList(),
+                    stageObjects,
+                    StringComparer.Ordinal);
+            }
+            catch (InvalidOperationException exception)
+            {
+                ShowNotification(new GUIContent(exception.Message));
+                return;
+            }
+            if (targets.Count == 0)
+            {
+                ShowNotification(new GUIContent("目标图层未出现在当前 Prefab Stage 中。"));
+                return;
+            }
+
             Selection.objects = targets.ToArray();
             EditorGUIUtility.PingObject(targets[0]);
+        }
+
+        private static string BuildHierarchyPath(Transform target, Transform root)
+        {
+            var names = new Stack<string>();
+            for (Transform cursor = target; cursor != null; cursor = cursor.parent)
+            {
+                names.Push(cursor.name);
+                if (cursor == root) break;
+            }
+            return string.Join("/", names.ToArray());
         }
 
         private static bool GetFoldout(Dictionary<string, bool> state, string key)
