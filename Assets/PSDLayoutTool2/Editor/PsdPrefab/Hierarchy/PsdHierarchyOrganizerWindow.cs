@@ -40,6 +40,10 @@ namespace PsdLayoutTool2
         }
 
         public string targetPrefabPath { get; private set; }
+        public string sourcePsdGuid
+        {
+            get { return fullRequest.sourcePsdGuid ?? string.Empty; }
+        }
         public IList<PsdHierarchyRequestNode> currentTreeNodes
         {
             get { return fullRequest.nodes.Select(CloneNode).ToList(); }
@@ -1051,15 +1055,19 @@ namespace PsdLayoutTool2
             else EditorGUI.DrawRect(row, new Color(0.16f, 0.28f, 0.38f, 0.22f));
             Rect foldout = new Rect(row.x + 3f, row.y + 2f, 16f, row.height);
             proposedTreeFoldouts[group.key] = EditorGUI.Foldout(foldout, expanded, GUIContent.none, true);
-            if (GUI.Button(new Rect(row.x + 20f, row.y, row.width - 20f, row.height), "▣  " + group.displayName, EditorStyles.label))
+            if (GUI.Button(new Rect(row.x + 20f, row.y, row.width - 20f, row.height), "▣  " + group.displayName + "  ·  " + (group.memberStableIds ?? new List<string>()).Count + " 个图层", EditorStyles.label))
+            {
                 selectedGroupKey = group.key;
+                SelectPrefabMembers(group.memberStableIds);
+            }
             if (!GetFoldout(proposedTreeFoldouts, group.key)) return;
             foreach (string member in group.memberStableIds ?? new List<string>())
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     GUILayout.Space((depth + 1) * 14f + 18f);
-                    GUILayout.Label("◆  " + member, EditorStyles.miniLabel);
+                    if (GUILayout.Button(CreateMemberContent(member), EditorStyles.miniLabel))
+                        SelectPrefabMembers(new[] { member });
                 }
             }
             foreach (PsdHierarchyPlanGroup child in children) DrawProposedGroup(child, allGroups, depth + 1);
@@ -1075,6 +1083,59 @@ namespace PsdLayoutTool2
             EditorGUILayout.LabelField("GROUP DETAILS", EditorStyles.miniBoldLabel);
             EditorGUILayout.LabelField("Confidence  " + group.confidence.ToString("0.00"), EditorStyles.miniLabel);
             EditorGUILayout.LabelField(group.evidence ?? string.Empty, EditorStyles.wordWrappedMiniLabel);
+        }
+
+        private GUIContent CreateMemberContent(string stableId)
+        {
+            PsdHierarchyRequestNode node = model.currentTreeNodes
+                .FirstOrDefault(value => value != null && string.Equals(value.stableId, stableId, StringComparison.Ordinal));
+            if (node == null) return new GUIContent("◆  <无法解析的图层>", "PSD layer ID: " + stableId);
+            string icon = string.Equals(node.kind, "Text", StringComparison.Ordinal) ? "T" : "◆";
+            string tooltip = "点击后在目标 Prefab 中定位\nPSD layer ID: " + stableId;
+            return new GUIContent(icon + "  " + node.originalName, tooltip);
+        }
+
+        /// <summary>
+        /// Uses the durable Profile local-file IDs, never layer names or hierarchy-path guesses,
+        /// to select exactly the generated Prefab objects represented by the clicked proposal row.
+        /// </summary>
+        private void SelectPrefabMembers(IEnumerable<string> stableIds)
+        {
+            List<string> requestedIds = (stableIds ?? Enumerable.Empty<string>())
+                .Where(value => !string.IsNullOrEmpty(value)).Distinct(StringComparer.Ordinal).ToList();
+            if (requestedIds.Count == 0) return;
+
+            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(model.targetPrefabPath, model.sourcePsdGuid);
+            PsdHierarchyProfile profile = PsdPrefabTransactionalSave.ResolveBoundProfileForImport(profilePath, model.targetPrefabPath);
+            GameObject prefabRoot = AssetDatabase.LoadAssetAtPath<GameObject>(model.targetPrefabPath);
+            if (profile == null || prefabRoot == null)
+            {
+                ShowNotification(new GUIContent("找不到可定位的 Prefab Profile。请先完成一次导入。"));
+                return;
+            }
+
+            var localIdByStableId = (profile.nodes ?? new List<PsdHierarchyProfileNode>())
+                .Where(node => node != null && node.localFileId > 0L)
+                .GroupBy(node => node.stableId, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First().localFileId, StringComparer.Ordinal);
+            var targets = new List<UnityEngine.Object>();
+            foreach (Transform transform in prefabRoot.GetComponentsInChildren<Transform>(true))
+            {
+                string guid;
+                long localId;
+                if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(transform.gameObject, out guid, out localId)) continue;
+                if (requestedIds.Any(stableId => localIdByStableId.TryGetValue(stableId, out long expectedId) && expectedId == localId))
+                    targets.Add(transform.gameObject);
+            }
+            if (targets.Count == 0)
+            {
+                ShowNotification(new GUIContent("这些图层尚未写入目标 Prefab。请先应用并重新导入。"));
+                return;
+            }
+
+            AssetDatabase.OpenAsset(prefabRoot);
+            Selection.objects = targets.ToArray();
+            EditorGUIUtility.PingObject(targets[0]);
         }
 
         private static bool GetFoldout(Dictionary<string, bool> state, string key)
