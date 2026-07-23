@@ -2,8 +2,10 @@ namespace PsdLayoutTool2.Tests
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
     using NUnit.Framework;
@@ -930,6 +932,22 @@ namespace PsdLayoutTool2.Tests
             string executable = CodexCliHierarchyRunner.ResolveDefaultExecutable(roamingRoot);
 
             Assert.That(executable, Is.EqualTo(Path.GetFullPath(shimPath)));
+        }
+
+        [Test]
+        public void ProcessAdapterWritesCodexPromptAsUtf8()
+        {
+            var invocation = new PsdHierarchyProcessInvocation
+            {
+                executable = "codex",
+                workingDirectory = tempRoot,
+                standardInput = "含有中文的提示",
+                arguments = new List<string> { "exec" }
+            };
+
+            ProcessStartInfo startInfo = SystemHierarchyProcessAdapter.CreateStartInfo(invocation);
+
+            Assert.That(startInfo.StandardInputEncoding.CodePage, Is.EqualTo(Encoding.UTF8.CodePage));
         }
 
         private CodexCliHierarchyRunner Runner(IHierarchyProcessAdapter adapter)

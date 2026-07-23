@@ -392,17 +392,7 @@ namespace PsdLayoutTool2
                 throw new ArgumentNullException("invocation");
             }
 
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = invocation.executable,
-                Arguments = JoinArguments(invocation.arguments),
-                WorkingDirectory = invocation.workingDirectory,
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
+            ProcessStartInfo startInfo = CreateStartInfo(invocation);
 
             using (var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true })
             using (var timeoutSource = new CancellationTokenSource(timeout))
@@ -491,6 +481,28 @@ namespace PsdLayoutTool2
                     throw;
                 }
             }
+        }
+
+        /// <summary>
+        /// Codex reads its prompt from stdin as UTF-8. ProcessStartInfo otherwise
+        /// uses the Windows active code page, which corrupts Chinese PSD names
+        /// and can make Codex reject the input before planning starts.
+        /// </summary>
+        internal static ProcessStartInfo CreateStartInfo(PsdHierarchyProcessInvocation invocation)
+        {
+            if (invocation == null) throw new ArgumentNullException("invocation");
+            return new ProcessStartInfo
+            {
+                FileName = invocation.executable,
+                Arguments = JoinArguments(invocation.arguments),
+                WorkingDirectory = invocation.workingDirectory,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardInputEncoding = new UTF8Encoding(false),
+                CreateNoWindow = true
+            };
         }
 
         private static string JoinArguments(IEnumerable<string> arguments)
