@@ -22,9 +22,29 @@ namespace PsdLayoutTool2
         private readonly Action<string> packageDirectoryCreator;
 
         public CodexCliHierarchyRunner()
-            : this(new SystemHierarchyProcessAdapter(), () => "codex",
+            : this(new SystemHierarchyProcessAdapter(),
+                () => ResolveDefaultExecutable(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
                 Path.Combine("Temp", "PSDLayoutTool2", "Hierarchy"))
         {
+        }
+
+        /// <summary>
+        /// Unity inherits its PATH only when the Editor process starts. A global
+        /// npm install performed later leaves a valid Windows shim outside that
+        /// stale PATH, even though the same account can run <c>codex</c> in a
+        /// newly opened terminal. Prefer the known npm shim when it exists and
+        /// otherwise retain the portable PATH-based command fallback.
+        /// </summary>
+        internal static string ResolveDefaultExecutable(string roamingAppData)
+        {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT &&
+                !string.IsNullOrWhiteSpace(roamingAppData))
+            {
+                string npmShim = Path.Combine(roamingAppData, "npm", "codex.cmd");
+                if (File.Exists(npmShim)) return Path.GetFullPath(npmShim);
+            }
+
+            return "codex";
         }
 
         public CodexCliHierarchyRunner(

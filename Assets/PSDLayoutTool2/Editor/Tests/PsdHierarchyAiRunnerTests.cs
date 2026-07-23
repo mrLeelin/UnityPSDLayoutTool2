@@ -918,6 +918,20 @@ namespace PsdLayoutTool2.Tests
                 Is.EqualTo(PsdHierarchyProcessTreeTerminationStrategy.NonWindowsUnconfirmedKill));
         }
 
+        [Test]
+        public void DefaultExecutableResolverUsesExistingWindowsNpmShimWhenUnityPathIsStale()
+        {
+            string roamingRoot = Path.Combine(tempRoot, "Roaming");
+            string npmDirectory = Path.Combine(roamingRoot, "npm");
+            Directory.CreateDirectory(npmDirectory);
+            string shimPath = Path.Combine(npmDirectory, "codex.cmd");
+            File.WriteAllText(shimPath, "@echo off");
+
+            string executable = CodexCliHierarchyRunner.ResolveDefaultExecutable(roamingRoot);
+
+            Assert.That(executable, Is.EqualTo(Path.GetFullPath(shimPath)));
+        }
+
         private CodexCliHierarchyRunner Runner(IHierarchyProcessAdapter adapter)
         {
             return new CodexCliHierarchyRunner(adapter, () => "codex-test", tempRoot);
