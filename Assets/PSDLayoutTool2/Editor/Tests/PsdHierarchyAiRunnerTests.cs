@@ -64,6 +64,9 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(File.Exists(Path.Combine(invocation.workingDirectory, "prompt.txt")), Is.True);
                 Assert.That(File.Exists(Path.Combine(invocation.workingDirectory, "focus.json")), Is.True);
                 Assert.That(File.ReadAllText(Path.Combine(invocation.workingDirectory, "prompt.txt")), Does.Contain("read-only"));
+                Assert.That(File.ReadAllText(Path.Combine(invocation.workingDirectory, "plan.schema.json")),
+                    Does.Contain("\"schemaVersion\":{\"type\":\"integer\",\"const\":1}"),
+                    "Codex requires a type alongside const in object properties.");
                 File.WriteAllText(invocation.OutputPath, PlanJson(Request("101")));
                 return Completed(0);
             });
