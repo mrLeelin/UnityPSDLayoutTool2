@@ -47,6 +47,8 @@ namespace PsdLayoutTool2.Tests
             CollectionAssert.Contains(adapter.Invocation.arguments, "--sandbox");
             CollectionAssert.Contains(adapter.Invocation.arguments, "read-only");
             CollectionAssert.Contains(adapter.Invocation.arguments, "--ephemeral");
+            CollectionAssert.Contains(adapter.Invocation.arguments, "--ignore-user-config",
+                "The self-contained hierarchy planner must not start unrelated user MCP/plugin processes.");
             CollectionAssert.Contains(adapter.Invocation.arguments, "--output-schema");
             CollectionAssert.Contains(adapter.Invocation.arguments, "-o");
             Assert.That(adapter.Invocation.arguments, Has.None.Contains("Assets"));
@@ -69,6 +71,8 @@ namespace PsdLayoutTool2.Tests
                     "Focused replans must receive an explicit decision requirement instead of returning an empty plan.");
                 Assert.That(prompt, Does.Contain("originalName"),
                     "A no-op focus decision is represented as an identity rename using the request node's originalName.");
+                Assert.That(prompt, Does.Contain("You may create new group keys"),
+                    "A first-time hierarchy has no existing group keys, so the planner must be allowed to create them.");
                 Assert.That(File.ReadAllText(Path.Combine(invocation.workingDirectory, "plan.schema.json")),
                     Does.Contain("\"schemaVersion\":{\"type\":\"integer\",\"const\":1}"),
                     "Codex requires a type alongside const in object properties.");

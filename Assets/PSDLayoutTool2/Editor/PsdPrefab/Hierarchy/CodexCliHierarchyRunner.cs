@@ -135,7 +135,7 @@ namespace PsdLayoutTool2
                         useShellExecute = false,
                         arguments = new List<string>
                         {
-                            "exec", "--sandbox", "read-only", "--ephemeral",
+                            "exec", "--ignore-user-config", "--sandbox", "read-only", "--ephemeral",
                             "--output-schema", schemaPath, "-o", outputPath, "-"
                         }
                     };
@@ -253,6 +253,7 @@ namespace PsdLayoutTool2
             return "You are a read-only PSD hierarchy planner. You have no permission to write Unity Assets, Prefabs, Profiles, materials, or project files. " +
                    "Read the bounded request JSON at " + requestPath + " and the scope/ancestor graph at " + focusPath + ". " +
                    "Modify only IDs and existing group keys listed as modifiable. Return only a plan matching plan.schema.json. " +
+                   "You may create new group keys when the modifiable IDs need a new semantic container; use a unique ASCII key and include only modifiable IDs in that new group. " +
                    "Every modifiable ID in focus.json requires an explicit decision: either include it in an allowed group or add a rename. " +
                    "If it should remain ungrouped, add an identity rename whose name exactly equals that node's originalName in request.json; never return empty groups and renames while modifiable IDs exist. " +
                    "The target shown for evidence only is '" + SanitizePromptValue(targetPrefabPath) + "'. " +
