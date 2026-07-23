@@ -798,9 +798,14 @@ namespace PsdLayoutTool2
     {
         private PsdHierarchyOrganizerPreviewModel model;
         private CancellationTokenSource cancellation;
-        private Vector2 scroll;
+        private Vector2 currentTreeScroll;
+        private Vector2 proposedTreeScroll;
         private bool confirmMissingCleanup;
         private Action<PsdHierarchyPlan> applyHandler;
+        private float leftPaneWidth = 330f;
+        private string selectedGroupKey = string.Empty;
+        private readonly Dictionary<string, bool> currentTreeFoldouts = new Dictionary<string, bool>(StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> proposedTreeFoldouts = new Dictionary<string, bool>(StringComparer.Ordinal);
 
         public static PsdHierarchyOrganizerWindow Open(
             PsdHierarchyOrganizerPreviewModel previewModel,
@@ -826,7 +831,11 @@ namespace PsdLayoutTool2
             model = previewModel ?? throw new ArgumentNullException("previewModel");
             applyHandler = handler;
             confirmMissingCleanup = false;
-            scroll = Vector2.zero;
+            currentTreeScroll = Vector2.zero;
+            proposedTreeScroll = Vector2.zero;
+            selectedGroupKey = string.Empty;
+            currentTreeFoldouts.Clear();
+            proposedTreeFoldouts.Clear();
         }
 
         internal void ClearContext()
@@ -885,14 +894,11 @@ namespace PsdLayoutTool2
                 EditorGUILayout.HelpBox(error, MessageType.Error);
             }
 
-            scroll = EditorGUILayout.BeginScrollView(scroll);
-            DrawCurrentTree();
-            GUILayout.Space(8f);
-            DrawProposedTree();
-            EditorGUILayout.EndScrollView();
-
             GUI.enabled = model.canApply && !model.isRunning;
-            if (GUILayout.Button("Apply Validated Plan"))
+            Rect applyButton = new Rect(4f, position.height - 26f, Mathf.Max(0f, position.width - 8f), 22f);
+            float panelTop = 70f + (model.pendingMissingStableIds.Count > 0 ? 20f : 0f) + model.validationErrors.Count * 38f;
+            DrawHierarchyPanes(panelTop, applyButton.yMin - 6f);
+            if (GUI.Button(applyButton, "Apply Validated Plan"))
             {
                 PsdHierarchyPlan freshPlan;
                 string error;
@@ -956,33 +962,127 @@ namespace PsdLayoutTool2
 
         private void DrawCurrentTree()
         {
-            EditorGUILayout.LabelField("Current tree", EditorStyles.boldLabel);
-            foreach (PsdHierarchyRequestNode node in model.currentTreeNodes
-                         .OrderBy(node => node.parentStableId, StringComparer.Ordinal)
-                         .ThenBy(node => node.siblingIndex))
-            {
-                string parent = string.IsNullOrEmpty(node.parentStableId) ? "root" : node.parentStableId;
-                EditorGUILayout.LabelField(
-                    node.originalName + "  [id=" + node.stableId + ", parent=" + parent + ", index=" + node.siblingIndex + "]");
-            }
+            EditorGUILayout.LabelField("CURRENT PREFAB", EditorStyles.boldLabel);
+            List<PsdHierarchyRequestNode> nodes = model.currentTreeNodes.ToList();
+            var childrenByParent = nodes.GroupBy(node => node.parentStableId ?? string.Empty)
+                .ToDictionary(group => group.Key, group => group.OrderBy(node => node.siblingIndex).ToList(), StringComparer.Ordinal);
+            DrawCurrentTreeChildren(childrenByParent, string.Empty, 0);
         }
 
         private void DrawProposedTree()
         {
-            EditorGUILayout.LabelField("Proposed tree / evidence / confidence", EditorStyles.boldLabel);
-            foreach (PsdHierarchyPlanGroup group in model.proposedPlan.groups ?? new List<PsdHierarchyPlanGroup>())
+            EditorGUILayout.LabelField("PROPOSED STRUCTURE", EditorStyles.boldLabel);
+            PsdHierarchyPlan plan = model.proposedPlan;
+            foreach (PsdHierarchyPlanGroup group in (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                         .Where(group => string.IsNullOrEmpty(group.parentKey)).OrderBy(group => group.key, StringComparer.Ordinal))
+                DrawProposedGroup(group, plan.groups ?? new List<PsdHierarchyPlanGroup>(), 0);
+
+            if ((plan.renames ?? new List<PsdHierarchyPlanRename>()).Count > 0)
             {
-                EditorGUILayout.LabelField(group.displayName + "  [" + group.key + "]");
-                EditorGUILayout.LabelField("  members: " + string.Join(", ", group.memberStableIds.ToArray()));
-                EditorGUILayout.LabelField("  confidence: " + group.confidence.ToString("0.00") + "  evidence: " + group.evidence,
-                    EditorStyles.wordWrappedMiniLabel);
+                GUILayout.Space(6f);
+                EditorGUILayout.LabelField("Renames", EditorStyles.miniBoldLabel);
+                foreach (PsdHierarchyPlanRename rename in plan.renames)
+                    EditorGUILayout.LabelField(rename.stableId + "  →  " + rename.name, EditorStyles.miniLabel);
             }
-            foreach (PsdHierarchyPlanRename rename in model.proposedPlan.renames ?? new List<PsdHierarchyPlanRename>())
+        }
+
+        private void DrawHierarchyPanes(float top, float bottom)
+        {
+            Rect area = new Rect(4f, top, Mathf.Max(0f, position.width - 8f), Mathf.Max(120f, bottom - top));
+            leftPaneWidth = Mathf.Clamp(leftPaneWidth, 220f, Mathf.Max(220f, area.width - 260f));
+            Rect left = new Rect(area.x, area.y, leftPaneWidth - 3f, area.height);
+            Rect splitter = new Rect(left.xMax, area.y, 6f, area.height);
+            Rect right = new Rect(splitter.xMax, area.y, area.xMax - splitter.xMax, area.height);
+            GUI.Box(left, GUIContent.none, EditorStyles.helpBox);
+            GUI.Box(right, GUIContent.none, EditorStyles.helpBox);
+            EditorGUIUtility.AddCursorRect(splitter, MouseCursor.ResizeHorizontal);
+            if (Event.current.type == EventType.MouseDown && splitter.Contains(Event.current.mousePosition))
+                GUIUtility.hotControl = GUIUtility.GetControlID(FocusType.Passive);
+            if (GUIUtility.hotControl != 0 && Event.current.type == EventType.MouseDrag)
             {
-                EditorGUILayout.LabelField(rename.stableId + " -> " + rename.name);
-                EditorGUILayout.LabelField("  confidence: " + rename.confidence.ToString("0.00") + "  evidence: " + rename.evidence,
-                    EditorStyles.wordWrappedMiniLabel);
+                leftPaneWidth = Event.current.mousePosition.x - area.x;
+                Repaint();
             }
+            if (Event.current.type == EventType.MouseUp) GUIUtility.hotControl = 0;
+
+            GUILayout.BeginArea(new Rect(left.x + 6f, left.y + 6f, left.width - 12f, left.height - 12f));
+            currentTreeScroll = EditorGUILayout.BeginScrollView(currentTreeScroll);
+            DrawCurrentTree();
+            EditorGUILayout.EndScrollView();
+            GUILayout.EndArea();
+
+            GUILayout.BeginArea(new Rect(right.x + 6f, right.y + 6f, right.width - 12f, right.height - 12f));
+            proposedTreeScroll = EditorGUILayout.BeginScrollView(proposedTreeScroll);
+            DrawProposedTree();
+            DrawSelectedGroupInspector();
+            EditorGUILayout.EndScrollView();
+            GUILayout.EndArea();
+        }
+
+        private void DrawCurrentTreeChildren(Dictionary<string, List<PsdHierarchyRequestNode>> childrenByParent, string parentId, int depth)
+        {
+            List<PsdHierarchyRequestNode> children;
+            if (!childrenByParent.TryGetValue(parentId, out children)) return;
+            foreach (PsdHierarchyRequestNode node in children)
+            {
+                List<PsdHierarchyRequestNode> grandChildren;
+                bool hasChildren = childrenByParent.TryGetValue(node.stableId, out grandChildren) && grandChildren.Count > 0;
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space(depth * 14f);
+                    if (hasChildren)
+                        currentTreeFoldouts[node.stableId] = EditorGUILayout.Foldout(GetFoldout(currentTreeFoldouts, node.stableId), "", true);
+                    else GUILayout.Space(14f);
+                    GUIContent content = new GUIContent((node.kind == "Text" ? "T  " : "◆  ") + node.originalName, node.stableId + "  |  " + node.kind);
+                    GUILayout.Label(content, EditorStyles.label);
+                }
+                if (hasChildren && GetFoldout(currentTreeFoldouts, node.stableId)) DrawCurrentTreeChildren(childrenByParent, node.stableId, depth + 1);
+            }
+        }
+
+        private void DrawProposedGroup(PsdHierarchyPlanGroup group, List<PsdHierarchyPlanGroup> allGroups, int depth)
+        {
+            List<PsdHierarchyPlanGroup> children = allGroups.Where(value => value != null && value.parentKey == group.key).OrderBy(value => value.key, StringComparer.Ordinal).ToList();
+            bool expanded = GetFoldout(proposedTreeFoldouts, group.key);
+            Rect row = EditorGUILayout.GetControlRect(false, 20f);
+            row.x += depth * 14f;
+            row.width -= depth * 14f;
+            if (selectedGroupKey == group.key) EditorGUI.DrawRect(row, new Color(0.20f, 0.42f, 0.62f, 0.45f));
+            else EditorGUI.DrawRect(row, new Color(0.16f, 0.28f, 0.38f, 0.22f));
+            Rect foldout = new Rect(row.x + 3f, row.y + 2f, 16f, row.height);
+            proposedTreeFoldouts[group.key] = EditorGUI.Foldout(foldout, expanded, GUIContent.none, true);
+            if (GUI.Button(new Rect(row.x + 20f, row.y, row.width - 20f, row.height), "▣  " + group.displayName, EditorStyles.label))
+                selectedGroupKey = group.key;
+            if (!GetFoldout(proposedTreeFoldouts, group.key)) return;
+            foreach (string member in group.memberStableIds ?? new List<string>())
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space((depth + 1) * 14f + 18f);
+                    GUILayout.Label("◆  " + member, EditorStyles.miniLabel);
+                }
+            }
+            foreach (PsdHierarchyPlanGroup child in children) DrawProposedGroup(child, allGroups, depth + 1);
+        }
+
+        private void DrawSelectedGroupInspector()
+        {
+            if (string.IsNullOrEmpty(selectedGroupKey)) return;
+            PsdHierarchyPlanGroup group = (model.proposedPlan.groups ?? new List<PsdHierarchyPlanGroup>())
+                .FirstOrDefault(value => value != null && value.key == selectedGroupKey);
+            if (group == null) return;
+            GUILayout.Space(8f);
+            EditorGUILayout.LabelField("GROUP DETAILS", EditorStyles.miniBoldLabel);
+            EditorGUILayout.LabelField("Confidence  " + group.confidence.ToString("0.00"), EditorStyles.miniLabel);
+            EditorGUILayout.LabelField(group.evidence ?? string.Empty, EditorStyles.wordWrappedMiniLabel);
+        }
+
+        private static bool GetFoldout(Dictionary<string, bool> state, string key)
+        {
+            bool value;
+            if (state.TryGetValue(key, out value)) return value;
+            state[key] = true;
+            return true;
         }
     }
 }
