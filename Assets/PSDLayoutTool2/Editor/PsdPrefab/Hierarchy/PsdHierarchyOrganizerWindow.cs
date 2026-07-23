@@ -1055,18 +1055,19 @@ namespace PsdLayoutTool2
             else EditorGUI.DrawRect(row, new Color(0.16f, 0.28f, 0.38f, 0.22f));
             Rect foldout = new Rect(row.x + 3f, row.y + 2f, 16f, row.height);
             proposedTreeFoldouts[group.key] = EditorGUI.Foldout(foldout, expanded, GUIContent.none, true);
-            if (GUI.Button(new Rect(row.x + 20f, row.y, row.width - 20f, row.height), "▣  " + group.displayName + "  ·  " + (group.memberStableIds ?? new List<string>()).Count + " 个图层", EditorStyles.label))
-            {
+            Rect pingAll = new Rect(row.xMax - 72f, row.y + 1f, 68f, row.height - 2f);
+            if (GUI.Button(new Rect(row.x + 20f, row.y, row.width - 96f, row.height), "▣  " + group.displayName + "  ·  " + (group.memberStableIds ?? new List<string>()).Count + " 个图层", EditorStyles.label))
                 selectedGroupKey = group.key;
+            if (GUI.Button(pingAll, "Ping 全部", EditorStyles.miniButton))
                 SelectPrefabMembers(group.memberStableIds);
-            }
             if (!GetFoldout(proposedTreeFoldouts, group.key)) return;
             foreach (string member in group.memberStableIds ?? new List<string>())
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     GUILayout.Space((depth + 1) * 14f + 18f);
-                    if (GUILayout.Button(CreateMemberContent(member), EditorStyles.miniLabel))
+                    GUILayout.Label(CreateMemberContent(member), EditorStyles.miniLabel, GUILayout.ExpandWidth(true));
+                    if (GUILayout.Button("Ping", EditorStyles.miniButton, GUILayout.Width(46f)))
                         SelectPrefabMembers(new[] { member });
                 }
             }
