@@ -51,6 +51,8 @@ The Profile stores three independent fingerprints:
 - `structureFingerprint`: stable ID, source parent ID, sibling order, and node kind; membership or parent changes trigger incremental reconciliation.
 - `geometryFingerprint`: stable ID plus bounds; geometry changes rerun spatial/order validation and trigger focused replanning only when an existing group is no longer valid.
 
+Only native PSD layer IDs are durable identities. A node whose Photoshop layer ID is zero may receive a session-only fallback key for diagnostics, but it is marked `FallbackUnstable`, cannot appear in a persisted AI group/rename, and remains in `Unsorted_Unstable`. The UI explains that the source PSD must provide a real layer ID before persistent incremental organization is safe.
+
 - An unchanged or content-only PSD update reuses the Profile without calling the model.
 - A geometry-only update reuses the Profile after deterministic group-contiguity and protected-boundary validation; only invalidated groups are sent for focused replanning.
 - Layer renames preserve membership when `layerId` is unchanged.
@@ -62,15 +64,21 @@ The Profile stores three independent fingerprints:
 
 The Profile is configuration data, not hardcoded per-screen logic. The general implementation must not contain `7日任务拆分`, `组 1`, `组 19`, or `ui_daily_*` matching rules.
 
+Focused replanning is orchestrated per invalidated scope. Content-only updates make zero model calls. New IDs and geometry-invalidated groups produce a bounded request containing only the affected nodes, their current group, direct neighbors, protected boundaries, and relevant preview crop. The returned partial plan may modify only the invalidated scopes and new IDs. It is strictly validated, merged into a clone of the previous Profile, and then the complete merged plan is validated again against the complete current tree for cycles, multiple parents, render order, protected boundaries, and stable identity. Unaffected group membership and renames remain byte-for-byte unchanged. Missing IDs remain pending until the preview window exposes and the user confirms an explicit cleanup action.
+
 ## Existing Prefab Merge and Business-Node Preservation
 
-Generation is transactional and does not overwrite the target Prefab in place. Before regeneration, Unity loads the existing Prefab contents and the previous Profile. The Profile records each generated stable ID's Prefab local file ID and last known transform path after a successful save. Generated group keys receive the same identity record.
+Generation is transactional, but retained generated objects are updated in place so their Prefab local file IDs and external references survive. Before regeneration, Unity loads the existing Prefab contents and the previous Profile. The Profile records each generated stable ID's Prefab local file ID and last known transform path after a successful save. Generated group keys receive the same identity record.
 
-Nodes not present in the generated-identity map are project-owned. Project-owned subtrees are detached into an in-memory preservation set together with their nearest generated parent stable ID, sibling relationship, components, serialized references, and world rectangle. The importer then builds and organizes a candidate Prefab under a temporary asset path. Project-owned subtrees are cloned back beneath the corresponding generated parent in the candidate; if that parent is missing or ambiguous, apply stops and reports the subtree instead of dropping it.
+Nodes not present in the generated-identity map are project-owned. The importer first builds a temporary candidate tree, then loads the existing target with `PrefabUtility.LoadPrefabContents`, matches retained generated objects by stable ID to their recorded local file ID, and uses the last-known path only as a diagnostic fallback. The existing importer payload synchronizer updates only its explicit PSD-owned allowlist on matched generated objects: active state and source name; `RectTransform` anchors, pivot, position, size, rotation, and scale before regrouping; `Image` sprite, color, type/fill/raycast/preserve-aspect fields; and TMP text/font/style fields. Material selection may assign an existing exact-match material or a newly created material, but neither the synchronizer nor organizer may mutate a material asset. The synchronizer may update Sprite/text/nine-slice values only as part of ordinary PSD content import, never as a hierarchy-plan instruction.
 
-The candidate and Profile are validated before the configured target changes. After validation, the target Prefab file is replaced transactionally while its `.meta`/GUID remains unchanged, then re-imported and verified again. A backup is retained until verification succeeds. Only after the target passes does Unity update the Profile's fingerprints, local file IDs, paths, and missing/new ID state. Any failure restores the previous Prefab bytes and leaves the previous Profile asset unchanged.
+The hierarchy organizer itself owns only generated empty group objects, parent/sibling placement, approved semantic names, and the local-rectangle reconstruction required after regrouping. It never writes Sprite, text, Image type/fill, nine-slice metadata, font/material properties, business components, component order, custom serialized fields, or project-owned objects. Those non-allowlisted values always remain on the existing Prefab object. Because retained existing objects are reorganized in place rather than replaced, their local file IDs, external references, Prefab-instance overrides, and project-owned children remain intact.
 
-First-time adoption of an existing generated Prefab uses the deterministic source tree, sibling order, generated naming rules, and exact resource references to build the initial generated-identity map. Ambiguous nodes are reported and block apply; they are never classified as project-owned or generated by guess alone.
+New stable IDs create new objects. Missing generated IDs are retained and marked pending until confirmed cleanup. Project-owned subtrees are never copied through a newly generated replacement tree. If a recorded generated parent is missing or ambiguous, apply stops and reports the subtree instead of guessing.
+
+The candidate and cloned next Profile are validated before the configured target changes. The target Prefab and current Profile bytes are backed up, then the loaded existing Prefab is saved in place so retained local file IDs remain stable. After reimport verification succeeds, the cloned Profile is copied into the existing Profile asset and saved as phase two. An injected or real failure during Prefab save, reimport verification, Profile copy/save, or final verification restores both backups. Temporary candidate assets and `.meta` files are deleted in success and failure paths.
+
+First-time adoption of an existing generated Prefab uses the deterministic source tree, sibling order, generated naming rules, and exact resource references to build the initial generated-identity map. Ambiguous nodes are reported and block apply; they are never classified as project-owned or generated by guess alone. Once adopted, all retained generated local file IDs must remain unchanged across apply/import tests.
 
 ## AI Request and Plan Contracts
 
@@ -90,7 +98,7 @@ The plan cannot contain C#, filesystem commands, deletion instructions, material
 
 Before preview or apply, Unity rejects plans with unknown or duplicate IDs, cycles, multiple parents, invalid group keys, protected-boundary crossings, non-contiguous render-order moves, or incompatible structure/geometry fingerprints. Content-only fingerprint changes do not make a hierarchy plan stale.
 
-The applier runs after `ExportTree(tree)` and before `PrefabUtility.SaveAsPrefabAsset`. It creates only empty `RectTransform` grouping nodes, inserts each group at the minimum original sibling index, preserves original child order, and reconstructs child local rectangles from captured world corners. It must not cross Canvas, Mask, Button, Animator, nested Prefab, or common asset boundaries.
+The unique apply flow is: `ExportTree(tree)` builds the temporary candidate; `LoadPrefabContents(target)` loads the existing Prefab; the payload synchronizer copies only allowlisted PSD-owned values onto matched existing generated objects; then the hierarchy applier operates on that loaded existing Prefab, creating/reusing empty `RectTransform` groups and moving existing retained nodes; validation runs; finally `SaveAsPrefabAsset(existing, target)` saves the same loaded object graph. The applier inserts each group at the minimum original sibling index, preserves original child order, and reconstructs child local rectangles from captured world corners. It must not cross Canvas, Mask, Button, Animator, nested Prefab, or common asset boundaries.
 
 Apply verification compares every moved leaf before and after:
 
@@ -104,6 +112,8 @@ Apply verification compares every moved leaf before and after:
 - sibling draw ordering among visual leaves.
 
 Any validation or verification failure aborts the save and leaves the existing Prefab and Profile unchanged.
+
+AI organization is available only when `UseUnityUI` is enabled. In non-Unity-UI/SpriteRenderer mode the Inspector action is disabled with a clear explanation; the first version does not create ordinary `Transform` grouping plans.
 
 ## Preview and First-Version Scope
 
@@ -120,10 +130,10 @@ The first version supports:
 - safe application during Prefab generation;
 - focused handling of new and missing layer IDs.
 
-The first version does not delete nodes, extract nested item Prefabs, change business components, bind scripts, or change textures, materials, text values, or nine-slice settings.
+The hierarchy organizer does not delete nodes, extract nested item Prefabs, change business components, bind scripts, or request changes to textures, materials, text values, or nine-slice settings. Ordinary PSD content import still updates its explicit PSD-owned allowlist; hierarchy application cannot expand that ownership.
 
 ## Verification
 
-Automated tests cover exact Prefab path resolution for both output modes, plan validation, stable group reuse, rename persistence by layer ID, new/missing layer handling, render-order guards, and world-rectangle preservation.
+Automated tests cover exact Prefab path resolution for both output modes, plan validation, stable group reuse, rename persistence by layer ID, new/missing layer handling, render-order guards, and world-rectangle preservation. They also prove retained local file IDs and external references remain unchanged, partial plans cannot modify unaffected groups, zero layer IDs cannot persist, the non-Unity-UI action is disabled, and injected failures at every Prefab/Profile transaction phase restore both original assets.
 
 The `7日任务拆分` fixture is an acceptance sample for general rules, not a source of hardcoded conditions. The acceptance run must show that repeated apply/import produces the same hierarchy, visual leaf geometry and references remain unchanged, and the configured inside-folder Prefab is the only modified Prefab.
