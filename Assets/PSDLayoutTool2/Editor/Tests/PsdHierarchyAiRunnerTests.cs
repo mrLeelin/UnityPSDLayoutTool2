@@ -63,7 +63,12 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(File.Exists(Path.Combine(invocation.workingDirectory, "plan.schema.json")), Is.True);
                 Assert.That(File.Exists(Path.Combine(invocation.workingDirectory, "prompt.txt")), Is.True);
                 Assert.That(File.Exists(Path.Combine(invocation.workingDirectory, "focus.json")), Is.True);
-                Assert.That(File.ReadAllText(Path.Combine(invocation.workingDirectory, "prompt.txt")), Does.Contain("read-only"));
+                string prompt = File.ReadAllText(Path.Combine(invocation.workingDirectory, "prompt.txt"));
+                Assert.That(prompt, Does.Contain("read-only"));
+                Assert.That(prompt, Does.Contain("Every modifiable ID"),
+                    "Focused replans must receive an explicit decision requirement instead of returning an empty plan.");
+                Assert.That(prompt, Does.Contain("originalName"),
+                    "A no-op focus decision is represented as an identity rename using the request node's originalName.");
                 Assert.That(File.ReadAllText(Path.Combine(invocation.workingDirectory, "plan.schema.json")),
                     Does.Contain("\"schemaVersion\":{\"type\":\"integer\",\"const\":1}"),
                     "Codex requires a type alongside const in object properties.");
