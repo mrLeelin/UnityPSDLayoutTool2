@@ -203,11 +203,11 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public async Task FocusedReplanCallsOncePerInvalidatedScopeAndNeverSendsUnaffectedNode()
+        public async Task FocusedReplanBatchesUngroupedInvalidatedNodesAndNeverSendsUnaffectedNode()
         {
             PsdHierarchyRequest request = Request("101", "102", "103");
             var fake = new FakeRunner();
-            fake.ResultFactory = run => Success(PlanFor(run.request, run.modifiableStableIds.Single()));
+            fake.ResultFactory = run => Success(PlanFor(run.request, run.modifiableStableIds.ToArray()));
             var reconciliation = new PsdHierarchyReconciliationResult { requiresReplan = true };
             reconciliation.focusedInvalidatedScopeStableIds.Add("101");
             reconciliation.unsortedNewStableIds.Add("103");
@@ -216,13 +216,14 @@ namespace PsdLayoutTool2.Tests
 
             await model.RefreshAsync(false, CancellationToken.None);
 
-            Assert.That(fake.Requests.Count, Is.EqualTo(2));
-            CollectionAssert.AreEquivalent(new[] { "101", "103" },
-                fake.Requests.Select(run => run.modifiableStableIds.Single()));
-            Assert.That(fake.Requests.All(run => run.contextStableIds.Contains(run.modifiableStableIds.Single())), Is.True);
-            Assert.That(fake.Requests.Any(run => run.contextStableIds.Contains("102")), Is.True,
+            Assert.That(fake.Requests.Count, Is.EqualTo(1),
+                "Independent ungrouped nodes must share one Codex startup instead of waiting through one process per node.");
+            CollectionAssert.AreEquivalent(new[] { "101", "103" }, fake.Requests.Single().modifiableStableIds);
+            Assert.That(fake.Requests.Single().contextStableIds, Does.Contain("101"));
+            Assert.That(fake.Requests.Single().contextStableIds, Does.Contain("103"));
+            Assert.That(fake.Requests.Single().contextStableIds, Does.Contain("102"),
                 "Read-only sibling context is expected, but it is never a modifiable ID.");
-            Assert.That(fake.Requests.Any(run => run.modifiableStableIds.Contains("102")), Is.False);
+            Assert.That(fake.Requests.Single().modifiableStableIds, Does.Not.Contain("102"));
             Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
             Assert.That(model.proposedPlan.renames.Any(rename => rename.stableId == "102"), Is.True,
                 "Unrelated baseline decisions survive byte-for-byte semantic merge.");
@@ -1016,16 +1017,19 @@ namespace PsdLayoutTool2.Tests
             return plan;
         }
 
-        private static PsdHierarchyPlan PlanFor(PsdHierarchyRequest request, string stableId)
+        private static PsdHierarchyPlan PlanFor(PsdHierarchyRequest request, params string[] stableIds)
         {
             PsdHierarchyPlan plan = IdentityPlan(request);
-            plan.renames.Add(new PsdHierarchyPlanRename
+            foreach (string stableId in stableIds)
             {
-                stableId = stableId,
-                name = "Planned " + stableId,
-                evidence = "focused",
-                confidence = 0.9d
-            });
+                plan.renames.Add(new PsdHierarchyPlanRename
+                {
+                    stableId = stableId,
+                    name = "Planned " + stableId,
+                    evidence = "focused",
+                    confidence = 0.9d
+                });
+            }
             return plan;
         }
 

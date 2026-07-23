@@ -194,6 +194,21 @@ namespace PsdLayoutTool2
                 .ToList();
             var unassigned = new HashSet<string>(seeds, StringComparer.Ordinal);
             var scopes = new List<HashSet<string>>();
+
+            // These nodes have no prior group boundary to preserve, so one
+            // request can safely organize them together. Sending each one to a
+            // separate Codex process makes a large import appear frozen while
+            // paying process/model startup cost once per layer.
+            var ungrouped = new HashSet<string>(
+                unassigned.Where(stableId => !(plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                    .Any(group => group != null && (group.memberStableIds ?? new List<string>()).Contains(stableId))),
+                StringComparer.Ordinal);
+            if (ungrouped.Count > 0)
+            {
+                scopes.Add(ungrouped);
+                unassigned.ExceptWith(ungrouped);
+            }
+
             while (unassigned.Count > 0)
             {
                 string seed = unassigned.OrderBy(value => value, StringComparer.Ordinal).First();
