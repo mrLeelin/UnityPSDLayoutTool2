@@ -73,6 +73,8 @@ namespace PsdLayoutTool2.Tests
                     "A no-op focus decision is represented as an identity rename using the request node's originalName.");
                 Assert.That(prompt, Does.Contain("You may create new group keys"),
                     "A first-time hierarchy has no existing group keys, so the planner must be allowed to create them.");
+                Assert.That(prompt, Does.Contain("contiguous sibling range"),
+                    "Groups that move non-adjacent PSD siblings are rejected during the preview merge.");
                 Assert.That(File.ReadAllText(Path.Combine(invocation.workingDirectory, "plan.schema.json")),
                     Does.Contain("\"schemaVersion\":{\"type\":\"integer\",\"const\":1}"),
                     "Codex requires a type alongside const in object properties.");
