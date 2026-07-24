@@ -23,6 +23,7 @@
     compositeUrl: "",
     pointer: null,
     marquee: null,
+    suppressGroupClick: false,
     pollTimer: null,
     afterOperation: null,
     renderQueued: false
@@ -173,8 +174,17 @@
       var title = svgElement("title");
       title.textContent = group.displayName || group.key || "未命名分组";
       rect.appendChild(title);
-      rect.addEventListener("pointerdown", function (event) { event.stopPropagation(); });
-      rect.addEventListener("click", function (event) { selectGroup(group.key, event.shiftKey); });
+      rect.addEventListener("pointerdown", function (event) {
+        var pan = event.button === 1 || state.spaceDown || state.tool === "hand";
+        if (!pan) event.stopPropagation();
+      });
+      rect.addEventListener("click", function (event) {
+        if (state.suppressGroupClick || state.spaceDown || state.tool === "hand") {
+          state.suppressGroupClick = false;
+          return;
+        }
+        selectGroup(group.key, event.shiftKey);
+      });
       rect.addEventListener("keydown", function (event) {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
@@ -364,6 +374,7 @@
     var pan = event.button === 1 || state.spaceDown || state.tool === "hand";
     if (pan) {
       event.preventDefault();
+      state.suppressGroupClick = true;
       state.pointer = { kind: "pan", x: event.clientX, y: event.clientY, offsetX: state.offsetX, offsetY: state.offsetY };
       roles["psd-canvas"].classList.add("is-panning");
       return;
@@ -393,9 +404,11 @@
 
   function onPointerUp() {
     if (!state.pointer) return;
+    var completedPan = state.pointer.kind === "pan";
     if (state.pointer.kind === "marquee") completeMarquee(state.pointer.additive);
     state.pointer = null;
     roles["psd-canvas"].classList.remove("is-panning");
+    if (completedPan) window.setTimeout(function () { state.suppressGroupClick = false; }, 0);
   }
 
   function updateMarquee() {

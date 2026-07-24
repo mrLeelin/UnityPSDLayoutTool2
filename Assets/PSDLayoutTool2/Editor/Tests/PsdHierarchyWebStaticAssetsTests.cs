@@ -47,5 +47,14 @@ namespace PsdLayoutTool2.Tests
             StringAssert.Contains("data-role=\"apply-plan\"", html);
             StringAssert.Contains("data-role=\"prefab-candidates\"", html);
         }
+
+        [Test]
+        public void Script_AllowsPanGesturesToStartOverGroupOverlays()
+        {
+            string script = Encoding.UTF8.GetString(PsdHierarchyWebStaticAssets.Resolve("/organizer.js").bytes);
+
+            StringAssert.Contains("event.button === 1 || state.spaceDown || state.tool === \"hand\"", script);
+            StringAssert.Contains("state.suppressGroupClick = true", script);
+        }
     }
 }
