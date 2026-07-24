@@ -59,12 +59,11 @@ namespace PsdLayoutTool2.Editor
 
                 string sessionId = PsdHierarchyWebSession.CreateSecret(16);
                 string directory = Path.Combine(root, sessionId);
+                EnsureSafeRoot();
                 EnsureDirectChild(directory);
-                if (Directory.Exists(directory) && IsReparsePoint(directory))
-                    throw new IOException("Session directory must not be a reparse point.");
+                if (Directory.Exists(directory)) EnsureNoReparsePoints(directory);
                 Directory.CreateDirectory(directory);
-                if (IsReparsePoint(directory))
-                    throw new IOException("Session directory must not be a reparse point.");
+                EnsureNoReparsePoints(directory);
                 var session = new PsdHierarchyWebSession(
                     sessionId,
                     PsdHierarchyWebSession.CreateSecret(32),
@@ -79,21 +78,39 @@ namespace PsdLayoutTool2.Editor
 
         public void CleanupStaleDirectories()
         {
-            ThrowIfDisposed();
-            DateTime cutoff = utcNow().ToUniversalTime().Subtract(StaleAge);
-            foreach (string directory in Directory.EnumerateDirectories(root).ToArray())
+            lock (gate)
             {
+                ThrowIfDisposed();
+                DateTime cutoff = utcNow().ToUniversalTime().Subtract(StaleAge);
+                var activeDirectories = new HashSet<string>(
+                    sessions.Values.Select(session => session.directory),
+                    StringComparer.OrdinalIgnoreCase);
+                string[] directories;
                 try
                 {
-                    if (!IsRecognizedSessionDirectory(directory) ||
-                        Directory.GetLastWriteTimeUtc(directory) >= cutoff)
-                        continue;
-                    EnsureDirectChild(directory);
-                    if (IsReparsePoint(directory)) continue;
-                    deleteDirectory(directory);
+                    EnsureSafeRoot();
+                    directories = Directory.EnumerateDirectories(root).ToArray();
                 }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
+                catch (IOException) { return; }
+                catch (UnauthorizedAccessException) { return; }
+
+                foreach (string directory in directories)
+                {
+                    try
+                    {
+                        if (activeDirectories.Contains(directory) ||
+                            !IsRecognizedSessionDirectory(directory) ||
+                            Directory.GetLastWriteTimeUtc(directory) >= cutoff)
+                            continue;
+
+                        EnsureSafeRoot();
+                        EnsureDirectChild(directory);
+                        EnsureNoReparsePoints(directory);
+                        deleteDirectory(directory);
+                    }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
             }
         }
 
@@ -131,17 +148,19 @@ namespace PsdLayoutTool2.Editor
                 throw new IOException("Session directory escaped the configured root.");
         }
 
+        private void EnsureSafeRoot()
+        {
+            if (!Directory.Exists(root))
+                throw new IOException("Session root no longer exists.");
+            EnsureNoReparsePoints(root);
+        }
+
         private bool IsRecognizedSessionDirectory(string path)
         {
             string name = Path.GetFileName(path);
             if (name.Length < 16 || name.Length > 64 || (name.Length & 1) != 0) return false;
             return name.All(character =>
                 (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'));
-        }
-
-        private static bool IsReparsePoint(string path)
-        {
-            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
         }
 
         private static void EnsureNoReparsePoints(string path)

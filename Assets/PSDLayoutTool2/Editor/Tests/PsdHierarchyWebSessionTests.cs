@@ -28,7 +28,7 @@ namespace PsdLayoutTool2.Tests
                     Assert.That(second.sessionId, Is.EqualTo(first.sessionId));
                     Assert.That(second.token, Is.EqualTo(first.token));
                     Assert.That(second.directory, Is.EqualTo(first.directory));
-                    Assert.That(second.previewModel, Is.SameAs(updatedPreview));
+                    second.UsePreview(model => Assert.That(model, Is.SameAs(updatedPreview)));
                 }
             }
             finally { Delete(root); }
@@ -62,14 +62,15 @@ namespace PsdLayoutTool2.Tests
                 "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"), null);
             try
             {
-                CancellationToken first = session.Start(PsdHierarchyWebOperationKind.Analyze, "working");
+                PsdHierarchyWebOperationLease first = session.Start(
+                    PsdHierarchyWebOperationKind.Analyze, "working");
                 Assert.Throws<InvalidOperationException>(() =>
                     session.Start(PsdHierarchyWebOperationKind.Refine, "second"));
-                session.Complete("done");
+                session.Complete(first, "done");
                 PsdHierarchyWebSessionSnapshot snapshot = session.Snapshot();
                 snapshot.operation.message = "tampered";
 
-                Assert.That(first.IsCancellationRequested, Is.False);
+                Assert.That(first.token.IsCancellationRequested, Is.False);
                 Assert.That(session.Snapshot().operation.message, Is.EqualTo("done"));
                 Assert.That(session.Snapshot().operation.status,
                     Is.EqualTo(PsdHierarchyWebOperationStatus.Succeeded));
@@ -82,12 +83,93 @@ namespace PsdLayoutTool2.Tests
         {
             var session = new PsdHierarchyWebSession(
                 "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"), null);
-            CancellationToken token = session.Start(PsdHierarchyWebOperationKind.Analyze, "working");
+            PsdHierarchyWebOperationLease lease = session.Start(
+                PsdHierarchyWebOperationKind.Analyze, "working");
 
             session.Dispose();
 
-            Assert.That(token.IsCancellationRequested, Is.True);
+            Assert.That(lease.token.IsCancellationRequested, Is.True);
             Delete(Path.GetDirectoryName(session.directory));
+        }
+
+        [Test]
+        public void OperationLifecycle_LateTerminalCallbacksAfterCancel_DoNotAffectNextOperation()
+        {
+            var session = new PsdHierarchyWebSession(
+                "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"), null);
+            try
+            {
+                PsdHierarchyWebOperationLease first = session.Start(
+                    PsdHierarchyWebOperationKind.Analyze, "A");
+                session.Cancel(first);
+                PsdHierarchyWebOperationLease second = session.Start(
+                    PsdHierarchyWebOperationKind.Refine, "B");
+
+                session.Complete(first, "late complete");
+                session.Fail(first, "late failure");
+                session.Cancel(first, "late cancellation");
+
+                PsdHierarchyWebOperationState operation = session.Snapshot().operation;
+                Assert.That(operation.operationId, Is.EqualTo(second.operationId));
+                Assert.That(operation.status, Is.EqualTo(PsdHierarchyWebOperationStatus.Running));
+                Assert.That(operation.message, Is.EqualTo("B"));
+            }
+            finally { session.Dispose(); Delete(Path.GetDirectoryName(session.directory)); }
+        }
+
+        [Test]
+        public void OperationLifecycle_LateTerminalCallbacksAfterDispose_DoNotThrow()
+        {
+            var session = new PsdHierarchyWebSession(
+                "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"), null);
+            PsdHierarchyWebOperationLease lease = session.Start(
+                PsdHierarchyWebOperationKind.Analyze, "working");
+
+            session.Dispose();
+
+            Assert.DoesNotThrow(() => session.Complete(lease, "late complete"));
+            Assert.DoesNotThrow(() => session.Fail(lease, "late failure"));
+            Assert.DoesNotThrow(() => session.Cancel(lease, "late cancellation"));
+            Delete(Path.GetDirectoryName(session.directory));
+        }
+
+        [Test]
+        public void UsePreview_SerializesAccessAndReplacement()
+        {
+            var session = new PsdHierarchyWebSession(
+                "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"),
+                CreatePreviewModel("first"));
+            try
+            {
+                PsdHierarchyOrganizerPreviewModel replacement = CreatePreviewModel("replacement");
+                using (var entered = new ManualResetEventSlim())
+                using (var release = new ManualResetEventSlim())
+                {
+                    Task access = null;
+                    Task replace = null;
+                    try
+                    {
+                        access = Task.Run(() => session.UsePreview(model =>
+                        {
+                            Assert.That(model.requestSnapshot.sourcePsdGuid, Is.EqualTo("first"));
+                            entered.Set();
+                            release.Wait();
+                        }));
+                        Assert.That(entered.Wait(TimeSpan.FromSeconds(2)), Is.True);
+
+                        replace = Task.Run(() => session.ReplacePreview(replacement));
+                        Assert.That(replace.Wait(TimeSpan.FromMilliseconds(100)), Is.False);
+                    }
+                    finally
+                    {
+                        release.Set();
+                        if (access != null && replace != null) Task.WaitAll(access, replace);
+                    }
+                }
+
+                session.UsePreview(model => Assert.That(model, Is.SameAs(replacement)));
+            }
+            finally { session.Dispose(); Delete(Path.GetDirectoryName(session.directory)); }
         }
 
         [Test]
@@ -143,6 +225,25 @@ namespace PsdLayoutTool2.Tests
 
                 Assert.That(Directory.Exists(failed), Is.True);
                 Assert.That(Directory.Exists(successful), Is.False);
+            }
+            finally { Delete(root); }
+        }
+
+        [Test]
+        public void CleanupStaleDirectories_DoesNotDeleteAnActiveOldSessionDirectory()
+        {
+            string root = CreateRoot();
+            try
+            {
+                using (var registry = new PsdHierarchyWebSessionRegistry(root, () => UtcNow))
+                {
+                    PsdHierarchyWebSession session = registry.GetOrCreate("guid-a", "Assets/A.psd", null);
+                    File.SetLastWriteTimeUtc(session.directory, UtcNow.AddDays(-8));
+
+                    registry.CleanupStaleDirectories();
+
+                    Assert.That(Directory.Exists(session.directory), Is.True);
+                }
             }
             finally { Delete(root); }
         }

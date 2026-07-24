@@ -38,12 +38,7 @@ namespace PsdLayoutTool2.Editor
         public string sourcePsdPath { get; private set; }
         public string directory { get; private set; }
 
-        internal PsdHierarchyOrganizerPreviewModel previewModel
-        {
-            get { lock (gate) { return previewModelValue; } }
-        }
-
-        public CancellationToken Start(PsdHierarchyWebOperationKind kind, string message)
+        public PsdHierarchyWebOperationLease Start(PsdHierarchyWebOperationKind kind, string message)
         {
             if (kind == PsdHierarchyWebOperationKind.None)
                 throw new ArgumentOutOfRangeException("kind");
@@ -62,30 +57,44 @@ namespace PsdLayoutTool2.Editor
                     status = PsdHierarchyWebOperationStatus.Running,
                     message = message ?? string.Empty
                 };
-                return cancellation.Token;
+                return new PsdHierarchyWebOperationLease(operationValue.operationId, cancellation.Token);
             }
         }
 
-        public void Complete(string message)
+        public void Complete(PsdHierarchyWebOperationLease lease, string message)
         {
-            Finish(PsdHierarchyWebOperationStatus.Succeeded, message);
+            Finish(lease, PsdHierarchyWebOperationStatus.Succeeded, message);
         }
 
-        public void Fail(string message)
+        public void Fail(PsdHierarchyWebOperationLease lease, string message)
         {
-            Finish(PsdHierarchyWebOperationStatus.Failed, message);
+            Finish(lease, PsdHierarchyWebOperationStatus.Failed, message);
         }
 
-        public void Cancel(string message = "Cancelled.")
+        public void Cancel(PsdHierarchyWebOperationLease lease, string message = "Cancelled.")
         {
             lock (gate)
             {
-                ThrowIfDisposed();
-                if (cancellation == null) return;
+                if (!IsCurrentOperation(lease)) return;
                 cancellation.Cancel();
                 cancellation.Dispose();
                 cancellation = null;
                 operationValue = NewIdleOperation(message);
+            }
+        }
+
+        /// <summary>
+        /// Runs synchronous work against the current preview while the session owns it.
+        /// Callers must finish their model work inside this callback; they never receive a
+        /// model reference that can outlive a replacement.
+        /// </summary>
+        public void UsePreview(Action<PsdHierarchyOrganizerPreviewModel> action)
+        {
+            if (action == null) throw new ArgumentNullException(nameof(action));
+            lock (gate)
+            {
+                ThrowIfDisposed();
+                action(previewModelValue);
             }
         }
 
@@ -124,19 +133,29 @@ namespace PsdLayoutTool2.Editor
             }
         }
 
-        private void Finish(PsdHierarchyWebOperationStatus status, string message)
+        private void Finish(
+            PsdHierarchyWebOperationLease lease,
+            PsdHierarchyWebOperationStatus status,
+            string message)
         {
             lock (gate)
             {
-                ThrowIfDisposed();
-                if (cancellation == null)
-                    throw new InvalidOperationException("No session operation is running.");
+                if (!IsCurrentOperation(lease)) return;
 
                 cancellation.Dispose();
                 cancellation = null;
                 operationValue.status = status;
                 operationValue.message = message ?? string.Empty;
             }
+        }
+
+        private bool IsCurrentOperation(PsdHierarchyWebOperationLease lease)
+        {
+            return !disposed &&
+                lease != null &&
+                cancellation != null &&
+                string.Equals(operationValue.operationId, lease.operationId, StringComparison.Ordinal) &&
+                cancellation.Token.Equals(lease.token);
         }
 
         private void ThrowIfDisposed()
@@ -179,6 +198,22 @@ namespace PsdLayoutTool2.Editor
             if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException("A value is required.", name);
             return value;
         }
+    }
+
+    /// <summary>
+    /// Identifies one running operation. Terminal callbacks must present this lease so
+    /// work that completes after cancellation cannot affect a later operation.
+    /// </summary>
+    internal sealed class PsdHierarchyWebOperationLease
+    {
+        internal PsdHierarchyWebOperationLease(string operationId, CancellationToken token)
+        {
+            this.operationId = operationId;
+            this.token = token;
+        }
+
+        public string operationId { get; private set; }
+        public CancellationToken token { get; private set; }
     }
 
     internal sealed class PsdHierarchyWebSessionSnapshot
