@@ -332,7 +332,8 @@ namespace PsdLayoutTool2.Tests
             Task<int> read = client.GetStream().ReadAsync(buffer, 0, buffer.Length);
             Task completed = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(2)));
             Assert.That(completed, Is.SameAs(read), "Server did not close the stalled request.");
-            Assert.That(await read, Is.EqualTo(0));
+            try { Assert.That(await read, Is.EqualTo(0)); }
+            catch (IOException exception) when (IsConnectionReset(exception)) { }
         }
 
         private static string Request(int port, string path, string token)
@@ -352,10 +353,22 @@ namespace PsdLayoutTool2.Tests
                 var bytes = new List<byte>();
                 var buffer = new byte[4096];
                 int read;
-                while ((read = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                    bytes.AddRange(new ArraySegment<byte>(buffer, 0, read));
+                try
+                {
+                    while ((read = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        bytes.AddRange(new ArraySegment<byte>(buffer, 0, read));
+                }
+                catch (IOException exception) when (bytes.Count > 0 && IsConnectionReset(exception)) { }
                 return RawResponse.Parse(bytes.ToArray());
             }
+        }
+
+        private static bool IsConnectionReset(IOException exception)
+        {
+            var socket = exception.InnerException as SocketException;
+            return socket != null &&
+                (socket.SocketErrorCode == SocketError.ConnectionReset ||
+                 socket.SocketErrorCode == SocketError.ConnectionAborted);
         }
 
         private sealed class RawResponse

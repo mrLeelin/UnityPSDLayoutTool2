@@ -166,6 +166,7 @@ namespace PsdLayoutTool2.Editor
                 if (!TryReadRequest(stream, cancellationToken, out request, out errorStatus))
                 {
                     await WriteResponseAsync(stream, PsdHierarchyWebResponse.Empty(errorStatus), cancellationToken).ConfigureAwait(false);
+                    CompleteResponse(client);
                     return;
                 }
                 PsdHierarchyWebResponse response;
@@ -175,9 +176,11 @@ namespace PsdLayoutTool2.Editor
                     ReportRouteFailure(exception);
                     await WriteResponseAsync(stream, PsdHierarchyWebResponse.Json(500, "{\"error\":\"internal_error\"}"), cancellationToken)
                         .ConfigureAwait(false);
+                    CompleteResponse(client);
                     return;
                 }
                 await WriteResponseAsync(stream, response, cancellationToken).ConfigureAwait(false);
+                CompleteResponse(client);
             }
             catch (IOException) { }
             catch (ObjectDisposedException) { }
@@ -293,6 +296,17 @@ namespace PsdLayoutTool2.Editor
                 cancellationToken.ThrowIfCancellationRequested();
                 await stream.WriteAsync(response.body, 0, response.body.Length).ConfigureAwait(false);
             }
+        }
+
+        private static void CompleteResponse(TcpClient client)
+        {
+            try
+            {
+                client.LingerState = new LingerOption(true, 1);
+                client.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (ObjectDisposedException) { }
+            catch (SocketException) { }
         }
 
         private void ReportRouteFailure(Exception exception)

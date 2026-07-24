@@ -27,7 +27,8 @@ namespace PsdLayoutTool2.Tests
                 await first;
 
                 Assert.That(runner.requests.Count, Is.EqualTo(1));
-                Assert.That(controller.GetStatus(session).status, Is.EqualTo(PsdHierarchyWebOperationStatus.Succeeded));
+                PsdHierarchyWebOperationState status = controller.GetStatus(session);
+                Assert.That(status.status, Is.EqualTo(PsdHierarchyWebOperationStatus.Succeeded), status.message);
             }
         }
 
@@ -142,6 +143,7 @@ namespace PsdLayoutTool2.Tests
                     stableId = stableIds[index],
                     originalName = "Node " + stableIds[index],
                     kind = "Pixel",
+                    parentStableId = string.Empty,
                     siblingIndex = index,
                     rectangle = new PsdHierarchyRectangle { x = index * 10, width = 10, height = 10 },
                     protectedBoundaryStableId = string.Empty

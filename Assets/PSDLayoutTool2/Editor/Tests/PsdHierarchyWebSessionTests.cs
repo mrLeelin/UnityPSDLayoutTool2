@@ -287,8 +287,8 @@ namespace PsdLayoutTool2.Tests
             Directory.CreateDirectory(old);
             Directory.CreateDirectory(current);
             Directory.CreateDirectory(unknown);
-            File.SetLastWriteTimeUtc(old, UtcNow.AddDays(-8));
-            File.SetLastWriteTimeUtc(current, UtcNow.AddDays(-6));
+            Directory.SetLastWriteTimeUtc(old, UtcNow.AddDays(-8));
+            Directory.SetLastWriteTimeUtc(current, UtcNow.AddDays(-6));
             try
             {
                 using (var registry = new PsdHierarchyWebSessionRegistry(root, () => UtcNow))
@@ -312,8 +312,8 @@ namespace PsdLayoutTool2.Tests
             string successful = Path.Combine(root, "abcdef0123456789");
             Directory.CreateDirectory(failed);
             Directory.CreateDirectory(successful);
-            File.SetLastWriteTimeUtc(failed, UtcNow.AddDays(-8));
-            File.SetLastWriteTimeUtc(successful, UtcNow.AddDays(-8));
+            Directory.SetLastWriteTimeUtc(failed, UtcNow.AddDays(-8));
+            Directory.SetLastWriteTimeUtc(successful, UtcNow.AddDays(-8));
             try
             {
                 using (var registry = new PsdHierarchyWebSessionRegistry(
@@ -342,7 +342,7 @@ namespace PsdLayoutTool2.Tests
                 using (var registry = new PsdHierarchyWebSessionRegistry(root, () => UtcNow))
                 {
                     PsdHierarchyWebSession session = await registry.GetOrCreateAsync("guid-a", "Assets/A.psd", null);
-                    File.SetLastWriteTimeUtc(session.directory, UtcNow.AddDays(-8));
+                    Directory.SetLastWriteTimeUtc(session.directory, UtcNow.AddDays(-8));
 
                     registry.CleanupStaleDirectories();
 
