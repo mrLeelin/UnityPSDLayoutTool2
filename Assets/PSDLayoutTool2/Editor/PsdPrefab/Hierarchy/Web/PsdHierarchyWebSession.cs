@@ -1,6 +1,7 @@
 namespace PsdLayoutTool2.Editor
 {
     using System;
+    using System.Collections.Generic;
     using System.Security.Cryptography;
     using System.Threading;
     using System.Threading.Tasks;
@@ -17,7 +18,9 @@ namespace PsdLayoutTool2.Editor
         private PsdHierarchyWebOperationState operationValue = NewIdleOperation();
         private PsdHierarchyOrganizerPreviewModel previewModelValue;
         private readonly Action<PsdHierarchyPlan> applyHandler;
+        private readonly Action<string, IReadOnlyList<PsdHierarchyWebPrefabCandidateDto>> createPrefabsHandler;
         private string resultingPrefabPathValue = string.Empty;
+        private bool prefabsCreatedValue;
         private long previewGeneration;
         private bool disposed;
 
@@ -28,7 +31,8 @@ namespace PsdLayoutTool2.Editor
             string sourcePsdPath,
             string directory,
             PsdHierarchyOrganizerPreviewModel previewModel,
-            Action<PsdHierarchyPlan> applyHandler = null)
+            Action<PsdHierarchyPlan> applyHandler = null,
+            Action<string, IReadOnlyList<PsdHierarchyWebPrefabCandidateDto>> createPrefabsHandler = null)
         {
             this.sessionId = Require(sessionId, "sessionId");
             this.token = Require(token, "token");
@@ -37,6 +41,7 @@ namespace PsdLayoutTool2.Editor
             this.directory = Require(directory, "directory");
             previewModelValue = previewModel;
             this.applyHandler = applyHandler;
+            this.createPrefabsHandler = createPrefabsHandler;
         }
 
         public string sessionId { get; private set; }
@@ -159,7 +164,7 @@ namespace PsdLayoutTool2.Editor
                 ThrowIfDisposed();
                 return new PsdHierarchyWebSessionSnapshot(
                     sessionId, sourcePsdGuid, sourcePsdPath, directory,
-                    resultingPrefabPathValue, CloneOperation(operationValue));
+                    resultingPrefabPathValue, prefabsCreatedValue, CloneOperation(operationValue));
             }
         }
 
@@ -182,6 +187,34 @@ namespace PsdLayoutTool2.Editor
             {
                 ThrowIfDisposed();
                 resultingPrefabPathValue = Require(prefabPath, "prefabPath");
+            }
+        }
+
+        public void DispatchCreatePrefabs(
+            string prefabPath,
+            IReadOnlyList<PsdHierarchyWebPrefabCandidateDto> candidates)
+        {
+            if (string.IsNullOrWhiteSpace(prefabPath))
+                throw new ArgumentException("A resulting Prefab path is required.", nameof(prefabPath));
+            if (candidates == null || candidates.Count == 0)
+                throw new ArgumentException("At least one Prefab candidate is required.", nameof(candidates));
+            Action<string, IReadOnlyList<PsdHierarchyWebPrefabCandidateDto>> handler;
+            lock (gate)
+            {
+                ThrowIfDisposed();
+                handler = createPrefabsHandler;
+            }
+            if (handler == null)
+                throw new InvalidOperationException("This workbench session has no Prefab creation handler.");
+            handler(prefabPath, candidates);
+        }
+
+        public void RecordCreatedPrefabs()
+        {
+            lock (gate)
+            {
+                ThrowIfDisposed();
+                prefabsCreatedValue = true;
             }
         }
 
@@ -311,6 +344,7 @@ namespace PsdLayoutTool2.Editor
             string sourcePsdPath,
             string directory,
             string resultingPrefabPath,
+            bool prefabsCreated,
             PsdHierarchyWebOperationState operation)
         {
             this.sessionId = sessionId;
@@ -318,6 +352,7 @@ namespace PsdLayoutTool2.Editor
             this.sourcePsdPath = sourcePsdPath;
             this.directory = directory;
             this.resultingPrefabPath = resultingPrefabPath;
+            this.prefabsCreated = prefabsCreated;
             this.operation = operation;
         }
 
@@ -326,6 +361,7 @@ namespace PsdLayoutTool2.Editor
         public string sourcePsdPath { get; private set; }
         public string directory { get; private set; }
         public string resultingPrefabPath { get; private set; }
+        public bool prefabsCreated { get; private set; }
         public PsdHierarchyWebOperationState operation { get; private set; }
     }
 }

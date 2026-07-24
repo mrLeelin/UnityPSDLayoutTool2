@@ -11,6 +11,7 @@ namespace PsdLayoutTool2
     public sealed class PsdPrefabCandidate
     {
         public string rootStableId;
+        public List<string> instanceRootStableIds = new List<string>();
         public float score;
         public List<string> evidence = new List<string>();
     }
@@ -22,13 +23,17 @@ namespace PsdLayoutTool2
             List<PsdHierarchyRequestNode> nodes = (source ?? Enumerable.Empty<PsdHierarchyRequestNode>()).Where(node => node != null).ToList();
             var children = nodes.GroupBy(node => node.parentStableId ?? string.Empty).ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
             var result = new List<PsdPrefabCandidate>();
-            foreach (PsdHierarchyRequestNode root in nodes)
+            var rootsBySignature = nodes
+                .Where(root => Descendants(root.stableId, children).Count >= 2)
+                .GroupBy(root => Signature(root.stableId, children), StringComparer.Ordinal);
+            foreach (IGrouping<string, PsdHierarchyRequestNode> matchingRoots in rootsBySignature)
             {
+                List<PsdHierarchyRequestNode> instances = matchingRoots.ToList();
+                PsdHierarchyRequestNode root = instances[0];
                 List<PsdHierarchyRequestNode> descendants = Descendants(root.stableId, children);
-                if (descendants.Count < 2) continue;
                 float score = 0f;
                 var evidence = new List<string>();
-                if (root.hasProjectComponents)
+                if (instances.Any(instance => instance.hasProjectComponents))
                 {
                     score += 0.45f;
                     evidence.Add("project component boundary");
@@ -38,14 +43,18 @@ namespace PsdLayoutTool2
                     score += 0.20f;
                     evidence.Add("contains " + descendants.Count + " related layers");
                 }
-                string signature = Signature(root.stableId, children);
-                int repeats = nodes.Count(node => node.stableId != root.stableId && Signature(node.stableId, children) == signature);
-                if (repeats > 0)
+                if (instances.Count > 1)
                 {
                     score += 0.35f;
                     evidence.Add("repeated structure");
                 }
-                if (score >= 0.45f) result.Add(new PsdPrefabCandidate { rootStableId = root.stableId, score = Math.Min(1f, score), evidence = evidence });
+                if (score >= 0.45f) result.Add(new PsdPrefabCandidate
+                {
+                    rootStableId = root.stableId,
+                    instanceRootStableIds = instances.Select(instance => instance.stableId).ToList(),
+                    score = Math.Min(1f, score),
+                    evidence = evidence
+                });
             }
             return result.OrderByDescending(candidate => candidate.score).ThenBy(candidate => candidate.rootStableId, StringComparer.Ordinal).ToList();
         }
@@ -65,8 +74,10 @@ namespace PsdLayoutTool2
 
         private static string Signature(string rootId, Dictionary<string, List<PsdHierarchyRequestNode>> children)
         {
-            List<PsdHierarchyRequestNode> descendants = Descendants(rootId, children);
-            return string.Join("|", descendants.Select(node => node.kind ?? string.Empty).OrderBy(kind => kind, StringComparer.Ordinal).ToArray());
+            List<PsdHierarchyRequestNode> direct;
+            if (!children.TryGetValue(rootId, out direct)) return string.Empty;
+            return string.Join("|", direct.Select(node =>
+                (node.kind ?? string.Empty) + "[" + Signature(node.stableId, children) + "]").ToArray());
         }
     }
 }

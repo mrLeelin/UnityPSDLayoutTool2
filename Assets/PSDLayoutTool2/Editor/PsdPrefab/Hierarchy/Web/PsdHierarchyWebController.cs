@@ -24,7 +24,11 @@ namespace PsdLayoutTool2.Editor
             if (session == null) throw new ArgumentNullException(nameof(session));
             PsdHierarchyWebSessionSnapshot sessionSnapshot = session.Snapshot();
             return await session.UsePreviewAsync(model => mainThread.InvokeAsync(() =>
-                new PsdHierarchyWebSessionDto
+            {
+                string phase = string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath)
+                    ? "organize"
+                    : sessionSnapshot.prefabsCreated ? "complete" : "prefabReview";
+                return new PsdHierarchyWebSessionDto
                 {
                     sessionId = sessionSnapshot.sessionId,
                     sourcePsdName = Path.GetFileName(sessionSnapshot.sourcePsdPath),
@@ -33,11 +37,13 @@ namespace PsdLayoutTool2.Editor
                                  string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath),
                     canApply = model != null && model.canApply &&
                                string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath),
-                    canCreatePrefabs = !string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath),
-                    phase = string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath) ? "organize" : "prefabReview",
+                    canCreatePrefabs = !string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath) &&
+                                       !sessionSnapshot.prefabsCreated,
+                    phase = phase,
                     resultingPrefabPath = sessionSnapshot.resultingPrefabPath,
                     operation = CloneOperation(sessionSnapshot.operation)
-                }));
+                };
+            }));
         }
 
         public async Task<PsdHierarchyWebSnapshotDto> GetSnapshotAsync(PsdHierarchyWebSession session)
@@ -145,6 +151,59 @@ namespace PsdLayoutTool2.Editor
                 session.RecordAppliedPrefab(prefabPath);
                 await RefreshSnapshotAsync(session);
                 session.Complete(lease, "Hierarchy applied. Review common Prefab candidates.");
+            }
+            catch (Exception exception)
+            {
+                session.Fail(lease, BoundedMessage(exception));
+            }
+            finally
+            {
+                lease.Dispose();
+            }
+        }
+
+        public async Task CreatePrefabsAsync(
+            PsdHierarchyWebSession session,
+            PsdHierarchyWebCreatePrefabsRequest request)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (request == null) throw new ArgumentNullException(nameof(request));
+            PsdHierarchyWebSessionSnapshot sessionSnapshot = session.Snapshot();
+            if (string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath))
+                throw new InvalidOperationException("Apply the hierarchy before creating common Prefabs.");
+            if (sessionSnapshot.prefabsCreated)
+                throw new InvalidOperationException("Common Prefabs were already created for this session.");
+            if (sessionSnapshot.operation.status == PsdHierarchyWebOperationStatus.Running)
+                throw new InvalidOperationException("A session operation is already running.");
+
+            List<string> candidateIds = (request.candidateIds ?? new List<string>())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            if (candidateIds.Count == 0)
+                throw new ArgumentException("Select at least one common Prefab candidate.", nameof(request));
+            PsdHierarchyWebSnapshotDto snapshot = await GetSnapshotAsync(session);
+            Dictionary<string, PsdHierarchyWebPrefabCandidateDto> available = snapshot.prefabCandidates
+                .Where(candidate => candidate != null && !string.IsNullOrEmpty(candidate.candidateId))
+                .ToDictionary(candidate => candidate.candidateId, StringComparer.Ordinal);
+            if (candidateIds.Any(candidateId => !available.ContainsKey(candidateId)))
+                throw new ArgumentException("A selected Prefab candidate no longer exists.", nameof(request));
+            List<PsdHierarchyWebPrefabCandidateDto> selected = candidateIds
+                .Select(candidateId => available[candidateId])
+                .ToList();
+
+            PsdHierarchyWebOperationLease lease = session.Start(
+                PsdHierarchyWebOperationKind.CreatePrefabs,
+                "Creating confirmed common Prefabs.");
+            try
+            {
+                await mainThread.InvokeAsync(() =>
+                {
+                    session.DispatchCreatePrefabs(sessionSnapshot.resultingPrefabPath, selected);
+                    return Task.CompletedTask;
+                });
+                session.RecordCreatedPrefabs();
+                session.Complete(lease, "Selected common Prefabs were created.");
             }
             catch (Exception exception)
             {

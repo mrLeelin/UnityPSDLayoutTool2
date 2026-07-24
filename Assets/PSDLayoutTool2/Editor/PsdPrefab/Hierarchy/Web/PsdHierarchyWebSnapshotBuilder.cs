@@ -287,7 +287,10 @@ namespace PsdLayoutTool2.Editor
                         ? representative.proposedName
                         : string.Empty,
                     representativeStableId = rootStableId,
-                    instanceStableIds = new List<string> { rootStableId },
+                    instanceStableIds = new List<string>(
+                        candidate.instanceRootStableIds != null && candidate.instanceRootStableIds.Count > 0
+                            ? candidate.instanceRootStableIds
+                            : new List<string> { rootStableId }),
                     instanceControlledDifferences =
                         new List<string>(candidate.evidence ?? new List<string>())
                 });

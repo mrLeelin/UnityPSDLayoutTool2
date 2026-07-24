@@ -41,7 +41,9 @@ namespace PsdLayoutTool2.Editor
         public async Task<PsdHierarchyWebSession> GetOrCreateAsync(
             string sourcePsdGuid,
             string sourcePsdPath,
-            PsdHierarchyOrganizerPreviewModel previewModel)
+            PsdHierarchyOrganizerPreviewModel previewModel,
+            Action<PsdHierarchyPlan> applyHandler = null,
+            Action<string, IReadOnlyList<PsdHierarchyWebPrefabCandidateDto>> createPrefabsHandler = null)
         {
             if (string.IsNullOrWhiteSpace(sourcePsdGuid))
                 throw new ArgumentException("PSD GUID is required.", nameof(sourcePsdGuid));
@@ -72,7 +74,10 @@ namespace PsdLayoutTool2.Editor
                         sourcePsdGuid,
                         sourcePsdPath,
                         directory,
-                        previewModel);
+                        previewModel,
+                        applyHandler,
+                        createPrefabsHandler ?? ((prefabPath, candidates) =>
+                            PsdCommonPrefabCreator.Create(prefabPath, sourcePsdGuid, candidates)));
                     sessions.Add(sourcePsdGuid, session);
                     return session;
                 }
