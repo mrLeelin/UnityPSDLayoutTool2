@@ -10,7 +10,7 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdHierarchyWebSessionTests
     {
         [Test]
-        public void GetOrCreate_SamePsdGuid_ReusesSessionAndReplacesPreview()
+        public async Task GetOrCreate_SamePsdGuid_ReusesSessionAndReplacesPreview()
         {
             string root = CreateRoot();
             try
@@ -19,31 +19,35 @@ namespace PsdLayoutTool2.Tests
                 {
                     PsdHierarchyOrganizerPreviewModel firstPreview = CreatePreviewModel("guid-a");
                     PsdHierarchyOrganizerPreviewModel updatedPreview = CreatePreviewModel("guid-a");
-                    PsdHierarchyWebSession first = registry.GetOrCreate(
+                    PsdHierarchyWebSession first = await registry.GetOrCreateAsync(
                         "guid-a", "Assets/A.psd", firstPreview);
-                    PsdHierarchyWebSession second = registry.GetOrCreate(
+                    PsdHierarchyWebSession second = await registry.GetOrCreateAsync(
                         "guid-a", "Assets/A.psd", updatedPreview);
 
                     Assert.That(second, Is.SameAs(first));
                     Assert.That(second.sessionId, Is.EqualTo(first.sessionId));
                     Assert.That(second.token, Is.EqualTo(first.token));
                     Assert.That(second.directory, Is.EqualTo(first.directory));
-                    second.UsePreview(model => Assert.That(model, Is.SameAs(updatedPreview)));
+                    await second.UsePreviewAsync(model =>
+                    {
+                        Assert.That(model, Is.SameAs(updatedPreview));
+                        return Task.CompletedTask;
+                    });
                 }
             }
             finally { Delete(root); }
         }
 
         [Test]
-        public void GetOrCreate_DifferentPsdGuids_UsesDifferentSecretsAndDirectories()
+        public async Task GetOrCreate_DifferentPsdGuids_UsesDifferentSecretsAndDirectories()
         {
             string root = CreateRoot();
             try
             {
                 using (var registry = new PsdHierarchyWebSessionRegistry(root, () => UtcNow))
                 {
-                    PsdHierarchyWebSession first = registry.GetOrCreate("guid-a", "Assets/A.psd", null);
-                    PsdHierarchyWebSession second = registry.GetOrCreate("guid-b", "Assets/B.psd", null);
+                    PsdHierarchyWebSession first = await registry.GetOrCreateAsync("guid-a", "Assets/A.psd", null);
+                    PsdHierarchyWebSession second = await registry.GetOrCreateAsync("guid-b", "Assets/B.psd", null);
 
                     Assert.That(first.sessionId, Is.Not.EqualTo(second.sessionId));
                     Assert.That(first.token, Is.Not.EqualTo(second.token));
@@ -75,7 +79,7 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(session.Snapshot().operation.status,
                     Is.EqualTo(PsdHierarchyWebOperationStatus.Succeeded));
             }
-            finally { session.Dispose(); Delete(Path.GetDirectoryName(session.directory)); }
+            finally { first.Dispose(); session.Dispose(); Delete(Path.GetDirectoryName(session.directory)); }
         }
 
         [Test]
@@ -89,6 +93,64 @@ namespace PsdLayoutTool2.Tests
             session.Dispose();
 
             Assert.That(lease.token.IsCancellationRequested, Is.True);
+            lease.Dispose();
+            Delete(Path.GetDirectoryName(session.directory));
+        }
+
+        [Test]
+        public void CancelledLease_RemainsUsableUntilReleased_WithoutAffectingNextOperation()
+        {
+            var session = new PsdHierarchyWebSession(
+                "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"), null);
+            PsdHierarchyWebOperationLease first = null;
+            PsdHierarchyWebOperationLease second = null;
+            try
+            {
+                first = session.Start(PsdHierarchyWebOperationKind.Analyze, "A");
+                session.Cancel(first);
+                second = session.Start(PsdHierarchyWebOperationKind.Refine, "B");
+
+                Assert.DoesNotThrow(() =>
+                {
+                    using (first.token.Register(() => { })) { }
+                    WaitHandle waitHandle = first.token.WaitHandle;
+                    Assert.That(waitHandle.WaitOne(0), Is.True);
+                    using (CancellationTokenSource.CreateLinkedTokenSource(first.token)) { }
+                });
+
+                first.Dispose();
+
+                Assert.That(second.token.IsCancellationRequested, Is.False);
+                Assert.That(session.Snapshot().operation.operationId, Is.EqualTo(second.operationId));
+                Assert.That(session.Snapshot().operation.status, Is.EqualTo(PsdHierarchyWebOperationStatus.Running));
+            }
+            finally
+            {
+                first?.Dispose();
+                second?.Dispose();
+                session.Dispose();
+                Delete(Path.GetDirectoryName(session.directory));
+            }
+        }
+
+        [Test]
+        public void Dispose_SignalsLeaseWithoutInvalidatingItsTokenUntilRelease()
+        {
+            var session = new PsdHierarchyWebSession(
+                "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"), null);
+            PsdHierarchyWebOperationLease lease = session.Start(
+                PsdHierarchyWebOperationKind.Analyze, "working");
+
+            session.Dispose();
+
+            Assert.DoesNotThrow(() =>
+            {
+                using (lease.token.Register(() => { })) { }
+                WaitHandle waitHandle = lease.token.WaitHandle;
+                Assert.That(waitHandle.WaitOne(0), Is.True);
+                using (CancellationTokenSource.CreateLinkedTokenSource(lease.token)) { }
+            });
+            lease.Dispose();
             Delete(Path.GetDirectoryName(session.directory));
         }
 
@@ -114,7 +176,13 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(operation.status, Is.EqualTo(PsdHierarchyWebOperationStatus.Running));
                 Assert.That(operation.message, Is.EqualTo("B"));
             }
-            finally { session.Dispose(); Delete(Path.GetDirectoryName(session.directory)); }
+            finally
+            {
+                first.Dispose();
+                second.Dispose();
+                session.Dispose();
+                Delete(Path.GetDirectoryName(session.directory));
+            }
         }
 
         [Test]
@@ -130,11 +198,12 @@ namespace PsdLayoutTool2.Tests
             Assert.DoesNotThrow(() => session.Complete(lease, "late complete"));
             Assert.DoesNotThrow(() => session.Fail(lease, "late failure"));
             Assert.DoesNotThrow(() => session.Cancel(lease, "late cancellation"));
+            lease.Dispose();
             Delete(Path.GetDirectoryName(session.directory));
         }
 
         [Test]
-        public void UsePreview_SerializesAccessAndReplacement()
+        public async Task UsePreviewAsync_SerializesAccessAndReplacement()
         {
             var session = new PsdHierarchyWebSession(
                 "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"),
@@ -143,31 +212,63 @@ namespace PsdLayoutTool2.Tests
             {
                 PsdHierarchyOrganizerPreviewModel replacement = CreatePreviewModel("replacement");
                 using (var entered = new ManualResetEventSlim())
-                using (var release = new ManualResetEventSlim())
                 {
-                    Task access = null;
+                    var release = new TaskCompletionSource<bool>();
+                    Task access = session.UsePreviewAsync(async model =>
+                    {
+                        Assert.That(model.requestSnapshot.sourcePsdGuid, Is.EqualTo("first"));
+                        entered.Set();
+                        await release.Task;
+                    });
                     Task replace = null;
                     try
                     {
-                        access = Task.Run(() => session.UsePreview(model =>
-                        {
-                            Assert.That(model.requestSnapshot.sourcePsdGuid, Is.EqualTo("first"));
-                            entered.Set();
-                            release.Wait();
-                        }));
                         Assert.That(entered.Wait(TimeSpan.FromSeconds(2)), Is.True);
 
-                        replace = Task.Run(() => session.ReplacePreview(replacement));
-                        Assert.That(replace.Wait(TimeSpan.FromMilliseconds(100)), Is.False);
+                        replace = session.ReplacePreviewAsync(replacement);
+                        Assert.That(replace.IsCompleted, Is.False);
                     }
                     finally
                     {
-                        release.Set();
-                        if (access != null && replace != null) Task.WaitAll(access, replace);
+                        release.TrySetResult(true);
+                        if (replace == null) await access;
+                        else await Task.WhenAll(access, replace);
                     }
                 }
 
-                session.UsePreview(model => Assert.That(model, Is.SameAs(replacement)));
+                await session.UsePreviewAsync(model =>
+                {
+                    Assert.That(model, Is.SameAs(replacement));
+                    return Task.CompletedTask;
+                });
+            }
+            finally { session.Dispose(); Delete(Path.GetDirectoryName(session.directory)); }
+        }
+
+        [Test]
+        public async Task UsePreviewAsync_DiscardsResultWhenSessionDisposes()
+        {
+            var session = new PsdHierarchyWebSession(
+                "session", "token", "guid", "Assets/A.psd", Path.Combine(CreateRoot(), "session"),
+                CreatePreviewModel("first"));
+            try
+            {
+                using (var entered = new ManualResetEventSlim())
+                {
+                    var release = new TaskCompletionSource<bool>();
+                    Task<int> access = session.UsePreviewAsync(async model =>
+                    {
+                        entered.Set();
+                        await release.Task;
+                        return 42;
+                    });
+                    Assert.That(entered.Wait(TimeSpan.FromSeconds(2)), Is.True);
+
+                    session.Dispose();
+                    release.SetResult(true);
+
+                    Assert.ThrowsAsync<InvalidOperationException>(async () => await access);
+                }
             }
             finally { session.Dispose(); Delete(Path.GetDirectoryName(session.directory)); }
         }
@@ -230,14 +331,14 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void CleanupStaleDirectories_DoesNotDeleteAnActiveOldSessionDirectory()
+        public async Task CleanupStaleDirectories_DoesNotDeleteAnActiveOldSessionDirectory()
         {
             string root = CreateRoot();
             try
             {
                 using (var registry = new PsdHierarchyWebSessionRegistry(root, () => UtcNow))
                 {
-                    PsdHierarchyWebSession session = registry.GetOrCreate("guid-a", "Assets/A.psd", null);
+                    PsdHierarchyWebSession session = await registry.GetOrCreateAsync("guid-a", "Assets/A.psd", null);
                     File.SetLastWriteTimeUtc(session.directory, UtcNow.AddDays(-8));
 
                     registry.CleanupStaleDirectories();

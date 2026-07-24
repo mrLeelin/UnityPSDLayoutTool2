@@ -4,6 +4,7 @@ namespace PsdLayoutTool2.Editor
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Threading.Tasks;
 
     /// <summary>
     /// Owns live web sessions and the narrowly-scoped temporary directory root.
@@ -37,7 +38,7 @@ namespace PsdLayoutTool2.Editor
 
         public string root { get; private set; }
 
-        public PsdHierarchyWebSession GetOrCreate(
+        public async Task<PsdHierarchyWebSession> GetOrCreateAsync(
             string sourcePsdGuid,
             string sourcePsdPath,
             PsdHierarchyOrganizerPreviewModel previewModel)
@@ -47,33 +48,38 @@ namespace PsdLayoutTool2.Editor
             if (string.IsNullOrWhiteSpace(sourcePsdPath))
                 throw new ArgumentException("PSD path is required.", nameof(sourcePsdPath));
 
+            PsdHierarchyWebSession session;
             lock (gate)
             {
                 ThrowIfDisposed();
                 PsdHierarchyWebSession existing;
                 if (sessions.TryGetValue(sourcePsdGuid, out existing))
                 {
-                    existing.ReplacePreview(previewModel);
-                    return existing;
+                    session = existing;
                 }
-
-                string sessionId = PsdHierarchyWebSession.CreateSecret(16);
-                string directory = Path.Combine(root, sessionId);
-                EnsureSafeRoot();
-                EnsureDirectChild(directory);
-                if (Directory.Exists(directory)) EnsureNoReparsePoints(directory);
-                Directory.CreateDirectory(directory);
-                EnsureNoReparsePoints(directory);
-                var session = new PsdHierarchyWebSession(
-                    sessionId,
-                    PsdHierarchyWebSession.CreateSecret(32),
-                    sourcePsdGuid,
-                    sourcePsdPath,
-                    directory,
-                    previewModel);
-                sessions.Add(sourcePsdGuid, session);
-                return session;
+                else
+                {
+                    string sessionId = PsdHierarchyWebSession.CreateSecret(16);
+                    string directory = Path.Combine(root, sessionId);
+                    EnsureSafeRoot();
+                    EnsureDirectChild(directory);
+                    if (Directory.Exists(directory)) EnsureNoReparsePoints(directory);
+                    Directory.CreateDirectory(directory);
+                    EnsureNoReparsePoints(directory);
+                    session = new PsdHierarchyWebSession(
+                        sessionId,
+                        PsdHierarchyWebSession.CreateSecret(32),
+                        sourcePsdGuid,
+                        sourcePsdPath,
+                        directory,
+                        previewModel);
+                    sessions.Add(sourcePsdGuid, session);
+                    return session;
+                }
             }
+
+            await session.ReplacePreviewAsync(previewModel).ConfigureAwait(false);
+            return session;
         }
 
         public void CleanupStaleDirectories()

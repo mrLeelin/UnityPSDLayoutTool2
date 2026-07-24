@@ -3,6 +3,7 @@ namespace PsdLayoutTool2.Editor
     using System;
     using System.Security.Cryptography;
     using System.Threading;
+    using System.Threading.Tasks;
 
     /// <summary>
     /// In-memory ownership boundary for one PSD's loopback workbench state.
@@ -11,9 +12,11 @@ namespace PsdLayoutTool2.Editor
     internal sealed class PsdHierarchyWebSession : IDisposable
     {
         private readonly object gate = new object();
-        private CancellationTokenSource cancellation;
+        private readonly SemaphoreSlim previewGate = new SemaphoreSlim(1, 1);
+        private PsdHierarchyWebOperationLease currentLease;
         private PsdHierarchyWebOperationState operationValue = NewIdleOperation();
         private PsdHierarchyOrganizerPreviewModel previewModelValue;
+        private long previewGeneration;
         private bool disposed;
 
         public PsdHierarchyWebSession(
@@ -46,10 +49,9 @@ namespace PsdLayoutTool2.Editor
             lock (gate)
             {
                 ThrowIfDisposed();
-                if (cancellation != null)
+                if (currentLease != null)
                     throw new InvalidOperationException("A session operation is already running.");
 
-                cancellation = new CancellationTokenSource();
                 operationValue = new PsdHierarchyWebOperationState
                 {
                     operationId = CreateSecret(12),
@@ -57,7 +59,8 @@ namespace PsdLayoutTool2.Editor
                     status = PsdHierarchyWebOperationStatus.Running,
                     message = message ?? string.Empty
                 };
-                return new PsdHierarchyWebOperationLease(operationValue.operationId, cancellation.Token);
+                currentLease = new PsdHierarchyWebOperationLease(operationValue.operationId);
+                return currentLease;
             }
         }
 
@@ -76,34 +79,72 @@ namespace PsdLayoutTool2.Editor
             lock (gate)
             {
                 if (!IsCurrentOperation(lease)) return;
-                cancellation.Cancel();
-                cancellation.Dispose();
-                cancellation = null;
+                currentLease.RequestCancellation();
+                currentLease = null;
                 operationValue = NewIdleOperation(message);
             }
         }
 
         /// <summary>
-        /// Runs synchronous work against the current preview while the session owns it.
-        /// Callers must finish their model work inside this callback; they never receive a
-        /// model reference that can outlive a replacement.
+        /// Runs one complete asynchronous operation against the current preview. The delegate
+        /// must represent the full operation; do not retain the model after its returned task
+        /// completes. Replacement waits for this task before changing the active preview.
         /// </summary>
-        public void UsePreview(Action<PsdHierarchyOrganizerPreviewModel> action)
+        public async Task UsePreviewAsync(Func<PsdHierarchyOrganizerPreviewModel, Task> operation)
         {
-            if (action == null) throw new ArgumentNullException(nameof(action));
-            lock (gate)
+            if (operation == null) throw new ArgumentNullException(nameof(operation));
+            await UsePreviewAsync(async preview =>
             {
-                ThrowIfDisposed();
-                action(previewModelValue);
+                await operation(preview).ConfigureAwait(false);
+                return true;
+            }).ConfigureAwait(false);
+        }
+
+        public async Task<TResult> UsePreviewAsync<TResult>(
+            Func<PsdHierarchyOrganizerPreviewModel, Task<TResult>> operation)
+        {
+            if (operation == null) throw new ArgumentNullException(nameof(operation));
+            await previewGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                PsdHierarchyOrganizerPreviewModel preview;
+                long generation;
+                lock (gate)
+                {
+                    ThrowIfDisposed();
+                    preview = previewModelValue;
+                    generation = previewGeneration;
+                }
+
+                TResult result = await operation(preview).ConfigureAwait(false);
+                lock (gate)
+                {
+                    if (disposed || generation != previewGeneration)
+                        throw new InvalidOperationException("The preview changed before the operation completed.");
+                }
+                return result;
+            }
+            finally
+            {
+                previewGate.Release();
             }
         }
 
-        public void ReplacePreview(PsdHierarchyOrganizerPreviewModel previewModel)
+        public async Task ReplacePreviewAsync(PsdHierarchyOrganizerPreviewModel previewModel)
         {
-            lock (gate)
+            await previewGate.WaitAsync().ConfigureAwait(false);
+            try
             {
-                ThrowIfDisposed();
-                previewModelValue = previewModel;
+                lock (gate)
+                {
+                    ThrowIfDisposed();
+                    previewModelValue = previewModel;
+                    previewGeneration++;
+                }
+            }
+            finally
+            {
+                previewGate.Release();
             }
         }
 
@@ -123,13 +164,10 @@ namespace PsdLayoutTool2.Editor
             {
                 if (disposed) return;
                 disposed = true;
-                if (cancellation != null)
-                {
-                    cancellation.Cancel();
-                    cancellation.Dispose();
-                    cancellation = null;
-                }
+                if (currentLease != null) currentLease.RequestCancellation();
+                currentLease = null;
                 previewModelValue = null;
+                previewGeneration++;
             }
         }
 
@@ -142,8 +180,7 @@ namespace PsdLayoutTool2.Editor
             {
                 if (!IsCurrentOperation(lease)) return;
 
-                cancellation.Dispose();
-                cancellation = null;
+                currentLease = null;
                 operationValue.status = status;
                 operationValue.message = message ?? string.Empty;
             }
@@ -153,9 +190,9 @@ namespace PsdLayoutTool2.Editor
         {
             return !disposed &&
                 lease != null &&
-                cancellation != null &&
+                currentLease != null &&
                 string.Equals(operationValue.operationId, lease.operationId, StringComparison.Ordinal) &&
-                cancellation.Token.Equals(lease.token);
+                ReferenceEquals(currentLease, lease);
         }
 
         private void ThrowIfDisposed()
@@ -202,18 +239,41 @@ namespace PsdLayoutTool2.Editor
 
     /// <summary>
     /// Identifies one running operation. Terminal callbacks must present this lease so
-    /// work that completes after cancellation cannot affect a later operation.
+    /// work that completes after cancellation cannot affect a later operation. The worker
+    /// owns this lease and must release it from its finally block after it stops using token.
     /// </summary>
-    internal sealed class PsdHierarchyWebOperationLease
+    internal sealed class PsdHierarchyWebOperationLease : IDisposable
     {
-        internal PsdHierarchyWebOperationLease(string operationId, CancellationToken token)
+        private readonly object gate = new object();
+        private readonly CancellationTokenSource cancellation = new CancellationTokenSource();
+        private bool released;
+
+        internal PsdHierarchyWebOperationLease(string operationId)
         {
             this.operationId = operationId;
-            this.token = token;
+            token = cancellation.Token;
         }
 
         public string operationId { get; private set; }
         public CancellationToken token { get; private set; }
+
+        internal void RequestCancellation()
+        {
+            lock (gate)
+            {
+                if (!released) cancellation.Cancel();
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                if (released) return;
+                released = true;
+                cancellation.Dispose();
+            }
+        }
     }
 
     internal sealed class PsdHierarchyWebSessionSnapshot
