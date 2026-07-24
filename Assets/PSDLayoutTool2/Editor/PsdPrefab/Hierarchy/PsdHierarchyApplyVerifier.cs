@@ -149,8 +149,7 @@ namespace PsdLayoutTool2
                 .Select(value => value.gameObject.GetInstanceID()));
             CollectVisualOrder(root, 0, registeredIds, new HashSet<RectTransform>(), currentOrder, currentParents,
                 new Dictionary<Transform, Transform>());
-            if (!before.visualLeafOrder.SequenceEqual(currentOrder))
-                throw new PsdHierarchyApplyException("The organizer changed the original visual leaf order.");
+            VerifyVisualLeafOrder(before, currentOrder);
             foreach (KeyValuePair<int, int> pair in before.visualParents)
             {
                 int actualParent;
@@ -162,6 +161,109 @@ namespace PsdLayoutTool2
                 if (pair.Key == null || pair.Key.parent != pair.Value)
                     throw new PsdHierarchyApplyException("The organizer moved a project-owned or zero-ID visual object.");
             }
+        }
+
+        private static void VerifyVisualLeafOrder(PsdHierarchyApplySnapshot before, IList<int> currentOrder)
+        {
+            if (before.visualLeafOrder.Count != currentOrder.Count ||
+                !new HashSet<int>(before.visualLeafOrder).SetEquals(currentOrder))
+            {
+                throw new PsdHierarchyApplyException("The organizer changed the original visual leaf set.");
+            }
+
+            var currentIndexById = new Dictionary<int, int>();
+            for (int index = 0; index < currentOrder.Count; index++)
+            {
+                currentIndexById[currentOrder[index]] = index;
+            }
+
+            for (int firstIndex = 0; firstIndex < before.visualLeafOrder.Count; firstIndex++)
+            {
+                int firstId = before.visualLeafOrder[firstIndex];
+                for (int secondIndex = firstIndex + 1; secondIndex < before.visualLeafOrder.Count; secondIndex++)
+                {
+                    int secondId = before.visualLeafOrder[secondIndex];
+                    if (currentIndexById[firstId] < currentIndexById[secondId])
+                    {
+                        continue;
+                    }
+
+                    PsdHierarchyObjectSnapshot first;
+                    PsdHierarchyObjectSnapshot second;
+                    if (!before.objects.TryGetValue(firstId, out first) ||
+                        !before.objects.TryGetValue(secondId, out second))
+                    {
+                        throw new PsdHierarchyApplyException(
+                            "The organizer reordered a visual leaf whose geometry cannot be verified.");
+                    }
+
+                    if (WorldRectanglesMayOverlap(first.worldCorners, second.worldCorners))
+                    {
+                        throw new PsdHierarchyApplyException(
+                            "The organizer changed the relative order of overlapping visual leaves.");
+                    }
+                }
+            }
+        }
+
+        private static bool WorldRectanglesMayOverlap(Vector3[] first, Vector3[] second)
+        {
+            float firstMinX;
+            float firstMaxX;
+            float firstMinY;
+            float firstMaxY;
+            float secondMinX;
+            float secondMaxX;
+            float secondMinY;
+            float secondMaxY;
+            if (!TryGetWorldBounds(first, out firstMinX, out firstMaxX, out firstMinY, out firstMaxY) ||
+                !TryGetWorldBounds(second, out secondMinX, out secondMaxX, out secondMinY, out secondMaxY))
+            {
+                return true;
+            }
+
+            return firstMinX < secondMaxX &&
+                   secondMinX < firstMaxX &&
+                   firstMinY < secondMaxY &&
+                   secondMinY < firstMaxY;
+        }
+
+        private static bool TryGetWorldBounds(
+            Vector3[] corners,
+            out float minX,
+            out float maxX,
+            out float minY,
+            out float maxY)
+        {
+            minX = maxX = minY = maxY = 0f;
+            if (corners == null || corners.Length == 0)
+            {
+                return false;
+            }
+
+            minX = maxX = corners[0].x;
+            minY = maxY = corners[0].y;
+            for (int index = 0; index < corners.Length; index++)
+            {
+                Vector3 corner = corners[index];
+                if (!IsFinite(corner.x) || !IsFinite(corner.y))
+                {
+                    return false;
+                }
+
+                minX = Mathf.Min(minX, corner.x);
+                maxX = Mathf.Max(maxX, corner.x);
+                minY = Mathf.Min(minY, corner.y);
+                maxY = Mathf.Max(maxY, corner.y);
+            }
+
+            return maxX - minX > WorldCornerTolerance &&
+                   maxY - minY > WorldCornerTolerance;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private static PsdHierarchyObjectSnapshot CaptureObject(RectTransform rect)

@@ -253,8 +253,13 @@ namespace PsdLayoutTool2
             return "You are a read-only PSD hierarchy planner. You have no permission to write Unity Assets, Prefabs, Profiles, materials, or project files. " +
                    "Read the bounded request JSON at " + requestPath + " and the scope/ancestor graph at " + focusPath + ". " +
                    "Modify only IDs and existing group keys listed as modifiable. Return only a plan matching plan.schema.json. " +
+                   "Never return, expand, reparent, or add children under keys listed in immutableGroupKeys. " +
+                   "Keys in requiredAncestorGroupKeys are fixed ancestors: do not return or remove them, but modifiable child groups may remain under them. " +
                    "You may create new group keys when the modifiable IDs need a new semantic container; use a unique ASCII key and include only modifiable IDs in that new group. " +
-                   "Every group's memberStableIds must be one contiguous sibling range in request.json: do not put separated siblings, distant backgrounds, or unrelated rows in the same group. " +
+                   "Infer semantic maintenance boundaries before visual layer categories: a group should represent a candidate independent Prefab only when its members are likely to be reused, repeated, independently scripted, independently animated, or independently maintained. " +
+                   "For a candidate Prefab, keep its related background, text, icons, and interaction layers together under that semantic container; use Background, Content, Interaction, or Decoration only as child groups inside it when useful. " +
+                   "Do not create a top-level group merely because layers share a rendering type such as text or background. If no independent maintenance boundary is supported by the request evidence, preserve a simple semantic group or leave the nodes ungrouped. " +
+                   "Prefer contiguous sibling ranges. A semantic container may include non-adjacent siblings only when every crossed sibling is geometrically disjoint from the moved later members; Unity validates this rule. Never reorder overlapping visuals. " +
                    "Every modifiable ID in focus.json requires an explicit decision: either include it in an allowed group or add a rename. " +
                    "If it should remain ungrouped, add an identity rename whose name exactly equals that node's originalName in request.json; never return empty groups and renames while modifiable IDs exist. " +
                    "The target shown for evidence only is '" + SanitizePromptValue(targetPrefabPath) + "'. " +
@@ -344,6 +349,8 @@ namespace PsdLayoutTool2
                 hybridGroupKeys = request.hybridGroupKeys ?? new List<string>(),
                 readonlyNeighborGroupKeys = request.readonlyNeighborGroupKeys ?? new List<string>(),
                 structuralDependentGroupKeys = request.structuralDependentGroupKeys ?? new List<string>(),
+                immutableGroupKeys = request.immutableGroupKeys ?? new List<string>(),
+                requiredAncestorGroupKeys = request.requiredAncestorGroupKeys ?? new List<string>(),
                 existingGroupKeys = request.existingGroupKeys ?? new List<string>(),
                 baselineGroups = request.baselineGroups ?? new List<PsdHierarchyPlanGroup>()
             }, Formatting.None);

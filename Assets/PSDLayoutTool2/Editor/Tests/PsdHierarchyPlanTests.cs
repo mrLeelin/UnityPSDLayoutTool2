@@ -183,6 +183,23 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void NonContiguousDisjointSiblingsMayFormSemanticGroup()
+        {
+            PsdHierarchyRequestNode first = Node("101", 0);
+            first.rectangle = Rectangle(0f, 0f, 100f, 100f);
+            PsdHierarchyRequestNode unrelated = Node("102", 1);
+            unrelated.rectangle = Rectangle(300f, 0f, 100f, 100f);
+            PsdHierarchyRequestNode last = Node("103", 2);
+            last.rectangle = Rectangle(0f, 0f, 100f, 100f);
+            PsdHierarchyRequest request = Request(first, unrelated, last);
+            PsdHierarchyPlan plan = PsdHierarchyPlanJson.Parse(PlanJson(
+                "\"groups\":[" + Group("semantic-card", "", "101", "103") + "],\"renames\":[]",
+                request.sourceFingerprint));
+
+            Assert.DoesNotThrow(() => PsdHierarchyPlanValidator.Validate(plan, request));
+        }
+
+        [Test]
         public void UnknownOrDuplicateRenameIdsAreRejected()
         {
             PsdHierarchyRequest request = Request(Node("101", 0));
@@ -631,6 +648,11 @@ namespace PsdLayoutTool2.Tests
                 siblingIndex = siblingIndex,
                 protectedBoundaryStableId = boundaryId
             };
+        }
+
+        private static PsdHierarchyRectangle Rectangle(float x, float y, float width, float height)
+        {
+            return new PsdHierarchyRectangle { x = x, y = y, width = width, height = height };
         }
 
         private static string PlanJson(string body, string fingerprint)

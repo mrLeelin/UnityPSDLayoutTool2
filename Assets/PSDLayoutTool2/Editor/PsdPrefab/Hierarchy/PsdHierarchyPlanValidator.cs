@@ -504,7 +504,7 @@ namespace PsdLayoutTool2
 
                 ValidateSameCurrentParent(group.key, memberNodes);
                 ValidateProtectedBoundary(group.key, memberNodes);
-                ValidateContiguousSiblings(group.key, memberNodes);
+                ValidateSafeSiblingReorder(group.key, memberNodes, nodes.Values);
             }
         }
 
@@ -531,7 +531,7 @@ namespace PsdLayoutTool2
                 List<PsdHierarchyRequestNode> closureNodes = closure.Select(id => nodes[id]).ToList();
                 ValidateSameCurrentParent(groupKey + " descendant closure", closureNodes);
                 ValidateProtectedBoundary(groupKey + " descendant closure", closureNodes);
-                ValidateContiguousSiblings(groupKey + " descendant closure", closureNodes);
+                ValidateSafeSiblingReorder(groupKey + " descendant closure", closureNodes, nodes.Values);
             }
         }
 
@@ -577,16 +577,82 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static void ValidateContiguousSiblings(string groupKey, IList<PsdHierarchyRequestNode> nodes)
+        private static void ValidateSafeSiblingReorder(
+            string groupKey,
+            IList<PsdHierarchyRequestNode> nodes,
+            IEnumerable<PsdHierarchyRequestNode> allNodes)
         {
-            int[] indices = nodes.Select(node => node.siblingIndex).OrderBy(index => index).ToArray();
-            for (int index = 1; index < indices.Length; index++)
+            PsdHierarchyRequestNode[] ordered = nodes.OrderBy(node => node.siblingIndex).ToArray();
+            bool contiguous = true;
+            for (int index = 1; index < ordered.Length; index++)
             {
-                if (indices[index] != indices[index - 1] + 1)
+                if (ordered[index].siblingIndex != ordered[index - 1].siblingIndex + 1)
                 {
-                    Fail("Group '" + groupKey + "' contains a non-contiguous sibling move.");
+                    contiguous = false;
+                    break;
                 }
             }
+
+            if (contiguous)
+            {
+                return;
+            }
+
+            string parentId = ordered[0].parentStableId ?? string.Empty;
+            int insertionIndex = ordered[0].siblingIndex;
+            var selectedIds = new HashSet<string>(
+                ordered.Select(node => node.stableId),
+                StringComparer.Ordinal);
+            PsdHierarchyRequestNode[] crossedCandidates = allNodes
+                .Where(node => string.Equals(node.parentStableId ?? string.Empty, parentId, StringComparison.Ordinal))
+                .Where(node => !selectedIds.Contains(node.stableId))
+                .Where(node => node.siblingIndex > insertionIndex)
+                .ToArray();
+
+            foreach (PsdHierarchyRequestNode movedNode in ordered.Skip(1))
+            {
+                foreach (PsdHierarchyRequestNode crossedNode in crossedCandidates)
+                {
+                    if (crossedNode.siblingIndex >= movedNode.siblingIndex)
+                    {
+                        continue;
+                    }
+
+                    if (RectanglesMayOverlap(movedNode.rectangle, crossedNode.rectangle))
+                    {
+                        Fail("Group '" + groupKey +
+                             "' contains a non-contiguous sibling move that would reorder overlapping visuals.");
+                    }
+                }
+            }
+        }
+
+        private static bool RectanglesMayOverlap(PsdHierarchyRectangle first, PsdHierarchyRectangle second)
+        {
+            if (!IsUsableRectangle(first) || !IsUsableRectangle(second))
+            {
+                return true;
+            }
+
+            return first.x < second.x + second.width &&
+                   second.x < first.x + first.width &&
+                   first.y < second.y + second.height &&
+                   second.y < first.y + first.height;
+        }
+
+        private static bool IsUsableRectangle(PsdHierarchyRectangle rectangle)
+        {
+            return IsFinite(rectangle.x) &&
+                   IsFinite(rectangle.y) &&
+                   IsFinite(rectangle.width) &&
+                   IsFinite(rectangle.height) &&
+                   rectangle.width > 0f &&
+                   rectangle.height > 0f;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private static void ValidateRenames(

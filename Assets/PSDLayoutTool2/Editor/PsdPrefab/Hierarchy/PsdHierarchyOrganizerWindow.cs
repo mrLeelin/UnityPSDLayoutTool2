@@ -21,6 +21,7 @@ namespace PsdLayoutTool2
         private readonly PsdHierarchyReconciliationResult reconciliation;
         private readonly IPsdHierarchyAiRunner runner;
         private PsdHierarchyPlan proposedPlanValue;
+        private readonly HashSet<string> acceptedGroupKeysValue = new HashSet<string>(StringComparer.Ordinal);
 
         public PsdHierarchyOrganizerPreviewModel(
             string targetPrefabPath,
@@ -52,10 +53,138 @@ namespace PsdLayoutTool2
         {
             get { return ClonePlan(proposedPlanValue); }
         }
+        public IReadOnlyCollection<string> acceptedGroupKeys
+        {
+            get { return acceptedGroupKeysValue.ToArray(); }
+        }
+        public IList<PsdPrefabCandidate> prefabCandidates
+        {
+            get { return PsdHierarchyPrefabCandidateAnalyzer.Analyze(fullRequest.nodes); }
+        }
         public List<string> validationErrors { get; } = new List<string>();
         public List<string> pendingMissingStableIds { get; private set; }
         public bool canApply { get; private set; }
         public bool isRunning { get; private set; }
+
+        public void AcceptGroup(string groupKey)
+        {
+            if (string.IsNullOrEmpty(groupKey) || !(proposedPlanValue.groups ?? new List<PsdHierarchyPlanGroup>()).Any(group => group != null && group.key == groupKey))
+                throw new ArgumentException("Proposed group does not exist.", "groupKey");
+            acceptedGroupKeysValue.Add(groupKey);
+        }
+
+        public async Task RefineGroupAsync(string groupKey, CancellationToken cancellationToken)
+        {
+            if (acceptedGroupKeysValue.Contains(groupKey)) throw new InvalidOperationException("Accepted groups are locked.");
+            PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
+            PsdHierarchyPlanGroup selected = (working.groups ?? new List<PsdHierarchyPlanGroup>()).FirstOrDefault(group => group != null && group.key == groupKey);
+            if (selected == null) throw new ArgumentException("Proposed group does not exist.", "groupKey");
+            HashSet<string> immutableGroupKeys = GetAcceptedSubtreeGroupKeys(working);
+            HashSet<string> requiredAncestorGroupKeys = GetRequiredAncestorGroupKeys(working, immutableGroupKeys);
+            HashSet<string> protectedGroupKeys = new HashSet<string>(immutableGroupKeys, StringComparer.Ordinal);
+            protectedGroupKeys.UnionWith(requiredAncestorGroupKeys);
+            HashSet<string> locked = GetGroupMemberIds(working, protectedGroupKeys);
+            var scope = new HashSet<string>((selected.memberStableIds ?? new List<string>()).Where(id => !locked.Contains(id)), StringComparer.Ordinal);
+            if (scope.Count == 0) throw new InvalidOperationException("The selected group has no unlocked members to refine.");
+
+            isRunning = true;
+            canApply = false;
+            validationErrors.Clear();
+            try
+            {
+                HashSet<string> context = BuildContextIds(scope);
+                FocusedGroupContext groups = BuildFocusedGroupContext(working, scope, context);
+                LockGroups(groups, protectedGroupKeys);
+                var request = new PsdHierarchyAiRunRequest
+                {
+                    operationId = Guid.NewGuid().ToString("N"), request = CloneScopedRequest(fullRequest, context, scope), targetPrefabPath = targetPrefabPath, timeout = TimeSpan.FromMinutes(2),
+                    modifiableStableIds = scope.OrderBy(id => id, StringComparer.Ordinal).ToList(), contextStableIds = context.OrderBy(id => id, StringComparer.Ordinal).ToList(), baselineGroups = groups.baselineGroups,
+                    modifiableGroupKeys = groups.modifiableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(), scopeOwnedGroupKeys = groups.scopeOwnedGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    hybridGroupKeys = groups.hybridGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(), readonlyNeighborGroupKeys = groups.readonlyNeighborGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    structuralDependentGroupKeys = groups.structuralDependentGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(), immutableGroupKeys = immutableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    requiredAncestorGroupKeys = requiredAncestorGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    existingGroupKeys = working.groups.Where(group => group != null).Select(group => group.key).OrderBy(key => key, StringComparer.Ordinal).ToList()
+                };
+                PsdHierarchyAiRunResult result = await runner.RunAsync(request, cancellationToken);
+                if (result == null || !result.succeeded || result.plan == null) throw new InvalidOperationException(result != null ? result.error : "Hierarchy planner returned no validated plan.");
+                PsdHierarchyFocusedPlanValidator.ValidatePartial(result.plan, request);
+                MergeScope(working, result.plan, request);
+                PsdHierarchyPlanValidator.Validate(working, fullRequest);
+                proposedPlanValue = ClonePlan(working);
+                canApply = pendingMissingStableIds.Count == 0;
+            }
+            finally { isRunning = false; }
+        }
+
+        public async Task ReplanAllUnlockedAsync(CancellationToken cancellationToken)
+        {
+            PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
+            HashSet<string> immutableGroupKeys = GetAcceptedSubtreeGroupKeys(working);
+            HashSet<string> requiredAncestorGroupKeys = GetRequiredAncestorGroupKeys(working, immutableGroupKeys);
+            HashSet<string> protectedGroupKeys = new HashSet<string>(immutableGroupKeys, StringComparer.Ordinal);
+            protectedGroupKeys.UnionWith(requiredAncestorGroupKeys);
+            HashSet<string> locked = GetGroupMemberIds(working, protectedGroupKeys);
+            var scope = new HashSet<string>(
+                fullRequest.nodes
+                    .Where(node => node != null &&
+                                   PsdStableLayerIdUtility.IsPersistable(node.stableId) &&
+                                   !node.isProtectedBoundary &&
+                                   !node.hasProjectComponents &&
+                                   string.IsNullOrEmpty(node.protectedBoundaryStableId) &&
+                                   !locked.Contains(node.stableId))
+                    .Select(node => node.stableId),
+                StringComparer.Ordinal);
+            if (scope.Count == 0)
+                throw new InvalidOperationException("There are no unlocked hierarchy nodes to replan.");
+
+            isRunning = true;
+            canApply = false;
+            validationErrors.Clear();
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var context = new HashSet<string>(
+                    fullRequest.nodes
+                        .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
+                        .Select(node => node.stableId),
+                    StringComparer.Ordinal);
+                FocusedGroupContext groups = BuildFocusedGroupContext(working, scope, context);
+                LockGroups(groups, protectedGroupKeys);
+                var request = new PsdHierarchyAiRunRequest
+                {
+                    operationId = Guid.NewGuid().ToString("N"),
+                    request = CloneScopedRequest(fullRequest, context, scope),
+                    targetPrefabPath = targetPrefabPath,
+                    timeout = TimeSpan.FromMinutes(2),
+                    modifiableStableIds = scope.OrderBy(id => id, StringComparer.Ordinal).ToList(),
+                    contextStableIds = context.OrderBy(id => id, StringComparer.Ordinal).ToList(),
+                    baselineGroups = groups.baselineGroups,
+                    modifiableGroupKeys = groups.modifiableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    scopeOwnedGroupKeys = groups.scopeOwnedGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    hybridGroupKeys = groups.hybridGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    readonlyNeighborGroupKeys = groups.readonlyNeighborGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    structuralDependentGroupKeys = groups.structuralDependentGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    immutableGroupKeys = immutableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    requiredAncestorGroupKeys = requiredAncestorGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                    existingGroupKeys = working.groups.Where(group => group != null)
+                        .Select(group => group.key).OrderBy(key => key, StringComparer.Ordinal).ToList()
+                };
+                PsdHierarchyAiRunResult result = await runner.RunAsync(request, cancellationToken);
+                if (result == null || !result.succeeded || result.plan == null)
+                    throw new InvalidOperationException(result != null
+                        ? result.error
+                        : "Hierarchy planner returned no validated plan.");
+                PsdHierarchyFocusedPlanValidator.ValidatePartial(result.plan, request);
+                MergeScope(working, result.plan, request);
+                PsdHierarchyPlanValidator.Validate(working, fullRequest);
+                proposedPlanValue = ClonePlan(working);
+                canApply = pendingMissingStableIds.Count == 0;
+            }
+            finally
+            {
+                isRunning = false;
+            }
+        }
 
         public async Task RefreshAsync(bool confirmMissingCleanup, CancellationToken cancellationToken)
         {
@@ -70,11 +199,22 @@ namespace PsdLayoutTool2
             try
             {
                 List<HashSet<string>> scopes = BuildFocusedScopes(working);
+                HashSet<string> immutableGroupKeys = GetAcceptedSubtreeGroupKeys(working);
+                HashSet<string> requiredAncestorGroupKeys = GetRequiredAncestorGroupKeys(working, immutableGroupKeys);
+                HashSet<string> protectedGroupKeys = new HashSet<string>(immutableGroupKeys, StringComparer.Ordinal);
+                protectedGroupKeys.UnionWith(requiredAncestorGroupKeys);
+                HashSet<string> locked = GetGroupMemberIds(working, protectedGroupKeys);
+                foreach (HashSet<string> scope in scopes)
+                {
+                    scope.ExceptWith(locked);
+                }
+                scopes.RemoveAll(scope => scope.Count == 0);
                 foreach (HashSet<string> scope in scopes)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     HashSet<string> contextIds = BuildContextIds(scope);
                     FocusedGroupContext groupContext = BuildFocusedGroupContext(working, scope, contextIds);
+                    LockGroups(groupContext, protectedGroupKeys);
                     PsdHierarchyRequest scopedRequest = CloneScopedRequest(fullRequest, contextIds, scope);
                     var runRequest = new PsdHierarchyAiRunRequest
                     {
@@ -90,6 +230,8 @@ namespace PsdLayoutTool2
                         hybridGroupKeys = groupContext.hybridGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
                         readonlyNeighborGroupKeys = groupContext.readonlyNeighborGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
                         structuralDependentGroupKeys = groupContext.structuralDependentGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        immutableGroupKeys = immutableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
+                        requiredAncestorGroupKeys = requiredAncestorGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
                         existingGroupKeys = working.groups.Where(group => group != null)
                             .Select(group => group.key).OrderBy(key => key, StringComparer.Ordinal).ToList()
                     };
@@ -241,6 +383,81 @@ namespace PsdLayoutTool2
                 scopes.Add(scope);
             }
             return scopes;
+        }
+
+        private HashSet<string> GetAcceptedSubtreeGroupKeys(PsdHierarchyPlan plan)
+        {
+            PsdHierarchyPlanGroup[] groups = (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null).ToArray();
+            var result = new HashSet<string>(
+                groups.Where(group => acceptedGroupKeysValue.Contains(group.key))
+                    .Select(group => group.key),
+                StringComparer.Ordinal);
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (PsdHierarchyPlanGroup group in groups)
+                {
+                    if (result.Contains(group.parentKey ?? string.Empty))
+                    {
+                        changed |= result.Add(group.key);
+                    }
+                }
+            }
+            while (changed);
+            return result;
+        }
+
+        private static HashSet<string> GetGroupMemberIds(
+            PsdHierarchyPlan plan,
+            HashSet<string> groupKeys)
+        {
+            return new HashSet<string>(
+                (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                    .Where(group => group != null && groupKeys.Contains(group.key))
+                    .SelectMany(group => group.memberStableIds ?? new List<string>()),
+                StringComparer.Ordinal);
+        }
+
+        private static HashSet<string> GetRequiredAncestorGroupKeys(
+            PsdHierarchyPlan plan,
+            HashSet<string> immutableGroupKeys)
+        {
+            var byKey = (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null)
+                .ToDictionary(group => group.key, StringComparer.Ordinal);
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string immutableKey in immutableGroupKeys)
+            {
+                PsdHierarchyPlanGroup current;
+                if (!byKey.TryGetValue(immutableKey, out current))
+                {
+                    continue;
+                }
+
+                string parentKey = current.parentKey ?? string.Empty;
+                while (!string.IsNullOrEmpty(parentKey) && byKey.TryGetValue(parentKey, out current))
+                {
+                    if (!immutableGroupKeys.Contains(parentKey))
+                    {
+                        result.Add(parentKey);
+                    }
+                    parentKey = current.parentKey ?? string.Empty;
+                }
+            }
+            return result;
+        }
+
+        private static void LockGroups(
+            FocusedGroupContext context,
+            HashSet<string> groupKeys)
+        {
+            context.modifiableGroupKeys.ExceptWith(groupKeys);
+            context.scopeOwnedGroupKeys.ExceptWith(groupKeys);
+            context.hybridGroupKeys.ExceptWith(groupKeys);
+            context.readonlyNeighborGroupKeys.ExceptWith(groupKeys);
+            context.structuralDependentGroupKeys.ExceptWith(groupKeys);
         }
 
         private static PsdHierarchyReconciliationResult CloneReconciliation(PsdHierarchyReconciliationResult source)
@@ -663,6 +880,10 @@ namespace PsdLayoutTool2
                 runRequest.structuralDependentGroupKeys ?? new List<string>(), StringComparer.Ordinal);
             var existingGroupKeys = new HashSet<string>(
                 runRequest.existingGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            var immutableGroupKeys = new HashSet<string>(
+                runRequest.immutableGroupKeys ?? new List<string>(), StringComparer.Ordinal);
+            var requiredAncestorGroupKeys = new HashSet<string>(
+                runRequest.requiredAncestorGroupKeys ?? new List<string>(), StringComparer.Ordinal);
             var categorizedGroupKeys = new HashSet<string>(scopeOwnedGroupKeys, StringComparer.Ordinal);
             categorizedGroupKeys.UnionWith(hybridGroupKeys);
             categorizedGroupKeys.UnionWith(readonlyNeighborGroupKeys);
@@ -672,6 +893,13 @@ namespace PsdLayoutTool2
             if (categorizedGroupKeys.Count != categorizedCount ||
                 !categorizedGroupKeys.SetEquals(modifiableGroupKeys))
                 throw new PsdHierarchyPlanValidationException("Focused group ownership metadata is inconsistent.");
+            if (immutableGroupKeys.Overlaps(modifiableGroupKeys))
+                throw new PsdHierarchyPlanValidationException(
+                    "Focused group scope cannot make immutable groups modifiable.");
+            if (requiredAncestorGroupKeys.Overlaps(modifiableGroupKeys) ||
+                requiredAncestorGroupKeys.Overlaps(immutableGroupKeys))
+                throw new PsdHierarchyPlanValidationException(
+                    "Focused group scope contains inconsistent required ancestors.");
             foreach (string groupKey in modifiableGroupKeys)
             {
                 PsdHierarchyPlanGroup baselineGroup;
@@ -689,6 +917,15 @@ namespace PsdLayoutTool2
             {
                 if (group == null || !partialKeys.Add(group.key))
                     throw new PsdHierarchyPlanValidationException("Focused plan contains a null or duplicate group key.");
+                if (immutableGroupKeys.Contains(group.key))
+                    throw new PsdHierarchyPlanValidationException(
+                        "Focused plan modified immutable group '" + group.key + "'.");
+                if (immutableGroupKeys.Contains(group.parentKey ?? string.Empty))
+                    throw new PsdHierarchyPlanValidationException(
+                        "Focused plan added or modified a child under immutable group '" + group.parentKey + "'.");
+                if (requiredAncestorGroupKeys.Contains(group.key))
+                    throw new PsdHierarchyPlanValidationException(
+                        "Focused plan modified required ancestor group '" + group.key + "'.");
                 if (baselineByKey.ContainsKey(group.key) && !modifiableGroupKeys.Contains(group.key))
                     throw new PsdHierarchyPlanValidationException("Focused plan modified group '" + group.key + "' outside its scope.");
                 if (!baselineByKey.ContainsKey(group.key) && existingGroupKeys.Contains(group.key))
@@ -806,7 +1043,6 @@ namespace PsdLayoutTool2
         private Vector2 proposedTreeScroll;
         private bool confirmMissingCleanup;
         private Action<PsdHierarchyPlan> applyHandler;
-        private float leftPaneWidth = 330f;
         private string selectedGroupKey = string.Empty;
         private readonly Dictionary<string, bool> currentTreeFoldouts = new Dictionary<string, bool>(StringComparer.Ordinal);
         private readonly Dictionary<string, bool> proposedTreeFoldouts = new Dictionary<string, bool>(StringComparer.Ordinal);
@@ -873,6 +1109,10 @@ namespace PsdLayoutTool2
                 if (GUILayout.Button("Generate / Retry Preview"))
                 {
                     StartRefresh();
+                }
+                if (GUILayout.Button("Replan All Unlocked"))
+                {
+                    StartFullReplan();
                 }
                 if (GUILayout.Button("Import Manual Plan"))
                 {
@@ -990,24 +1230,40 @@ namespace PsdLayoutTool2
             }
         }
 
+        private async void StartFullReplan()
+        {
+            CancelRunningRequest();
+            cancellation = new CancellationTokenSource();
+            try
+            {
+                await model.ReplanAllUnlockedAsync(cancellation.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // User cancellation/closing is an expected non-mutating outcome.
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+            finally
+            {
+                cancellation?.Dispose();
+                cancellation = null;
+                Repaint();
+            }
+        }
+
         private void DrawHierarchyPanes(float top, float bottom)
         {
             Rect area = new Rect(4f, top, Mathf.Max(0f, position.width - 8f), Mathf.Max(120f, bottom - top));
-            leftPaneWidth = Mathf.Clamp(leftPaneWidth, 220f, Mathf.Max(220f, area.width - 260f));
-            Rect left = new Rect(area.x, area.y, leftPaneWidth - 3f, area.height);
-            Rect splitter = new Rect(left.xMax, area.y, 6f, area.height);
-            Rect right = new Rect(splitter.xMax, area.y, area.xMax - splitter.xMax, area.height);
+            float leftWidth = Mathf.Clamp(area.width * 0.28f, 220f, 320f);
+            Rect left = new Rect(area.x, area.y, leftWidth, area.height);
+            Rect center = new Rect(left.xMax + 4f, area.y, area.width * 0.40f - 4f, area.height);
+            Rect right = new Rect(center.xMax + 4f, area.y, area.xMax - center.xMax - 4f, area.height);
             GUI.Box(left, GUIContent.none, EditorStyles.helpBox);
+            GUI.Box(center, GUIContent.none, EditorStyles.helpBox);
             GUI.Box(right, GUIContent.none, EditorStyles.helpBox);
-            EditorGUIUtility.AddCursorRect(splitter, MouseCursor.ResizeHorizontal);
-            if (Event.current.type == EventType.MouseDown && splitter.Contains(Event.current.mousePosition))
-                GUIUtility.hotControl = GUIUtility.GetControlID(FocusType.Passive);
-            if (GUIUtility.hotControl != 0 && Event.current.type == EventType.MouseDrag)
-            {
-                leftPaneWidth = Event.current.mousePosition.x - area.x;
-                Repaint();
-            }
-            if (Event.current.type == EventType.MouseUp) GUIUtility.hotControl = 0;
 
             GUILayout.BeginArea(new Rect(left.x + 6f, left.y + 6f, left.width - 12f, left.height - 12f));
             currentTreeScroll = EditorGUILayout.BeginScrollView(currentTreeScroll);
@@ -1015,11 +1271,14 @@ namespace PsdLayoutTool2
             EditorGUILayout.EndScrollView();
             GUILayout.EndArea();
 
-            GUILayout.BeginArea(new Rect(right.x + 6f, right.y + 6f, right.width - 12f, right.height - 12f));
+            GUILayout.BeginArea(new Rect(center.x + 6f, center.y + 6f, center.width - 12f, center.height - 12f));
             proposedTreeScroll = EditorGUILayout.BeginScrollView(proposedTreeScroll);
             DrawProposedTree();
-            DrawSelectedGroupInspector();
             EditorGUILayout.EndScrollView();
+            GUILayout.EndArea();
+
+            GUILayout.BeginArea(new Rect(right.x + 6f, right.y + 6f, right.width - 12f, right.height - 12f));
+            DrawSelectedGroupInspector();
             GUILayout.EndArea();
         }
 
@@ -1061,16 +1320,6 @@ namespace PsdLayoutTool2
             if (GUI.Button(pingAll, "Ping 全部", EditorStyles.miniButton))
                 SelectPrefabMembers(group.memberStableIds);
             if (!GetFoldout(proposedTreeFoldouts, group.key)) return;
-            foreach (string member in group.memberStableIds ?? new List<string>())
-            {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    GUILayout.Space((depth + 1) * 14f + 18f);
-                    GUILayout.Label(CreateMemberContent(member), EditorStyles.miniLabel, GUILayout.ExpandWidth(true));
-                    if (GUILayout.Button("Ping", EditorStyles.miniButton, GUILayout.Width(46f)))
-                        SelectPrefabMembers(new[] { member });
-                }
-            }
             foreach (PsdHierarchyPlanGroup child in children) DrawProposedGroup(child, allGroups, depth + 1);
         }
 
@@ -1084,6 +1333,46 @@ namespace PsdLayoutTool2
             EditorGUILayout.LabelField("GROUP DETAILS", EditorStyles.miniBoldLabel);
             EditorGUILayout.LabelField("Confidence  " + group.confidence.ToString("0.00"), EditorStyles.miniLabel);
             EditorGUILayout.LabelField(group.evidence ?? string.Empty, EditorStyles.wordWrappedMiniLabel);
+            List<PsdPrefabCandidate> candidates = model.prefabCandidates
+                .Where(candidate => (group.memberStableIds ?? new List<string>()).Contains(candidate.rootStableId)).ToList();
+            foreach (PsdPrefabCandidate candidate in candidates)
+                EditorGUILayout.LabelField("Prefab 候选  " + candidate.score.ToString("0.00") + "  ·  " + string.Join("、", candidate.evidence.ToArray()), EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("成员", EditorStyles.miniBoldLabel);
+            foreach (string member in group.memberStableIds ?? new List<string>())
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label(CreateMemberContent(member), EditorStyles.miniLabel, GUILayout.ExpandWidth(true));
+                    if (GUILayout.Button("Ping", EditorStyles.miniButton, GUILayout.Width(46f))) SelectPrefabMembers(new[] { member });
+                }
+            }
+            bool accepted = model.acceptedGroupKeys.Contains(group.key);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUI.enabled = !accepted && !model.isRunning;
+                if (GUILayout.Button("接受分组", EditorStyles.miniButton))
+                    model.AcceptGroup(group.key);
+                GUI.enabled = !accepted && !model.isRunning;
+                if (GUILayout.Button("二次 AI 修整", EditorStyles.miniButton))
+                    StartGroupRefinement(group.key);
+                GUI.enabled = true;
+            }
+            if (accepted) EditorGUILayout.LabelField("已接受：二次 AI 不会再修改此分组。", EditorStyles.miniLabel);
+        }
+
+        private async void StartGroupRefinement(string groupKey)
+        {
+            CancelRunningRequest();
+            cancellation = new CancellationTokenSource();
+            try { await model.RefineGroupAsync(groupKey, cancellation.Token); }
+            catch (OperationCanceledException) { }
+            catch (Exception exception) { Debug.LogException(exception); }
+            finally
+            {
+                cancellation?.Dispose();
+                cancellation = null;
+                Repaint();
+            }
         }
 
         private GUIContent CreateMemberContent(string stableId)
