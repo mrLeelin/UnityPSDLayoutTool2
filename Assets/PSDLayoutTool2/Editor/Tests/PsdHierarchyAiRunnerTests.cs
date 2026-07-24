@@ -138,6 +138,25 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task UsageLimitExitReturnsAnActionableMessageInsteadOfRawCliOutput()
+        {
+            var adapter = new RecordingProcessAdapter(invocation => new PsdHierarchyProcessResult
+            {
+                exitCode = 1,
+                standardError = "OpenAI Codex v0.144.6\nERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex."
+            });
+
+            PsdHierarchyAiRunResult result = await Runner(adapter).RunAsync(
+                RunRequest(Request("101")), CancellationToken.None);
+
+            Assert.That(result.succeeded, Is.False);
+            Assert.That(result.error, Does.Contain("使用额度上限"));
+            Assert.That(result.error, Does.Contain("重新分析"));
+            Assert.That(result.error, Does.Not.Contain("OpenAI Codex v"));
+            Assert.That(result.offlinePackageAvailable, Is.True);
+        }
+
+        [Test]
         public async Task MalformedOutputIsRejectedByStrictParser()
         {
             var adapter = new RecordingProcessAdapter(invocation =>

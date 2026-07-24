@@ -56,5 +56,17 @@ namespace PsdLayoutTool2.Tests
             StringAssert.Contains("event.button === 1 || state.spaceDown || state.tool === \"hand\"", script);
             StringAssert.Contains("state.suppressGroupClick = true", script);
         }
+
+        [Test]
+        public void LoadedWorkbenchHidesEmptyStateAndUsesSelectDragForPanning()
+        {
+            string css = Encoding.UTF8.GetString(PsdHierarchyWebStaticAssets.Resolve("/organizer.css").bytes);
+            string script = Encoding.UTF8.GetString(PsdHierarchyWebStaticAssets.Resolve("/organizer.js").bytes);
+
+            StringAssert.Contains("[hidden] { display: none !important; }", css);
+            StringAssert.Contains("event.button === 0 && state.tool === \"select\" && !event.shiftKey", script);
+            StringAssert.Contains("event.shiftKey", script);
+            StringAssert.Contains("额度不足", script);
+        }
     }
 }

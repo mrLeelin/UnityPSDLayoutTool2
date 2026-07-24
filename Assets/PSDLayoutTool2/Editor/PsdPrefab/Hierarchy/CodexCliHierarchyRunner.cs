@@ -164,6 +164,10 @@ namespace PsdLayoutTool2
                         string detail = string.IsNullOrWhiteSpace(processResult.standardError)
                             ? processResult.error
                             : processResult.standardError;
+                        if (ContainsUsageLimit(detail))
+                        {
+                            detail = "Codex 账号已达到使用额度上限。请在额度恢复后，或更换可用账号/套餐后点击“重新分析”。";
+                        }
                         return Failed("Codex hierarchy planning failed (exit " + processResult.exitCode + "): " + detail,
                             packagePath, processResult);
                     }
@@ -326,6 +330,13 @@ namespace PsdLayoutTool2
                 requestPackagePath = packagePath,
                 offlinePackageAvailable = HasCompleteOfflinePackage(packagePath)
             };
+        }
+
+        private static bool ContainsUsageLimit(string value)
+        {
+            return !string.IsNullOrEmpty(value) &&
+                   (value.IndexOf("usage limit", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    value.IndexOf("rate limit", StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         private static PsdHierarchyAiRunResult OwnershipRejected(string error, string packagePath)

@@ -176,7 +176,9 @@
       rect.appendChild(title);
       rect.addEventListener("pointerdown", function (event) {
         var pan = event.button === 1 || state.spaceDown || state.tool === "hand";
-        if (!pan) event.stopPropagation();
+        var selectDrag = event.button === 0 && state.tool === "select" && !event.shiftKey;
+        event.stopPropagation();
+        if (pan || selectDrag) startPan(event, selectDrag);
       });
       rect.addEventListener("click", function (event) {
         if (state.suppressGroupClick || state.spaceDown || state.tool === "hand") {
@@ -372,11 +374,10 @@
   function onCanvasPointerDown(event) {
     if (!state.snapshot) return;
     var pan = event.button === 1 || state.spaceDown || state.tool === "hand";
-    if (pan) {
+    var selectDrag = event.button === 0 && state.tool === "select" && !event.shiftKey;
+    if (pan || selectDrag) {
       event.preventDefault();
-      state.suppressGroupClick = true;
-      state.pointer = { kind: "pan", x: event.clientX, y: event.clientY, offsetX: state.offsetX, offsetY: state.offsetY };
-      roles["psd-canvas"].classList.add("is-panning");
+      startPan(event, selectDrag);
       return;
     }
     if (event.button !== 0 || state.tool !== "select") return;
@@ -386,9 +387,25 @@
     updateMarquee();
   }
 
+  function startPan(event, allowClick) {
+    state.pointer = {
+      kind: "pan",
+      x: event.clientX,
+      y: event.clientY,
+      offsetX: state.offsetX,
+      offsetY: state.offsetY,
+      allowClick: !!allowClick,
+      moved: false
+    };
+    roles["psd-canvas"].classList.add("is-panning");
+  }
+
   function onPointerMove(event) {
     if (!state.pointer) return;
     if (state.pointer.kind === "pan") {
+      if (Math.abs(event.clientX - state.pointer.x) > 2 || Math.abs(event.clientY - state.pointer.y) > 2) {
+        state.pointer.moved = true;
+      }
       state.offsetX = state.pointer.offsetX + event.clientX - state.pointer.x;
       state.offsetY = state.pointer.offsetY + event.clientY - state.pointer.y;
       scheduleTransform();
@@ -405,10 +422,14 @@
   function onPointerUp() {
     if (!state.pointer) return;
     var completedPan = state.pointer.kind === "pan";
+    var suppressClick = completedPan && (!state.pointer.allowClick || state.pointer.moved);
     if (state.pointer.kind === "marquee") completeMarquee(state.pointer.additive);
     state.pointer = null;
     roles["psd-canvas"].classList.remove("is-panning");
-    if (completedPan) window.setTimeout(function () { state.suppressGroupClick = false; }, 0);
+    if (suppressClick) {
+      state.suppressGroupClick = true;
+      window.setTimeout(function () { state.suppressGroupClick = false; }, 0);
+    }
   }
 
   function updateMarquee() {
@@ -615,6 +636,9 @@
     var running = status === "running";
     state.busy = running;
     roles["ai-state"].textContent = running ? "AI 处理中" : status === "failed" ? "操作失败" : status === "succeeded" ? "操作完成" : "AI 空闲";
+    if (status === "failed" && operation && String(operation.message || "").indexOf("使用额度") >= 0) {
+      roles["ai-state"].textContent = "额度不足";
+    }
     roles["ai-state"].classList.toggle("is-busy", running);
     roles["operation-message"].textContent = operation && operation.message ? operation.message : state.connected ? "准备就绪" : "等待 Unity 会话";
     if (state.pollTimer) {
