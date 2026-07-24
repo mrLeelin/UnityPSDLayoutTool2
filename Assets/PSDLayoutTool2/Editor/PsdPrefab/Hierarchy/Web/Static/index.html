@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PSD AI 整理工作台</title>
+  <link rel="stylesheet" href="/organizer.css">
+</head>
+<body>
+  <div class="workbench" data-role="workbench">
+    <header class="topbar">
+      <div class="document-identity">
+        <span class="product-mark" aria-hidden="true">PSD</span>
+        <div class="document-copy">
+          <strong data-role="psd-filename">未连接到 PSD</strong>
+          <span data-role="target-prefab">等待 Unity 会话</span>
+        </div>
+      </div>
+      <div class="status-strip" aria-live="polite">
+        <span class="status-pill is-offline" data-role="connection-state"><i></i>Unity 已断开</span>
+        <span class="status-pill" data-role="ai-state">AI 空闲</span>
+      </div>
+      <button class="command-button" type="button" data-role="reanalyze" disabled>
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+        <span>重新分析</span>
+      </button>
+    </header>
+
+    <main class="workspace">
+      <nav class="tool-rail" aria-label="画布工具">
+        <button type="button" class="tool-button is-active" data-role="tool-select" aria-label="选择工具" aria-pressed="true" title="选择 (V)">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 3 13 9-6 1.5L9 19z"/></svg>
+        </button>
+        <button type="button" class="tool-button" data-role="tool-hand" aria-label="移动画布" aria-pressed="false" title="移动画布 (H / Space)">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 11V7a2 2 0 0 1 4 0v3-5a2 2 0 0 1 4 0v5-3a2 2 0 0 1 4 0v7c0 4-3 7-7 7h-1c-3 0-5-2-6-5l-1-3a2 2 0 0 1 3-2z"/></svg>
+        </button>
+        <span class="rail-divider"></span>
+        <button type="button" class="tool-button" data-role="fit-view" aria-label="适应视图" title="适应选区或全图 (F)">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg>
+        </button>
+        <button type="button" class="tool-button" data-role="actual-size" aria-label="显示实际大小" title="实际大小 (100%)">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5M11 8v6M8 11h6"/></svg>
+        </button>
+      </nav>
+
+      <section class="canvas-area" aria-label="PSD 画布">
+        <div class="canvas-toolbar">
+          <span data-role="selection-summary">未选择分组</span>
+          <output data-role="zoom-level">100%</output>
+        </div>
+        <div class="psd-viewport" data-role="psd-canvas" tabindex="0">
+          <div class="empty-state" data-role="empty-state">
+            <strong>没有可显示的 PSD 会话</strong>
+            <span>请返回 Unity，重新打开 AI 整理页面。</span>
+          </div>
+          <div class="canvas-transform" data-role="canvas-transform" hidden>
+            <img data-role="composite-image" alt="完整 PSD 合成预览" draggable="false">
+            <svg class="overlay-layer" data-role="overlay-svg" aria-label="PSD 节点与分组覆盖层">
+              <g class="node-overlays" data-role="node-overlays"></g>
+              <g class="group-overlays" data-role="group-overlays"></g>
+              <rect class="marquee" data-role="marquee" hidden></rect>
+            </svg>
+          </div>
+          <div class="minimap" data-role="minimap" aria-label="画布导航器" hidden>
+            <img data-role="minimap-image" alt="">
+            <div class="minimap-viewport" data-role="minimap-viewport"></div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector" aria-label="整理检查器">
+        <div class="inspector-header">
+          <div><span class="eyebrow">INSPECTOR</span><h1>整理检查器</h1></div>
+          <span class="selection-count" data-role="selection-count">0</span>
+        </div>
+        <div class="inspector-scroll">
+          <section class="inspector-section">
+            <h2>选中范围</h2>
+            <div class="scope-list" data-role="selected-scope"><p class="muted">在画布上选择一个或多个分组。</p></div>
+          </section>
+          <section class="inspector-section split-details">
+            <div><h2>当前层级</h2><div data-role="current-hierarchy" class="detail-list muted">未选择</div></div>
+            <div><h2>建议层级</h2><div data-role="proposed-hierarchy" class="detail-list muted">未选择</div></div>
+          </section>
+          <section class="inspector-section">
+            <h2>命名变更</h2>
+            <div class="change-list" data-role="naming-changes"><p class="muted">没有待检查的命名变更。</p></div>
+          </section>
+          <section class="inspector-section warning-section">
+            <h2>警告 <span data-role="warning-count">0</span></h2>
+            <div data-role="warnings"><p class="muted">当前没有警告。</p></div>
+          </section>
+          <section class="inspector-section instruction-section">
+            <label for="organizer-instruction">给 AI 的补充指令</label>
+            <textarea id="organizer-instruction" data-role="instruction" rows="4" maxlength="2000" placeholder="例如：这些任务属于同一个列表项，并保留已接受的分组。"></textarea>
+          </section>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="actionbar">
+      <div class="operation-message" data-role="operation-message" aria-live="polite">等待 Unity 会话</div>
+      <div class="action-group">
+        <button type="button" class="secondary-action" data-role="refine-selection" disabled>重新整理选中区域</button>
+        <button type="button" class="secondary-action accepted-action" data-role="accept-selection" disabled>接受选中分组</button>
+        <button type="button" class="primary-action" data-role="apply-plan" disabled>应用命名与层级</button>
+      </div>
+    </footer>
+  </div>
+
+  <dialog class="prefab-dialog" data-role="prefab-dialog" aria-labelledby="prefab-dialog-title">
+    <form method="dialog" class="dialog-shell">
+      <header>
+        <div><span class="eyebrow">POST-APPLY</span><h2 id="prefab-dialog-title">确认公共 Prefab 候选</h2></div>
+        <button class="icon-close" value="cancel" aria-label="关闭 Prefab 候选确认" title="关闭">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5 5 19"/></svg>
+        </button>
+      </header>
+      <p class="dialog-intro">层级应用已经完成。这里只创建明确勾选的候选，不会自动处理其余项目。</p>
+      <div class="candidate-list" data-role="prefab-candidates"></div>
+      <footer>
+        <button value="cancel" class="secondary-action">暂不创建</button>
+        <button type="button" class="primary-action" data-role="create-prefabs" disabled>创建选中的 Prefab</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <script src="/organizer.js" defer></script>
+</body>
+</html>

@@ -15,7 +15,7 @@
     /// Thanks to DeadNinja: http://forum.unity3d.com/threads/custom-textureimporterinspector.260833/
     /// </remarks>
     [CustomEditor(typeof(TextureImporter))]
-    public class PsdInspector : Editor
+    public class PsdInspector : UnityEditor.Editor
     {
         /// <summary>
         /// Supported inspector display languages.
@@ -103,7 +103,7 @@
         /// <summary>
         /// The native Unity editor used to render the <see cref="TextureImporter"/>'s Inspector.
         /// </summary>
-        private Editor nativeEditor;
+        private UnityEditor.Editor nativeEditor;
 
         /// <summary>
         /// The style used to draw the section header text.

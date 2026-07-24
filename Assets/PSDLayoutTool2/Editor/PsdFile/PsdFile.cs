@@ -142,9 +142,9 @@
         internal byte[][] ImageData { get; private set; }
 
         /// <summary>
-        /// Gets or sets the ImageCompression
+        /// Gets the compression used by the merged composite image channels.
         /// </summary>
-        private ImageCompression ImageCompression { get; set; }
+        internal ImageCompression ImageCompression { get; private set; }
 
         /// <summary>
         /// Loads the header data from a PSD file

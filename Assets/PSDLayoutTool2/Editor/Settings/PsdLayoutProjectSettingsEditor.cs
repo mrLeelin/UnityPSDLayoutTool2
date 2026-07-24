@@ -9,7 +9,7 @@ namespace PsdLayoutTool2
     /// PSD 资源 Inspector 只提供用于打开该配置资产编辑窗口的按钮。
     /// </summary>
     [CustomEditor(typeof(PsdLayoutProjectSettings))]
-    internal sealed class PsdLayoutProjectSettingsEditor : Editor
+    internal sealed class PsdLayoutProjectSettingsEditor : UnityEditor.Editor
     {
         private string commonAssetNamingError = string.Empty;
 

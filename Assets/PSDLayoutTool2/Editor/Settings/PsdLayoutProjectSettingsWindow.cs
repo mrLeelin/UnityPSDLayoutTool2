@@ -9,7 +9,7 @@ namespace PsdLayoutTool2
     internal sealed class PsdLayoutProjectSettingsWindow : EditorWindow
     {
         private PsdLayoutProjectSettings settings;
-        private Editor settingsEditor;
+        private UnityEditor.Editor settingsEditor;
         private Vector2 scrollPosition;
 
         internal static void Open(PsdLayoutProjectSettings targetSettings)
@@ -34,7 +34,7 @@ namespace PsdLayoutTool2
             EditorGUILayout.ObjectField("配置文件", settings, typeof(PsdLayoutProjectSettings), false);
             EditorGUILayout.Space();
 
-            Editor.CreateCachedEditor(settings, typeof(PsdLayoutProjectSettingsEditor), ref settingsEditor);
+            UnityEditor.Editor.CreateCachedEditor(settings, typeof(PsdLayoutProjectSettingsEditor), ref settingsEditor);
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
             settingsEditor.OnInspectorGUI();
             EditorGUILayout.EndScrollView();
