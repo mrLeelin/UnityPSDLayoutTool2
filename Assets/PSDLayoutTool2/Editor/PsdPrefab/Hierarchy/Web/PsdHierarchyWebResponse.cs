@@ -18,7 +18,12 @@ namespace PsdLayoutTool2.Editor
 
         public static PsdHierarchyWebResponse Json(string json)
         {
-            return new PsdHierarchyWebResponse(200, "application/json; charset=utf-8",
+            return Json(200, json);
+        }
+
+        public static PsdHierarchyWebResponse Json(int statusCode, string json)
+        {
+            return new PsdHierarchyWebResponse(statusCode, "application/json; charset=utf-8",
                 Encoding.UTF8.GetBytes(json ?? string.Empty));
         }
 

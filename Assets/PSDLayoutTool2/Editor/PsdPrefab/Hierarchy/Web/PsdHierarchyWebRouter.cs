@@ -3,7 +3,8 @@ namespace PsdLayoutTool2.Editor
     using System;
     using System.Collections.Generic;
 
-    /// <summary>Routes already-parsed loopback requests without touching Unity APIs.</summary>
+    /// <summary>Routes already-parsed loopback requests without touching Unity APIs.
+    /// Injected handlers must not block synchronously; controllers should enqueue work and return.</summary>
     internal sealed class PsdHierarchyWebRouter
     {
         private readonly Func<string, PsdHierarchyWebSession> findSession;

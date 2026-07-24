@@ -61,6 +61,28 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task Server_RejectsInvalidHeaderSyntaxAndAmbiguousFraming()
+        {
+            using (var server = CreateServer())
+            {
+                string prefix = "GET /sessions/known/data HTTP/1.1\r\n";
+                string host = "Host: localhost:" + server.port + "\r\nX-PSD-Session-Token: token\r\n";
+                string[] invalid =
+                {
+                    prefix + "Host : localhost:" + server.port + "\r\nX-PSD-Session-Token: token\r\n\r\n",
+                    prefix + host + "Content-Length : 0\r\n\r\n",
+                    prefix + host + "Transfer-Encoding : chunked\r\n\r\n",
+                    prefix + host + "Content-Length: 0\r\nContent-Length: 0\r\n\r\n",
+                    prefix + host + "Content-Length: 0\r\nContent-Length: 1\r\n\r\n",
+                    prefix + host + "Content-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n",
+                    prefix + host + "Bad Header: value\r\n\r\n"
+                };
+                foreach (string request in invalid)
+                    Assert.That((await SendAsync(server.port, request)).statusCode, Is.EqualTo(400));
+            }
+        }
+
+        [Test]
         public async Task Server_ReturnsNotFoundForUnknownSessionTraversalAndRoute()
         {
             using (var server = CreateServer())
@@ -166,7 +188,60 @@ namespace PsdLayoutTool2.Tests
             Assert.DoesNotThrow(() => server.Dispose());
         }
 
-        private static PsdHierarchyWebServer CreateServer()
+        [TestCase("GET /sessions/known/data HTTP/1.1\r\n")]
+        [TestCase("GET /sessions/known/data HTTP/1.1\r\nHost: localhost:1\r\n")]
+        [TestCase("POST /sessions/known/data HTTP/1.1\r\nHost: localhost:1\r\nContent-Length: 4\r\n\r\na")]
+        public async Task Server_TimesOutPartialRequestsAndAcceptsTheNextClient(string partialRequest)
+        {
+            using (var server = CreateServer(TimeSpan.FromMilliseconds(100)))
+            using (var client = await ConnectAndWriteAsync(server.port, partialRequest.Replace("localhost:1", "localhost:" + server.port)))
+            {
+                await WaitForCloseAsync(client);
+                Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                    Is.EqualTo(200));
+            }
+        }
+
+        [Test]
+        public async Task Server_DisposeClosesAClientDuringRead()
+        {
+            var server = CreateServer(TimeSpan.FromSeconds(10));
+            try
+            {
+                using (var client = await ConnectAndWriteAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n"))
+                {
+                    server.Dispose();
+                    await WaitForCloseAsync(client);
+                }
+            }
+            finally { server.Dispose(); }
+        }
+
+        [Test]
+        public async Task Server_ContainsThrowingHandlersAndContinuesAcceptingClients()
+        {
+            int calls = 0;
+            var errors = new List<Exception>();
+            using (var server = new PsdHierarchyWebServer(new PsdHierarchyWebRouter(
+                id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
+                (request, session) =>
+                {
+                    calls++;
+                    if (calls == 1) throw new InvalidOperationException("token and body must not be logged");
+                    return PsdHierarchyWebResponse.Json("{\"healthy\":true}");
+                }), TimeSpan.FromSeconds(1), errors.Add))
+            {
+                RawResponse failed = await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"));
+                RawResponse healthy = await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"));
+                Assert.That(failed.statusCode, Is.EqualTo(500));
+                Assert.That(Encoding.UTF8.GetString(failed.body), Is.EqualTo("{\"error\":\"internal_error\"}"));
+                Assert.That(healthy.statusCode, Is.EqualTo(200));
+                Assert.That(errors.Count, Is.EqualTo(1));
+                StringAssert.DoesNotContain("token", errors[0].Message);
+            }
+        }
+
+        private static PsdHierarchyWebServer CreateServer(TimeSpan? deadline = null)
         {
             return new PsdHierarchyWebServer(new PsdHierarchyWebRouter(
                 id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
@@ -177,7 +252,25 @@ namespace PsdLayoutTool2.Tests
                             Encoding.UTF8.GetString(request.body) + "\"}")
                         : request.path.EndsWith("body-size", StringComparison.Ordinal)
                             ? PsdHierarchyWebResponse.Json("{\"bytes\":" + request.body.Length + "}")
-                            : PsdHierarchyWebResponse.Json("{\"ok\":true}")));
+                            : PsdHierarchyWebResponse.Json("{\"ok\":true}")), deadline ?? TimeSpan.FromSeconds(1), null);
+        }
+
+        private static async Task<TcpClient> ConnectAndWriteAsync(int port, string request)
+        {
+            var client = new TcpClient();
+            await client.ConnectAsync("127.0.0.1", port);
+            byte[] bytes = Encoding.ASCII.GetBytes(request);
+            await client.GetStream().WriteAsync(bytes, 0, bytes.Length);
+            return client;
+        }
+
+        private static async Task WaitForCloseAsync(TcpClient client)
+        {
+            var buffer = new byte[1];
+            Task<int> read = client.GetStream().ReadAsync(buffer, 0, buffer.Length);
+            Task completed = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.That(completed, Is.SameAs(read), "Server did not close the stalled request.");
+            Assert.That(await read, Is.EqualTo(0));
         }
 
         private static string Request(int port, string path, string token)

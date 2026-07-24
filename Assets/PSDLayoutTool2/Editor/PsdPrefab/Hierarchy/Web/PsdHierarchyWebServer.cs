@@ -7,6 +7,7 @@ namespace PsdLayoutTool2.Editor
     using System.Net;
     using System.Net.Sockets;
     using System.Text;
+    using System.Threading;
     using System.Threading.Tasks;
 
     /// <summary>Minimal HTTP/1.1 listener intentionally limited to local PSD workbench traffic.</summary>
@@ -20,14 +21,25 @@ namespace PsdLayoutTool2.Editor
         private readonly object gate = new object();
         private readonly TcpListener listener;
         private readonly PsdHierarchyWebRouter router;
+        private readonly TimeSpan requestDeadline;
+        private readonly Action<Exception> errorSink;
+        private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         private readonly Task acceptLoop;
         private TcpClient activeClient;
         private bool disposed;
 
         public PsdHierarchyWebServer(PsdHierarchyWebRouter router)
+            : this(router, TimeSpan.FromSeconds(10), null)
+        {
+        }
+
+        public PsdHierarchyWebServer(PsdHierarchyWebRouter router, TimeSpan requestDeadline, Action<Exception> errorSink)
         {
             if (router == null) throw new ArgumentNullException(nameof(router));
+            if (requestDeadline <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(requestDeadline));
             this.router = router;
+            this.requestDeadline = requestDeadline;
+            this.errorSink = errorSink;
             listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             port = ((IPEndPoint)listener.LocalEndpoint).Port;
@@ -45,9 +57,12 @@ namespace PsdLayoutTool2.Editor
                 disposed = true;
                 client = activeClient;
             }
+            shutdown.Cancel();
             try { listener.Stop(); } catch (SocketException) { }
             try { client?.Close(); } catch (SocketException) { }
-            try { acceptLoop.Wait(TimeSpan.FromSeconds(2)); } catch (AggregateException) { }
+            try { acceptLoop.Wait(TimeSpan.FromSeconds(2)); }
+            catch (AggregateException exception) { Report(exception); }
+            finally { shutdown.Dispose(); }
         }
 
         private async Task AcceptLoopAsync()
@@ -67,13 +82,29 @@ namespace PsdLayoutTool2.Editor
                     if (disposed) { client.Close(); return; }
                     activeClient = client;
                 }
-                try { await ProcessClientAsync(client).ConfigureAwait(false); }
+                try { await ProcessClientWithinDeadlineAsync(client).ConfigureAwait(false); }
                 finally
                 {
                     client.Close();
                     lock (gate) { if (ReferenceEquals(activeClient, client)) activeClient = null; }
                 }
             }
+        }
+
+        private async Task ProcessClientWithinDeadlineAsync(TcpClient client)
+        {
+            // Parsing uses blocking stream reads, so schedule it before arming the deadline race.
+            Task process = Task.Run((Func<Task>)(() => ProcessClientAsync(client)));
+            Task timeout = Task.Delay(requestDeadline, shutdown.Token);
+            Task completed = await Task.WhenAny(process, timeout).ConfigureAwait(false);
+            if (completed == process)
+            {
+                await process.ConfigureAwait(false);
+                return;
+            }
+
+            try { client.Close(); } catch (SocketException) { }
+            ObserveFault(process);
         }
 
         private async Task ProcessClientAsync(TcpClient client)
@@ -88,7 +119,16 @@ namespace PsdLayoutTool2.Editor
                     await WriteResponseAsync(stream, PsdHierarchyWebResponse.Empty(errorStatus)).ConfigureAwait(false);
                     return;
                 }
-                await WriteResponseAsync(stream, router.Route(request)).ConfigureAwait(false);
+                PsdHierarchyWebResponse response;
+                try { response = router.Route(request); }
+                catch (Exception exception)
+                {
+                    ReportRouteFailure(exception);
+                    await WriteResponseAsync(stream, PsdHierarchyWebResponse.Json(500, "{\"error\":\"internal_error\"}"))
+                        .ConfigureAwait(false);
+                    return;
+                }
+                await WriteResponseAsync(stream, response).ConfigureAwait(false);
             }
             catch (IOException) { }
             catch (ObjectDisposedException) { }
@@ -121,7 +161,7 @@ namespace PsdLayoutTool2.Editor
                 if (headerBytes > MaxHeaderBytes) { errorStatus = 413; return false; }
                 if (line.Length == 0) break;
                 int colon = line.IndexOf(':');
-                if (colon <= 0 || headers.ContainsKey(line.Substring(0, colon))) return false;
+                if (colon <= 0 || !IsFieldName(line, colon) || headers.ContainsKey(line.Substring(0, colon))) return false;
                 headers.Add(line.Substring(0, colon), line.Substring(colon + 1).Trim());
             }
             if (!IsExpectedHost(headers, port)) return false;
@@ -140,6 +180,17 @@ namespace PsdLayoutTool2.Editor
                 received += read;
             }
             request = new PsdHierarchyWebRequest(requestParts[0], requestParts[1], headers, body);
+            return true;
+        }
+
+        private static bool IsFieldName(string line, int colon)
+        {
+            for (int index = 0; index < colon; index++)
+            {
+                char character = line[index];
+                if (!((character >= '0' && character <= '9') || (character >= 'A' && character <= 'Z') ||
+                    (character >= 'a' && character <= 'z') || "!#$%&'*+-.^_`|~".IndexOf(character) >= 0)) return false;
+            }
             return true;
         }
 
@@ -186,6 +237,24 @@ namespace PsdLayoutTool2.Editor
             byte[] headerBytes = Encoding.ASCII.GetBytes(headers);
             await stream.WriteAsync(headerBytes, 0, headerBytes.Length).ConfigureAwait(false);
             if (response.body.Length > 0) await stream.WriteAsync(response.body, 0, response.body.Length).ConfigureAwait(false);
+        }
+
+        private void ReportRouteFailure(Exception exception)
+        {
+            Report(new InvalidOperationException("Psd hierarchy web route handler failed: " + exception.GetType().Name));
+        }
+
+        private void ObserveFault(Task task)
+        {
+            task.ContinueWith(completed =>
+            {
+                if (completed.IsFaulted) Report(completed.Exception);
+            }, TaskContinuationOptions.OnlyOnFaulted);
+        }
+
+        private void Report(Exception exception)
+        {
+            try { errorSink?.Invoke(exception); } catch { }
         }
     }
 }
