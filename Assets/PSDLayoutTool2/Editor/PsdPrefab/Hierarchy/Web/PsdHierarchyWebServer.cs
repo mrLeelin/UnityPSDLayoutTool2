@@ -2,6 +2,7 @@ namespace PsdLayoutTool2.Editor
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Globalization;
     using System.IO;
     using System.Net;
@@ -25,6 +26,7 @@ namespace PsdLayoutTool2.Editor
         private readonly PsdHierarchyWebRouter router;
         private readonly TimeSpan requestDeadline;
         private readonly Action<Exception> errorSink;
+        private readonly Action<CancellationToken> processingProbe;
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         private readonly Task acceptLoop;
         private TcpClient activeClient;
@@ -37,13 +39,23 @@ namespace PsdLayoutTool2.Editor
         }
 
         public PsdHierarchyWebServer(PsdHierarchyWebRouter router, TimeSpan requestDeadline, Action<Exception> errorSink)
+            : this(router, requestDeadline, errorSink, null)
+        {
+        }
+
+        internal PsdHierarchyWebServer(
+            PsdHierarchyWebRouter router,
+            TimeSpan requestDeadline,
+            Action<Exception> errorSink,
+            Action<CancellationToken> processingProbe)
         {
             if (router == null) throw new ArgumentNullException(nameof(router));
             if (requestDeadline < MinimumRequestDeadline || requestDeadline > MaximumRequestDeadline)
                 throw new ArgumentOutOfRangeException(nameof(requestDeadline));
             this.router = router;
             this.requestDeadline = requestDeadline;
-            this.errorSink = errorSink;
+            this.errorSink = errorSink ?? ReportToTrace;
+            this.processingProbe = processingProbe;
             listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             port = ((IPEndPoint)listener.LocalEndpoint).Port;
@@ -110,7 +122,11 @@ namespace PsdLayoutTool2.Editor
                     Task completed = await Task.WhenAny(process, cancellation).ConfigureAwait(false);
                     if (completed == process)
                     {
-                        await process.ConfigureAwait(false);
+                        try { await process.ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested || shutdown.IsCancellationRequested)
+                        {
+                            // Deadline and shutdown cancellation are normal per-client terminal states.
+                        }
                         return;
                     }
 
@@ -129,6 +145,8 @@ namespace PsdLayoutTool2.Editor
         {
             try
             {
+                processingProbe?.Invoke(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 NetworkStream stream = client.GetStream();
                 PsdHierarchyWebRequest request;
                 int errorStatus;
@@ -280,6 +298,12 @@ namespace PsdLayoutTool2.Editor
         private void Report(Exception exception)
         {
             try { errorSink?.Invoke(exception); } catch { }
+        }
+
+        private static void ReportToTrace(Exception exception)
+        {
+            Trace.WriteLine("PsdHierarchyWebServer exception type: " + exception.GetType().FullName);
+            Trace.WriteLine(exception.StackTrace ?? string.Empty);
         }
     }
 }

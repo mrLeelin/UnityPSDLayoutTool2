@@ -3,7 +3,10 @@ namespace PsdLayoutTool2.Tests
     using System;
     using System.Collections.Generic;
     using System.Net.Sockets;
+    using System.Diagnostics;
+    using System.IO;
     using System.Text;
+    using System.Threading;
     using System.Threading.Tasks;
     using NUnit.Framework;
     using PsdLayoutTool2.Editor;
@@ -250,6 +253,49 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(healthy.statusCode, Is.EqualTo(200));
                 Assert.That(errors.Count, Is.EqualTo(1));
                 StringAssert.DoesNotContain("token", errors[0].Message);
+            }
+        }
+
+        [Test]
+        public async Task Server_ContainsCooperativeDeadlineCancellationAndRecovers()
+        {
+            int probeCalls = 0;
+            using (var server = new PsdHierarchyWebServer(new PsdHierarchyWebRouter(
+                id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
+                (request, session) => PsdHierarchyWebResponse.Json("{\"ok\":true}")), TimeSpan.FromMilliseconds(100), null,
+                token => { if (Interlocked.Increment(ref probeCalls) == 1) token.WaitHandle.WaitOne(); }))
+            using (var stalled = await ConnectAndWriteAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n"))
+            {
+                await WaitForCloseAsync(stalled);
+                Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                    Is.EqualTo(200));
+            }
+        }
+
+        [Test]
+        public async Task Server_DefaultDiagnosticsUseTraceWithoutSecretText()
+        {
+            var output = new StringWriter();
+            var listener = new TextWriterTraceListener(output);
+            Trace.Listeners.Add(listener);
+            try
+            {
+                using (var server = new PsdHierarchyWebServer(new PsdHierarchyWebRouter(
+                    id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
+                    (request, session) => { throw new InvalidOperationException("secret-token-and-body"); })))
+                {
+                    Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                        Is.EqualTo(500));
+                }
+                listener.Flush();
+                StringAssert.Contains(typeof(InvalidOperationException).FullName, output.ToString());
+                StringAssert.DoesNotContain("secret-token-and-body", output.ToString());
+            }
+            finally
+            {
+                Trace.Listeners.Remove(listener);
+                listener.Dispose();
+                output.Dispose();
             }
         }
 
