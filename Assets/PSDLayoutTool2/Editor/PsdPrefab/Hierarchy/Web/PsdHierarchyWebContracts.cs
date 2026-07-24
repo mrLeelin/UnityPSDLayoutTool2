@@ -2,7 +2,10 @@ namespace PsdLayoutTool2.Editor
 {
     using System;
     using System.Collections.Generic;
+    using Newtonsoft.Json;
+    using Newtonsoft.Json.Converters;
 
+    [JsonConverter(typeof(StringEnumConverter), true)]
     internal enum PsdHierarchyWebOperationKind
     {
         None,
@@ -12,6 +15,7 @@ namespace PsdLayoutTool2.Editor
         CreatePrefabs
     }
 
+    [JsonConverter(typeof(StringEnumConverter), true)]
     internal enum PsdHierarchyWebOperationStatus
     {
         Idle,

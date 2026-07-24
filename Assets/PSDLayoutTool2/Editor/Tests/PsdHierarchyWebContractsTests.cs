@@ -100,6 +100,31 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void OperationEnums_UseStableLowerCamelStringTokens()
+        {
+            AssertEnumToken(PsdHierarchyWebOperationKind.None, "none");
+            AssertEnumToken(PsdHierarchyWebOperationKind.Analyze, "analyze");
+            AssertEnumToken(PsdHierarchyWebOperationKind.Refine, "refine");
+            AssertEnumToken(PsdHierarchyWebOperationKind.Apply, "apply");
+            AssertEnumToken(PsdHierarchyWebOperationKind.CreatePrefabs, "createPrefabs");
+
+            AssertEnumToken(PsdHierarchyWebOperationStatus.Idle, "idle");
+            AssertEnumToken(PsdHierarchyWebOperationStatus.Running, "running");
+            AssertEnumToken(PsdHierarchyWebOperationStatus.Succeeded, "succeeded");
+            AssertEnumToken(PsdHierarchyWebOperationStatus.Failed, "failed");
+        }
+
+        [Test]
+        public void OperationState_HasExactProtocolShape()
+        {
+            string json = JsonConvert.SerializeObject(new PsdHierarchyWebOperationState());
+
+            Assert.That(
+                json,
+                Is.EqualTo("{\"operationId\":\"\",\"kind\":\"none\",\"status\":\"idle\",\"message\":\"\"}"));
+        }
+
+        [Test]
         public void Contracts_DefaultToEmptySerializableValues()
         {
             var session = new PsdHierarchyWebSessionDto();
@@ -127,6 +152,11 @@ namespace PsdLayoutTool2.Tests
             Assert.That(accept.groupKeys, Is.Empty);
             Assert.That(apply.confirmed, Is.False);
             Assert.That(create.candidateIds, Is.Empty);
+        }
+
+        private static void AssertEnumToken<T>(T value, string expectedToken)
+        {
+            Assert.That(JsonConvert.SerializeObject(value), Is.EqualTo("\"" + expectedToken + "\""));
         }
     }
 }
