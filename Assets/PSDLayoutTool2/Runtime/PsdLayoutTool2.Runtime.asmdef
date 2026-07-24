@@ -1,0 +1,14 @@
+{
+  "name": "PsdLayoutTool2.Runtime",
+  "rootNamespace": "PsdLayoutTool2",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

@@ -1,0 +1,26 @@
+{
+  "name": "PsdLayoutTool2.Editor",
+  "rootNamespace": "PsdLayoutTool2",
+  "references": [
+    "PsdLayoutTool2.Runtime",
+    "Unity.TextMeshPro",
+    "UnityEngine.UI"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [
+    {
+      "name": "com.unity.test-framework",
+      "expression": "1.0.0",
+      "define": "UNITY_INCLUDE_TESTS"
+    }
+  ],
+  "noEngineReferences": false
+}
