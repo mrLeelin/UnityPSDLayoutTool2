@@ -2,6 +2,19 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.3] - 2026-07-24
+
+### Added
+
+- Added semantic hierarchy grouping, candidate analysis, and safer incremental Prefab adoption.
+- Added Photoshop text-transform, shadow, and material conversion coverage.
+- Added Common Texture visual-transform matching for public replacement sprites.
+
+### Changed
+
+- Improved hierarchy-plan validation, visual-leaf verification, and generated text-material synchronization.
+- Removed generated Superpowers planning and specification artifacts from the package repository.
+
 ## [0.1.2] - 2026-07-24
 
 ### Added

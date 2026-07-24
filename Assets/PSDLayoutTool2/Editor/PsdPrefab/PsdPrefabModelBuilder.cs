@@ -131,11 +131,22 @@ namespace PsdLayoutTool2
             if (layer.IsTextLayer)
             {
                 PsdTextStyle style = layer.TextStyle ?? PsdTextStyle.CreateDefault(layer.FontSize);
+                float shadowSoftness;
+                float shadowDilate;
+                PsdTextEffectConversion.SplitShadowBlur(
+                    style.ShadowBlur,
+                    style.ShadowChoke,
+                    out shadowSoftness,
+                    out shadowDilate);
+                Vector2 shadowOffset = PsdTextEffectConversion.ConvertShadowOffset(
+                    style.ShadowAngle,
+                    style.ShadowDistance);
                 node.text = new PsdPrefabTextModel
                 {
                     contents = layer.Text ?? string.Empty,
                     fontFamily = layer.FontName ?? string.Empty,
-                    fontSize = layer.FontSize,
+                    fontSize = style.Transform.EffectiveFontSize(layer.FontSize),
+                    characterHorizontalScale = style.Transform.CharacterHorizontalScale,
                     fillColor = layer.FillColor,
                     lineHeight = style.LineHeight,
                     effect = new PsdPrefabTextEffectModel
@@ -145,9 +156,10 @@ namespace PsdLayoutTool2
                         outlineWidth = style.StrokeWidth,
                         hasShadow = style.ShadowEnabled,
                         shadowColor = style.ShadowColor,
-                        shadowOffsetX = Mathf.Cos(style.ShadowAngle * Mathf.Deg2Rad) * style.ShadowDistance,
-                        shadowOffsetY = Mathf.Sin(style.ShadowAngle * Mathf.Deg2Rad) * style.ShadowDistance,
-                        shadowSoftness = style.ShadowBlur
+                        shadowOffsetX = shadowOffset.x,
+                        shadowOffsetY = shadowOffset.y,
+                        shadowSoftness = shadowSoftness,
+                        shadowDilate = shadowDilate
                     }
                 };
             }

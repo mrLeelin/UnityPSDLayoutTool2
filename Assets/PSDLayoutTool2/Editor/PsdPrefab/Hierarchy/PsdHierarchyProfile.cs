@@ -202,6 +202,30 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
+        /// Rebuilds the compact source baseline required by the conversion diff.
+        /// Profile nodes already retain the accepted content fingerprint keyed by
+        /// native PSD layer ID, so this does not introduce a second identity store.
+        /// </summary>
+        public PsdPrefabDocumentModel BuildPreviousDocument()
+        {
+            var result = new PsdPrefabDocumentModel
+            {
+                sourceFingerprint = sourceFingerprint ?? string.Empty
+            };
+            foreach (PsdHierarchyProfileNode node in (nodes ?? new List<PsdHierarchyProfileNode>())
+                         .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
+                         .OrderBy(node => node.stableId, StringComparer.Ordinal))
+            {
+                result.nodes.Add(new PsdPrefabNodeModel
+                {
+                    stableId = node.stableId,
+                    contentFingerprint = node.contentFingerprint ?? string.Empty
+                });
+            }
+            return result;
+        }
+
+        /// <summary>
         /// Explicit schema gate for callers loading a persisted Profile. Older
         /// profiles require a deterministic rebuild from the PSD; future schemas
         /// are rejected so an older tool cannot silently discard new decisions.

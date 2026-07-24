@@ -29,15 +29,21 @@ namespace PsdLayoutTool2
                 return null;
             }
 
+            if (CanUseBaseMaterialDirectly(text.effect, baseMaterial))
+            {
+                return baseMaterial;
+            }
+
             string fontPath = AssetDatabase.GetAssetPath(font);
             string baseMaterialPath = AssetDatabase.GetAssetPath(baseMaterial);
             string signature = PsdPrefabTextMaterialSignature.Build(text, fontPath, baseMaterialPath);
             string materialFolder = GetCommonMaterialFolder(baseMaterial, font);
             EnsureAssetFolder(materialFolder);
 
-            string materialPath = materialFolder + "/PSDTextMaterial_" + ComputeFnv1a(signature) + ".mat";
+            string materialPath = materialFolder + "/" +
+                BuildMaterialFileName(font.name, ComputeFnv1a(signature));
             Material material = new Material(baseMaterial);
-            ApplyMaterialProperties(material, text.effect, text.fontSize);
+            ApplyMaterialProperties(material, text.effect, text.fontSize, font);
             try
             {
                 for (int variant = 0; ; variant++)
@@ -50,6 +56,7 @@ namespace PsdLayoutTool2
                     {
                         if (AreMaterialsEquivalent(existing, material))
                         {
+                            EnsureMainObjectNameMatchesFileName(existing, candidatePath);
                             return existing;
                         }
 
@@ -75,6 +82,27 @@ namespace PsdLayoutTool2
                 {
                     UnityEngine.Object.DestroyImmediate(material);
                 }
+            }
+        }
+
+        internal static void EnsureMainObjectNameMatchesFileName(Material material, string assetPath)
+        {
+            if (material == null || string.IsNullOrEmpty(assetPath))
+            {
+                return;
+            }
+
+            string expectedName = Path.GetFileNameWithoutExtension(assetPath);
+            if (string.Equals(material.name, expectedName, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            material.name = expectedName;
+            EditorUtility.SetDirty(material);
+            if (AssetDatabase.Contains(material))
+            {
+                AssetDatabase.SaveAssetIfDirty(material);
             }
         }
 
@@ -195,6 +223,15 @@ namespace PsdLayoutTool2
             PsdPrefabTextEffectModel effect,
             float fontSize)
         {
+            ApplyMaterialProperties(material, effect, fontSize, null);
+        }
+
+        private static void ApplyMaterialProperties(
+            Material material,
+            PsdPrefabTextEffectModel effect,
+            float fontSize,
+            TMP_FontAsset font)
+        {
             effect = effect ?? new PsdPrefabTextEffectModel();
             bool hasOutline = effect.hasOutline && effect.outlineWidth > 0.001f;
             bool hasShadow = effect.hasShadow;
@@ -204,10 +241,33 @@ namespace PsdLayoutTool2
             float outlineWidth = PsdTextEffectConversion.ConvertOutline(
                 effect.outlineWidth,
                 fontSize);
-            float shadowOffsetX = NormalizePsdPixelValue(effect.shadowOffsetX, fontSize, true);
-            float shadowOffsetY = NormalizePsdPixelValue(effect.shadowOffsetY, fontSize, true);
-            float shadowSoftness = NormalizePsdPixelValue(effect.shadowSoftness, fontSize);
-            float shadowDilate = NormalizePsdPixelValue(effect.shadowDilate, fontSize, true);
+            float pointSize = font == null ? fontSize : font.faceInfo.pointSize;
+            float gradientScale = material.HasProperty("_GradientScale")
+                ? material.GetFloat("_GradientScale")
+                : 1f;
+            float shadowOffsetX = PsdTextEffectConversion.ConvertUnderlayPixelValue(
+                effect.shadowOffsetX,
+                fontSize,
+                pointSize,
+                gradientScale,
+                true);
+            float shadowOffsetY = PsdTextEffectConversion.ConvertUnderlayPixelValue(
+                effect.shadowOffsetY,
+                fontSize,
+                pointSize,
+                gradientScale,
+                true);
+            float shadowSoftness = PsdTextEffectConversion.ConvertUnderlayPixelValue(
+                effect.shadowSoftness,
+                fontSize,
+                pointSize,
+                gradientScale);
+            float shadowDilate = PsdTextEffectConversion.ConvertUnderlayPixelValue(
+                effect.shadowDilate,
+                fontSize,
+                pointSize,
+                gradientScale,
+                true);
 
             SetMaterialFloat(material, "_OutlineWidth", hasOutline ? outlineWidth : 0f);
             SetMaterialFloat(
@@ -224,15 +284,22 @@ namespace PsdLayoutTool2
             SetKeyword(material, "UNDERLAY_ON", hasShadow);
         }
 
-        private static float NormalizePsdPixelValue(float pixelValue, float fontSize, bool signed = false)
+        internal static bool CanUseBaseMaterialDirectly(
+            PsdPrefabTextEffectModel effect,
+            Material baseMaterial)
         {
-            if (fontSize <= 0f)
+            if (baseMaterial == null)
             {
-                return 0f;
+                return false;
             }
 
-            float normalized = pixelValue / fontSize;
-            return signed ? Mathf.Clamp(normalized, -1f, 1f) : Mathf.Clamp01(normalized);
+            effect = effect ?? new PsdPrefabTextEffectModel();
+            bool hasOutline = effect.hasOutline && effect.outlineWidth > 0.001f;
+            return !hasOutline &&
+                !effect.hasShadow &&
+                !baseMaterial.IsKeywordEnabled("OUTLINE_ON") &&
+                !baseMaterial.IsKeywordEnabled("UNDERLAY_ON") &&
+                !baseMaterial.IsKeywordEnabled("UNDERLAY_INNER");
         }
 
         internal static bool IsCompatibleWithFont(Material material, TMP_FontAsset font)
@@ -320,6 +387,23 @@ namespace PsdLayoutTool2
 
                 return hash.ToString("x8");
             }
+        }
+
+        internal static string BuildMaterialFileName(string fontName, string signatureHash)
+        {
+            string source = string.IsNullOrWhiteSpace(fontName) ? "TMPFont" : fontName.Trim();
+            char[] invalid = Path.GetInvalidFileNameChars();
+            string prefix = new string(source
+                .Select(character => invalid.Contains(character) ? '_' : character)
+                .ToArray())
+                .Trim()
+                .TrimEnd('.');
+            if (string.IsNullOrEmpty(prefix))
+            {
+                prefix = "TMPFont";
+            }
+
+            return prefix + "_PSDTextMaterial_" + (signatureHash ?? string.Empty) + ".mat";
         }
     }
 }

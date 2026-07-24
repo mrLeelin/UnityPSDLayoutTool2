@@ -160,6 +160,20 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void PersistedProfileRebuildsPreviousDocumentForRealContentDiff()
+        {
+            PsdPrefabDocumentModel original = Document(
+                Node("101", "A", 0, Rect.zero, "pixels-a"),
+                Node("102", "B", 1, Rect.zero, "pixels-b"));
+            PsdHierarchyProfile profile = Profile(original, "101", "102");
+            PsdPrefabDocumentModel previous = profile.BuildPreviousDocument();
+            List<PsdPrefabNodeChange> changes = PsdPrefabDiff.Compare(previous, original);
+
+            Assert.That(changes.Select(change => change.kind), Is.All.EqualTo(PsdPrefabChangeKind.Unchanged));
+            Assert.That(changes.Select(change => change.stableId), Is.EquivalentTo(new[] { "101", "102" }));
+        }
+
+        [Test]
         public void SemanticDuplicateAndOverlappingGroupsAreNormalized()
         {
             PsdPrefabDocumentModel document = Document(

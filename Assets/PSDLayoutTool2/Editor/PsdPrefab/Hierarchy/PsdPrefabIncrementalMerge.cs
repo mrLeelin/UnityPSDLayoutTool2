@@ -111,7 +111,8 @@ namespace PsdLayoutTool2
             IReadOnlyDictionary<string, RectTransform> candidateByStableId,
             PsdHierarchyProfile profile,
             IEnumerable<PsdHierarchyProfileGroup> previousGroups,
-            PsdHierarchyPlan plan)
+            PsdHierarchyPlan plan,
+            ISet<string> importerValueSyncStableIds = null)
         {
             if (string.IsNullOrEmpty(prefabPath)) throw new ArgumentException("Prefab path is required.", "prefabPath");
             if (existingContents == null) throw new ArgumentNullException("existingContents");
@@ -134,6 +135,8 @@ namespace PsdLayoutTool2
             Dictionary<long, RectTransform> existingByLocalId = ResolveLoadedObjectsByLocalId(prefabPath, existingContents);
             Dictionary<RectTransform, long> localIdByExisting = existingByLocalId.ToDictionary(pair => pair.Value, pair => pair.Key);
             var result = new PsdPrefabIncrementalMergeResult();
+            var firstAdoptedStableIds = new HashSet<string>(StringComparer.Ordinal);
+            var createdStableIds = new HashSet<string>(StringComparer.Ordinal);
 
             // Profile identity is the sole ownership source after adoption.
             // lastKnownPath is intentionally excluded from matching.
@@ -158,6 +161,7 @@ namespace PsdLayoutTool2
                     record.localFileId = adoptedLocalId;
                     record.lastKnownPath = HierarchyPath(adopted, existingContents.transform);
                     result.generatedByStableId.Add(record.stableId, adopted);
+                    firstAdoptedStableIds.Add(record.stableId);
                     continue;
                 }
                 if (record.pendingCreation)
@@ -203,6 +207,7 @@ namespace PsdLayoutTool2
                     target = CreateGeneratedObject(pair.Value, parent);
                     result.generatedByStableId.Add(pair.Key, target);
                     created.Add(target);
+                    createdStableIds.Add(pair.Key);
                 }
             }
             try
@@ -220,7 +225,22 @@ namespace PsdLayoutTool2
                     PsdHierarchyProfileNode record = recordsByStableId[pair.Key];
                     SynchronizeImporterOwnedComponents(existingContents.transform, pair.Value,
                         result.generatedByStableId[pair.Key], record, targetByCandidate);
-                    CopyImporterOwnedValues(pair.Value, result.generatedByStableId[pair.Key]);
+                    // Initial adoption establishes identity for an already-authored
+                    // Prefab. Preserve its visual references; a later incremental
+                    // PSD update owns normal component synchronization.
+                    TextMeshProUGUI candidateText = pair.Value.GetComponent<TextMeshProUGUI>();
+                    TextMeshProUGUI existingText = result.generatedByStableId[pair.Key]
+                        .GetComponent<TextMeshProUGUI>();
+                    bool refreshGeneratedTextMaterial = candidateText != null && existingText != null &&
+                        ShouldRefreshGeneratedTextMaterial(
+                            existingText.fontSharedMaterial,
+                            candidateText.fontSharedMaterial);
+                    if (!firstAdoptedStableIds.Contains(pair.Key) &&
+                        (importerValueSyncStableIds == null ||
+                         createdStableIds.Contains(pair.Key) ||
+                         importerValueSyncStableIds.Contains(pair.Key) ||
+                         refreshGeneratedTextMaterial))
+                        CopyImporterOwnedValues(pair.Value, result.generatedByStableId[pair.Key]);
                 }
 
                 foreach (string stableId in result.generatedByStableId.Keys
@@ -256,14 +276,119 @@ namespace PsdLayoutTool2
             if (exact != null && IsAdoptionEvidenceEqual(candidate, exact) && !HasUnexpectedProjectComponents(exact, candidate))
                 return exact;
 
-            // Names and resource references are useful diagnostics, but never
-            // sufficient when source hierarchy/sibling evidence does not agree.
-            int visualMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
+            // A hierarchy plan may introduce grouping wrappers between imports,
+            // so the original sibling index path is not always retained.  It is
+            // still safe to keep project-owned references when there is exactly
+            // one complete visual match.  Multiple matches must remain rejected
+            // rather than guessing from a name or resource reference alone.
+            RectTransform[] visualMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
                 .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
-                .Count(value => IsVisualEvidenceEqual(candidate, value));
-            throw new PsdPrefabIncrementalMergeException(visualMatches > 1
-                ? "First adoption is ambiguous: multiple same-name/resource objects match '" + candidate.name + "'."
+                .Where(value => IsVisualEvidenceEqual(candidate, value))
+                .ToArray();
+            if (visualMatches.Length == 1) return visualMatches[0];
+
+            // First-time organization can also be applied after a PSD import
+            // changed an importer-owned style (for example TMP outline material).
+            // The old object is still safe to adopt only when its name, emitted
+            // component shape, and full RectTransform geometry identify exactly
+            // one candidate.  A zero or multiple result remains fail-closed.
+            RectTransform[] geometryMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
+                .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
+                .Where(value => IsGeometryEvidenceEqual(candidate, value))
+                .ToArray();
+            if (geometryMatches.Length == 1) return geometryMatches[0];
+
+            // Candidate roots can be built under a different canvas context on
+            // first migration. Anchors and pivots are normalized later, while
+            // position and size still distinguish repeated emitted layers.
+            RectTransform[] positionMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
+                .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
+                .Where(value => IsNormalizedPositionEvidenceEqual(candidateRoot, existingRoot, candidate, value))
+                .ToArray();
+            if (positionMatches.Length == 1) return positionMatches[0];
+
+            // Some exported PSD layers are intentionally identical containers.
+            // When both trees contain the same number of same-name/component
+            // nodes, their stable traversal ordinal is the remaining identity.
+            // A count mismatch remains ambiguous and must not be guessed.
+            RectTransform[] candidateShapeMatches = candidateRoot.GetComponentsInChildren<RectTransform>(true)
+                .Where(value => value != candidateRoot && IsComponentShapeEqual(candidate, value))
+                .ToArray();
+            RectTransform[] existingShapeMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
+                .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
+                .Where(value => IsComponentShapeEqual(candidate, value))
+                .ToArray();
+            if (candidateShapeMatches.Length > 1 && candidateShapeMatches.Length == existingShapeMatches.Length)
+            {
+                int ordinal = Array.IndexOf(candidateShapeMatches, candidate);
+                if (ordinal >= 0) return existingShapeMatches[ordinal];
+            }
+            if (visualMatches.Length > 1)
+                throw new PsdPrefabIncrementalMergeException(
+                    BuildAmbiguousAdoptionMessage(candidate, visualMatches));
+
+            // The importer has already made sibling names unique (for example,
+            // repeated PSD layers become day_1, day_2, ...).  During the first
+            // incremental adoption those stable generated names, together with
+            // the emitted component shape, are the final deterministic evidence
+            // when import-time layout/style calculation changed.  Do not use the
+            // fallback for a duplicate name or for a project-owned component.
+            RectTransform[] shapeMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
+                .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
+                .Where(value => IsComponentShapeEqual(candidate, value))
+                .ToArray();
+            if (shapeMatches.Length == 1) return shapeMatches[0];
+            throw new PsdPrefabIncrementalMergeException(shapeMatches.Length > 1
+                ? BuildAmbiguousAdoptionMessage(candidate, shapeMatches)
                 : "First adoption has no unique full hierarchy match for '" + candidate.name + "'.");
+        }
+
+        private static string BuildAmbiguousAdoptionMessage(RectTransform candidate, IEnumerable<RectTransform> matches)
+        {
+            return "First adoption is ambiguous: multiple same-name/resource objects match '" + candidate.name +
+                   "'. candidatePos=" + candidate.anchoredPosition3D + ", candidateSize=" + candidate.sizeDelta +
+                   ", matches=" + string.Join(";", matches.Select(value => value.anchoredPosition3D + "/" + value.sizeDelta));
+        }
+
+        private static bool IsComponentShapeEqual(RectTransform source, RectTransform target)
+        {
+            return string.Equals(source.name, target.name, StringComparison.Ordinal) &&
+                   (source.GetComponent<Image>() != null) == (target.GetComponent<Image>() != null) &&
+                   (source.GetComponent<TextMeshProUGUI>() != null) == (target.GetComponent<TextMeshProUGUI>() != null);
+        }
+
+        private static bool IsGeometryEvidenceEqual(RectTransform source, RectTransform target)
+        {
+            return IsComponentShapeEqual(source, target) &&
+                   source.gameObject.activeSelf == target.gameObject.activeSelf &&
+                   source.anchorMin == target.anchorMin && source.anchorMax == target.anchorMax &&
+                   source.pivot == target.pivot && source.anchoredPosition3D == target.anchoredPosition3D &&
+                   source.sizeDelta == target.sizeDelta && source.localRotation == target.localRotation &&
+                   source.localScale == target.localScale;
+        }
+
+        private static bool IsPositionEvidenceEqual(RectTransform source, RectTransform target)
+        {
+            return IsComponentShapeEqual(source, target) &&
+                   source.anchoredPosition3D == target.anchoredPosition3D &&
+                   source.sizeDelta == target.sizeDelta;
+        }
+
+        private static bool IsNormalizedPositionEvidenceEqual(
+            RectTransform sourceRoot, RectTransform targetRoot, RectTransform source, RectTransform target)
+        {
+            if (!IsComponentShapeEqual(source, target)) return false;
+            Vector2 sourceRootSize = sourceRoot.rect.size;
+            Vector2 targetRootSize = targetRoot.rect.size;
+            if (Mathf.Approximately(sourceRootSize.x, 0f) || Mathf.Approximately(sourceRootSize.y, 0f) ||
+                Mathf.Approximately(targetRootSize.x, 0f) || Mathf.Approximately(targetRootSize.y, 0f))
+                return IsPositionEvidenceEqual(source, target);
+            Vector2 sourcePosition = new Vector2(source.anchoredPosition3D.x / sourceRootSize.x, source.anchoredPosition3D.y / sourceRootSize.y);
+            Vector2 targetPosition = new Vector2(target.anchoredPosition3D.x / targetRootSize.x, target.anchoredPosition3D.y / targetRootSize.y);
+            Vector2 sourceSize = new Vector2(source.sizeDelta.x / sourceRootSize.x, source.sizeDelta.y / sourceRootSize.y);
+            Vector2 targetSize = new Vector2(target.sizeDelta.x / targetRootSize.x, target.sizeDelta.y / targetRootSize.y);
+            return (sourcePosition - targetPosition).sqrMagnitude < 0.00000001f &&
+                   (sourceSize - targetSize).sqrMagnitude < 0.00000001f;
         }
 
         private static bool IsAdoptionEvidenceEqual(RectTransform source, RectTransform target)
@@ -292,8 +417,33 @@ namespace PsdLayoutTool2
             if (sourceText != null && (sourceText.font != targetText.font ||
                                        sourceText.fontSharedMaterial != targetText.fontSharedMaterial ||
                                        !string.Equals(sourceText.text, targetText.text, StringComparison.Ordinal) ||
-                                       sourceText.fontStyle != targetText.fontStyle)) return false;
+                                       sourceText.fontStyle != targetText.fontStyle ||
+                                       sourceText.fontSize != targetText.fontSize ||
+                                       sourceText.characterHorizontalScale != targetText.characterHorizontalScale)) return false;
             return LegacyEvidenceEqual(source, target);
+        }
+
+        internal static bool ShouldRefreshGeneratedTextMaterial(Material existing, Material candidate)
+        {
+            return existing != null &&
+                candidate != null &&
+                existing != candidate &&
+                IsGeneratedTextMaterialAsset(existing) &&
+                IsGeneratedTextMaterialAsset(candidate);
+        }
+
+        private static bool IsGeneratedTextMaterialAsset(Material material)
+        {
+            string assetPath = AssetDatabase.GetAssetPath(material);
+            if (string.IsNullOrEmpty(assetPath) ||
+                !assetPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string fileName = System.IO.Path.GetFileNameWithoutExtension(assetPath);
+            return fileName.StartsWith("PSDTextMaterial_", StringComparison.Ordinal) ||
+                fileName.IndexOf("_PSDTextMaterial_", StringComparison.Ordinal) > 0;
         }
 
         private static bool LegacyEvidenceEqual(RectTransform source, RectTransform target)
@@ -708,6 +858,7 @@ namespace PsdLayoutTool2
             targetText.font = sourceText.font;
             targetText.fontSharedMaterial = sourceText.fontSharedMaterial;
             targetText.fontSize = sourceText.fontSize;
+            targetText.characterHorizontalScale = sourceText.characterHorizontalScale;
             targetText.fontStyle = sourceText.fontStyle;
             targetText.color = sourceText.color;
             targetText.alignment = sourceText.alignment;

@@ -73,8 +73,10 @@ namespace PsdLayoutTool2.Tests
                     "A no-op focus decision is represented as an identity rename using the request node's originalName.");
                 Assert.That(prompt, Does.Contain("You may create new group keys"),
                     "A first-time hierarchy has no existing group keys, so the planner must be allowed to create them.");
-                Assert.That(prompt, Does.Contain("contiguous sibling range"),
-                    "Groups that move non-adjacent PSD siblings are rejected during the preview merge.");
+                Assert.That(prompt, Does.Contain("geometrically disjoint"),
+                    "The planner must know that semantic cards may cross unrelated, non-overlapping PSD siblings.");
+                Assert.That(prompt, Does.Not.Contain("must be one contiguous sibling range"),
+                    "An unconditional contiguity rule forces the planner to group backgrounds, labels, and locks by render type.");
                 Assert.That(File.ReadAllText(Path.Combine(invocation.workingDirectory, "plan.schema.json")),
                     Does.Contain("\"schemaVersion\":{\"type\":\"integer\",\"const\":1}"),
                     "Codex requires a type alongside const in object properties.");
@@ -206,6 +208,149 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(fake.Requests, Is.Empty);
             Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+        }
+
+        [Test]
+        public async Task FullReplanReplacesStaleTypeBucketsEvenWhenReconciliationIsClean()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            request.nodes[1].rectangle = new PsdHierarchyRectangle
+                { x = 100f, y = 0f, width = 10f, height = 10f };
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.groups.Add(Group("background-bucket", "101"));
+            baseline.groups.Add(Group("label-bucket", "103"));
+            var fake = new FakeRunner
+            {
+                ResultFactory = run =>
+                {
+                    PsdHierarchyPlan plan = PlanWithGroup(
+                        run.request, "semantic-card", string.Empty, "101", "103");
+                    plan.renames.Add(new PsdHierarchyPlanRename
+                    {
+                        stableId = "102",
+                        name = "Node 102",
+                        evidence = "leave unrelated",
+                        confidence = 1d
+                    });
+                    return Success(plan);
+                }
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline,
+                new PsdHierarchyReconciliationResult(), fake);
+
+            await model.ReplanAllUnlockedAsync(CancellationToken.None);
+
+            Assert.That(fake.Requests.Count, Is.EqualTo(1));
+            CollectionAssert.AreEquivalent(
+                new[] { "101", "102", "103" },
+                fake.Requests.Single().modifiableStableIds);
+            Assert.That(model.proposedPlan.groups.Select(group => group.key),
+                Is.EqualTo(new[] { "semantic-card" }));
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+        }
+
+        [Test]
+        public void FullReplanCannotExpandAnAcceptedGroup()
+        {
+            PsdHierarchyRequest request = Request("101", "102");
+            PsdHierarchyPlan baseline = Baseline(request);
+            PsdHierarchyPlanGroup accepted = Group("accepted-card", "101");
+            baseline.groups.Add(accepted);
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanWithBaselineGroup(
+                    run.request, accepted, "101", "102"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline,
+                new PsdHierarchyReconciliationResult(), fake);
+            model.AcceptGroup(accepted.key);
+
+            Assert.ThrowsAsync<PsdHierarchyPlanValidationException>(
+                async () => await model.ReplanAllUnlockedAsync(CancellationToken.None));
+            CollectionAssert.AreEqual(
+                new[] { "101" },
+                model.proposedPlan.groups.Single(group => group.key == accepted.key).memberStableIds);
+        }
+
+        [Test]
+        public void FullReplanCannotAddAChildUnderAnAcceptedGroup()
+        {
+            PsdHierarchyRequest request = Request("101", "102");
+            PsdHierarchyPlan baseline = Baseline(request);
+            PsdHierarchyPlanGroup accepted = Group("accepted-card", "101");
+            baseline.groups.Add(accepted);
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanWithGroup(
+                    run.request, "new-child", accepted.key, "102"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline,
+                new PsdHierarchyReconciliationResult(), fake);
+            model.AcceptGroup(accepted.key);
+
+            Assert.ThrowsAsync<PsdHierarchyPlanValidationException>(
+                async () => await model.ReplanAllUnlockedAsync(CancellationToken.None));
+            Assert.That(model.proposedPlan.groups.Select(group => group.key),
+                Is.EqualTo(new[] { accepted.key }));
+        }
+
+        [Test]
+        public async Task FullReplanPreservesExistingChildrenOfAnAcceptedGroup()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            PsdHierarchyPlan baseline = Baseline(request);
+            PsdHierarchyPlanGroup accepted = Group("accepted-card", "101");
+            PsdHierarchyPlanGroup child = Group("accepted-content", "102");
+            child.parentKey = accepted.key;
+            baseline.groups.Add(accepted);
+            baseline.groups.Add(child);
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanFor(run.request, "103"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline,
+                new PsdHierarchyReconciliationResult(), fake);
+            model.AcceptGroup(accepted.key);
+
+            await model.ReplanAllUnlockedAsync(CancellationToken.None);
+
+            CollectionAssert.AreEquivalent(
+                new[] { accepted.key, child.key },
+                fake.Requests.Single().immutableGroupKeys);
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == child.key).parentKey,
+                Is.EqualTo(accepted.key));
+        }
+
+        [Test]
+        public async Task FullReplanPreservesAncestorsOfAnAcceptedGroup()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            PsdHierarchyPlan baseline = Baseline(request);
+            PsdHierarchyPlanGroup parent = Group("cards-root", "101");
+            PsdHierarchyPlanGroup accepted = Group("accepted-card", "102");
+            accepted.parentKey = parent.key;
+            baseline.groups.Add(parent);
+            baseline.groups.Add(accepted);
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanFor(run.request, "103"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline,
+                new PsdHierarchyReconciliationResult(), fake);
+            model.AcceptGroup(accepted.key);
+
+            await model.ReplanAllUnlockedAsync(CancellationToken.None);
+
+            Assert.That(fake.Requests.Single().requiredAncestorGroupKeys,
+                Is.EqualTo(new[] { parent.key }));
+            Assert.That(model.proposedPlan.groups.Single(group => group.key == accepted.key).parentKey,
+                Is.EqualTo(parent.key));
+            Assert.That(model.proposedPlan.groups.Any(group => group.key == parent.key), Is.True);
         }
 
         [Test]

@@ -83,5 +83,43 @@ namespace PsdLayoutTool2
         {
             return outlineWidth * FaceDilateRatio;
         }
+
+        public static void SplitShadowBlur(
+            float blur,
+            float chokePercent,
+            out float softness,
+            out float dilate)
+        {
+            float safeBlur = Mathf.Max(0f, blur);
+            float choke = Mathf.Clamp01(chokePercent / 100f);
+            dilate = safeBlur * choke;
+            softness = safeBlur * (1f - choke);
+        }
+
+        public static Vector2 ConvertShadowOffset(float angleDegrees, float distance)
+        {
+            float radians = angleDegrees * Mathf.Deg2Rad;
+            return new Vector2(
+                Mathf.Cos(radians) * distance,
+                -Mathf.Sin(radians) * distance);
+        }
+
+        public static float ConvertUnderlayPixelValue(
+            float pixelValue,
+            float fontSize,
+            float fontPointSize,
+            float gradientScale,
+            bool signed = false)
+        {
+            if (fontSize <= 0f)
+            {
+                return 0f;
+            }
+
+            float safePointSize = fontPointSize > 0f ? fontPointSize : fontSize;
+            float safeGradientScale = gradientScale > 0f ? gradientScale : 1f;
+            float normalized = pixelValue * safePointSize / (fontSize * safeGradientScale);
+            return signed ? Mathf.Clamp(normalized, -1f, 1f) : Mathf.Clamp01(normalized);
+        }
     }
 }

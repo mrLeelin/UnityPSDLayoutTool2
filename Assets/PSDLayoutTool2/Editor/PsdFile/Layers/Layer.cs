@@ -340,6 +340,12 @@
                 TextStyle = PsdTextStyle.CreateDefault(0f);
             }
 
+            PsdTextTransform textTransform;
+            if (PsdTextTransform.TryReadTyShHeader(dataReader, out textTransform))
+            {
+                TextStyle.Transform = textTransform;
+            }
+
             // read the text layer's text string
             // PSD engine-data descriptors store the value after /Text as:
             //   space '(' BOM UTF16BE... ')'
@@ -554,6 +560,11 @@
                 if (TryReadUnitValue(data, "blur", effectStart, out value))
                 {
                     TextStyle.ShadowBlur = Mathf.Max(0f, (float)value);
+                }
+
+                if (TryReadUnitValue(data, "Ckmt", effectStart, out value))
+                {
+                    TextStyle.ShadowChoke = Mathf.Clamp((float)value, 0f, 100f);
                 }
 
                 Color effectColor;

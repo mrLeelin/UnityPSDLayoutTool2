@@ -176,6 +176,43 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void MergeSkipsImporterValueCopyForUnchangedStableId()
+        {
+            GameObject source = Root("Root");
+            RectTransform original = Child(source, "Old", "101");
+            original.anchoredPosition3D = new Vector3(1f, 2f, 3f);
+            original.gameObject.AddComponent<Image>().color = Color.red;
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+
+            long localId = LocalId(TargetPath, "Old");
+            PsdHierarchyProfile profile = Profile(Node("101", localId, "Root/Old"));
+            GameObject candidate = Root("Root");
+            RectTransform candidateLeaf = Child(candidate, "Fresh", "101");
+            candidateLeaf.anchoredPosition3D = new Vector3(30f, 40f, 50f);
+            candidateLeaf.gameObject.AddComponent<Image>().color = Color.blue;
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            try
+            {
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateLeaf } },
+                    profile, profile.groups, EmptyPlan(), new HashSet<string>());
+
+                RectTransform actual = result.generatedByStableId["101"];
+                Assert.That(actual.name, Is.EqualTo("Old"));
+                Assert.That(actual.anchoredPosition3D, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+                Assert.That(actual.GetComponent<Image>().color, Is.EqualTo(Color.red));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
         public void MergeRetainsMissingGeneratedNodeAsPendingAndBlocksMissingRecordedObject()
         {
             GameObject source = Root("Root");
@@ -221,6 +258,62 @@ namespace PsdLayoutTool2.Tests
                     TargetPath, loaded, candidate,
                     new Dictionary<string, RectTransform> { { "101", candidateLeaf } }, profile, EmptyPlan());
                 Assert.That(result.generatedByStableId["101"], Is.SameAs(loaded.transform.Find("Same")));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void FirstAdoptionUsesUniqueVisualEvidenceWhenSiblingPathChanged()
+        {
+            GameObject source = Root("Root");
+            RectTransform wrapper = Child(source, "OldWrapper", null);
+            RectTransform existingLeaf = Child(wrapper.gameObject, "Same", "101");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            GameObject candidate = Root("Root");
+            RectTransform candidateLeaf = Child(candidate, "Same", "101");
+            PsdHierarchyProfile profile = Profile(Node("101", 0L, "Root/Same"));
+            try
+            {
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateLeaf } }, profile, EmptyPlan());
+                Assert.That(result.generatedByStableId["101"], Is.SameAs(loaded.transform.Find("OldWrapper/Same")));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loaded);
+                UnityEngine.Object.DestroyImmediate(candidate);
+                UnityEngine.Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void FirstAdoptionUsesUniqueGeometryWhenImportedStyleChanged()
+        {
+            GameObject source = Root("Root");
+            RectTransform wrapper = Child(source, "OldWrapper", null);
+            RectTransform existingLeaf = Child(wrapper.gameObject, "Same", "101");
+            existingLeaf.gameObject.AddComponent<Image>().color = Color.red;
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            GameObject loaded = PrefabUtility.LoadPrefabContents(TargetPath);
+            GameObject candidate = Root("Root");
+            RectTransform candidateLeaf = Child(candidate, "Same", "101");
+            candidateLeaf.gameObject.AddComponent<Image>().color = Color.blue;
+            PsdHierarchyProfile profile = Profile(Node("101", 0L, "Root/Same"));
+            try
+            {
+                PsdPrefabIncrementalMergeResult result = PsdPrefabIncrementalMerge.Merge(
+                    TargetPath, loaded, candidate,
+                    new Dictionary<string, RectTransform> { { "101", candidateLeaf } }, profile, EmptyPlan());
+                Assert.That(result.generatedByStableId["101"], Is.SameAs(loaded.transform.Find("OldWrapper/Same")));
             }
             finally
             {
@@ -347,6 +440,7 @@ namespace PsdLayoutTool2.Tests
             candidateText.font = TMP_Settings.defaultFontAsset;
             candidateText.fontSharedMaterial = candidateText.font != null ? candidateText.font.material : null;
             candidateText.fontSize = 37f;
+            candidateText.characterHorizontalScale = 1.125f;
             candidateText.fontStyle = FontStyles.Bold | FontStyles.Italic;
             candidateText.color = Color.yellow;
             candidateText.alignment = TextAlignmentOptions.BottomRight;
@@ -375,6 +469,7 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(actual.font, Is.SameAs(candidateText.font));
                 Assert.That(actual.fontSharedMaterial, Is.SameAs(candidateText.fontSharedMaterial));
                 Assert.That(actual.fontSize, Is.EqualTo(37f));
+                Assert.That(actual.characterHorizontalScale, Is.EqualTo(1.125f));
                 Assert.That(actual.fontStyle, Is.EqualTo(candidateText.fontStyle));
                 Assert.That(actual.color, Is.EqualTo(Color.yellow));
                 Assert.That(actual.alignment, Is.EqualTo(TextAlignmentOptions.BottomRight));
@@ -398,6 +493,30 @@ namespace PsdLayoutTool2.Tests
                 UnityEngine.Object.DestroyImmediate(candidate);
                 UnityEngine.Object.DestroyImmediate(profile);
             }
+        }
+
+        [Test]
+        public void GeneratedTextMaterialUpgradeIsImporterOwnedButCustomMaterialIsNot()
+        {
+            Shader shader = Shader.Find("TextMeshPro/Mobile/Distance Field");
+            Assert.That(shader, Is.Not.Null);
+            var oldGenerated = new Material(shader);
+            var newGenerated = new Material(shader);
+            var custom = new Material(shader);
+            AssetDatabase.CreateAsset(oldGenerated, Folder + "/CommonFont_PSDTextMaterial_old.mat");
+            AssetDatabase.CreateAsset(newGenerated, Folder + "/CommonFont_PSDTextMaterial_new.mat");
+            AssetDatabase.CreateAsset(custom, Folder + "/ButtonText.mat");
+
+            Assert.That(
+                PsdPrefabIncrementalMerge.ShouldRefreshGeneratedTextMaterial(
+                    oldGenerated,
+                    newGenerated),
+                Is.True);
+            Assert.That(
+                PsdPrefabIncrementalMerge.ShouldRefreshGeneratedTextMaterial(
+                    custom,
+                    newGenerated),
+                Is.False);
         }
 
         [Test]

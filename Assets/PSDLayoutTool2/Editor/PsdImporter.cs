@@ -684,16 +684,6 @@
                 ConfigureEmbeddedNineSliceBorders(psd.EmbeddedLayoutManifest);
 
                 PsdPrefabDocumentModel sourceModel = PsdPrefabModelBuilder.Build(psd);
-                var conversionContext = new PsdPrefabConversionContext
-                {
-                    source = sourceModel
-                };
-                PsdPrefabConversionPlan conversionPlan = new PsdPrefabConversionPipeline().CreatePlan(conversionContext);
-                PsdLogger.Info(
-                    "Conversion plan created. nodes=" + sourceModel.nodes.Count +
-                    ", added=" + conversionPlan.Count(PsdPrefabChangeKind.Added) +
-                    ", updated=" + conversionPlan.Count(PsdPrefabChangeKind.Updated) +
-                    ", removed=" + conversionPlan.Count(PsdPrefabChangeKind.Removed));
 
                 // Set the depth step based on the layer count.  If there are no layers, default to 0.1f.
                 depthStep = psd.Layers.Count != 0 ? MaximumDepth / psd.Layers.Count : 0.1f;
@@ -739,6 +729,20 @@
                     boundHierarchyProfile = ResolveHierarchyProfileBeforePrefabImport(
                         sourceGuid, prefabRelativePath, UseUnityUI);
                 }
+
+                var conversionContext = new PsdPrefabConversionContext
+                {
+                    source = sourceModel,
+                    previous = boundHierarchyProfile != null
+                        ? boundHierarchyProfile.BuildPreviousDocument()
+                        : null
+                };
+                PsdPrefabConversionPlan conversionPlan = new PsdPrefabConversionPipeline().CreatePlan(conversionContext);
+                PsdLogger.Info(
+                    "Conversion plan created. nodes=" + sourceModel.nodes.Count +
+                    ", added=" + conversionPlan.Count(PsdPrefabChangeKind.Added) +
+                    ", updated=" + conversionPlan.Count(PsdPrefabChangeKind.Updated) +
+                    ", removed=" + conversionPlan.Count(PsdPrefabChangeKind.Removed));
 
                 if (CreatePrefab)
                 {
@@ -929,6 +933,7 @@
                         if (!TrySaveIncrementalHierarchyPrefab(
                                 normalizedAssetPath,
                                 sourceModel,
+                                conversionPlan.changes,
                                 prefabRelativePath,
                                 importRootGameObject,
                                 CaptureGeneratedUiNodeRegistry()))
@@ -1485,6 +1490,7 @@
         private static bool TrySaveIncrementalHierarchyPrefab(
             string sourcePsdPath,
             PsdPrefabDocumentModel sourceModel,
+            IReadOnlyCollection<PsdPrefabNodeChange> conversionChanges,
             string prefabPath,
             GameObject candidateRoot,
             IReadOnlyDictionary<string, RectTransform> candidateRegistry)
@@ -1564,12 +1570,24 @@
                 }
 
                 existingContents = PrefabUtility.LoadPrefabContents(prefabPath);
+                var importerValueSyncStableIds = new HashSet<string>(
+                    (conversionChanges ?? Array.Empty<PsdPrefabNodeChange>())
+                    .Where(change => change != null && change.kind == PsdPrefabChangeKind.Updated)
+                    .Select(change => change.stableId)
+                    .Where(PsdStableLayerIdUtility.IsPersistable),
+                    StringComparer.Ordinal);
+                if (reconciliation != null)
+                {
+                    importerValueSyncStableIds.UnionWith(reconciliation.contentOnlyStableIds);
+                    importerValueSyncStableIds.UnionWith(reconciliation.geometryValidationStableIds);
+                }
                 PsdPrefabIncrementalMergeResult merge = PsdPrefabIncrementalMerge.Merge(
                     prefabPath, existingContents, candidateRoot, candidateRegistry, working,
                     persisted != null
                         ? persisted.groups
                         : Enumerable.Empty<PsdHierarchyProfileGroup>(),
-                    plan);
+                    plan,
+                    importerValueSyncStableIds);
                 PsdPrefabTransactionalSave.Save(
                     prefabPath, existingContents, profilePath, working,
                     merge.generatedByStableId, merge.groupsByKey,
@@ -4561,8 +4579,7 @@
             canvas.renderMode = RenderMode.WorldSpace;
 
             RectTransform transform = Canvas.GetComponent<RectTransform>();
-            Vector2 scaledCanvasSize = new Vector2(CanvasSize.x / PixelsToUnits, CanvasSize.y / PixelsToUnits);
-            transform.sizeDelta = scaledCanvasSize;
+            transform.sizeDelta = CanvasSize;
 
             CanvasScaler scaler = Canvas.AddComponent<CanvasScaler>();
             scaler.dynamicPixelsPerUnit = PixelsToUnits;
@@ -4662,6 +4679,7 @@
             textUI.text = layer.Text ?? string.Empty;
             textUI.font = ResolveUsableTextMeshProFont(layer);
             textUI.fontSize = Mathf.Max(1f, GetUIFontSize(layer));
+            textUI.characterHorizontalScale = ResolveTextTransform(layer).CharacterHorizontalScale;
             textUI.color = ApplyLayerOpacity(layer.FillColor, layer);
             textUI.enableWordWrapping = false;
             textUI.overflowMode = TextOverflowModes.Overflow;
@@ -4890,11 +4908,22 @@
         private static PsdPrefabTextModel BuildTextModel(Layer layer)
         {
             PsdTextStyle style = layer.TextStyle ?? PsdTextStyle.CreateDefault(layer.FontSize);
+            float shadowSoftness;
+            float shadowDilate;
+            PsdTextEffectConversion.SplitShadowBlur(
+                style.ShadowBlur,
+                style.ShadowChoke,
+                out shadowSoftness,
+                out shadowDilate);
+            Vector2 shadowOffset = PsdTextEffectConversion.ConvertShadowOffset(
+                style.ShadowAngle,
+                style.ShadowDistance);
             return new PsdPrefabTextModel
             {
                 contents = layer.Text ?? string.Empty,
                 fontFamily = layer.FontName ?? string.Empty,
-                fontSize = layer.FontSize,
+                fontSize = style.Transform.EffectiveFontSize(layer.FontSize),
+                characterHorizontalScale = style.Transform.CharacterHorizontalScale,
                 fillColor = layer.FillColor,
                 lineHeight = style.LineHeight,
                 effect = new PsdPrefabTextEffectModel
@@ -4904,9 +4933,10 @@
                     outlineWidth = style.StrokeWidth,
                     hasShadow = style.ShadowEnabled,
                     shadowColor = style.ShadowColor,
-                    shadowOffsetX = Mathf.Cos(style.ShadowAngle * Mathf.Deg2Rad) * style.ShadowDistance,
-                    shadowOffsetY = Mathf.Sin(style.ShadowAngle * Mathf.Deg2Rad) * style.ShadowDistance,
-                    shadowSoftness = style.ShadowBlur
+                    shadowOffsetX = shadowOffset.x,
+                    shadowOffsetY = shadowOffset.y,
+                    shadowSoftness = shadowSoftness,
+                    shadowDilate = shadowDilate
                 }
             };
         }
@@ -4923,7 +4953,7 @@
                 return;
             }
 
-            float scale = UseTargetCanvasCoordinates ? GetTargetCanvasUniformScale() : 1f / Mathf.Max(0.0001f, PixelsToUnits);
+            float scale = GetTargetCanvasUniformScale();
             PsdTextStyle style = layer.TextStyle;
             if (style.LineHeight > 0f && layer.FontSize > 0f)
             {
@@ -4943,8 +4973,7 @@
             {
                 Shadow shadow = textUI.gameObject.AddComponent<Shadow>();
                 float distance = Mathf.Max(0f, style.ShadowDistance * scale);
-                float angle = style.ShadowAngle * Mathf.Deg2Rad;
-                shadow.effectDistance = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * distance;
+                shadow.effectDistance = PsdTextEffectConversion.ConvertShadowOffset(style.ShadowAngle, distance);
                 shadow.effectColor = ApplyLayerOpacity(style.ShadowColor, layer);
                 shadow.useGraphicAlpha = true;
 
@@ -5506,8 +5535,88 @@
 
             Image image = uiObject.AddComponent<Image>();
             image.sprite = sprite;
+            ApplyCommonTextureVisualTransform(transform, layer, sprite);
             ApplyImageLayoutBehavior(image, info.AnchorPreset);
             ApplyNineSliceImageBehavior(image, layer);
+        }
+
+        /// <summary>
+        /// Reconstructs the visual transform baked into a PSD Common_Texture
+        /// layer. Normal PSD exports retain that transform in their pixels;
+        /// a public replacement Sprite needs the equivalent RectTransform
+        /// rotation and scale applied explicitly.
+        /// </summary>
+        private static void ApplyCommonTextureVisualTransform(RectTransform transform, Layer layer, Sprite sprite)
+        {
+            if (transform == null || layer == null || sprite == null) return;
+
+            Texture2D sourceTexture = ImageDecoder.DecodeImage(layer);
+            Color32[] replacementPixels;
+            if (sourceTexture == null || !TryReadSpritePixels(sprite, out replacementPixels))
+            {
+                if (sourceTexture != null) UnityEngine.Object.DestroyImmediate(sourceTexture);
+                return;
+            }
+
+            try
+            {
+                PsdCommonVisualTransformMatcher.Result match;
+                if (!PsdCommonVisualTransformMatcher.TryMatch(
+                        (int)sprite.rect.width, (int)sprite.rect.height, replacementPixels,
+                        sourceTexture.width, sourceTexture.height, sourceTexture.GetPixels32(), out match))
+                {
+                    return;
+                }
+
+                transform.localRotation = Quaternion.Euler(0f, 0f, match.RotationDegrees);
+                Vector2 nativeSize = new Vector2(sprite.rect.width * match.Scale, sprite.rect.height * match.Scale);
+                transform.sizeDelta = nativeSize;
+                PsdLogger.Info("Recovered Common Texture transform. layer=" + DescribeLayerForLog(layer) +
+                    ", rotation=" + match.RotationDegrees.ToString("F2", CultureInfo.InvariantCulture) +
+                    ", scale=" + match.Scale.ToString("F3", CultureInfo.InvariantCulture));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(sourceTexture);
+            }
+        }
+
+        private static bool TryReadSpritePixels(Sprite sprite, out Color32[] pixels)
+        {
+            pixels = null;
+            if (sprite == null || sprite.texture == null) return false;
+            RenderTexture temporary = RenderTexture.GetTemporary(sprite.texture.width, sprite.texture.height, 0, RenderTextureFormat.ARGB32);
+            RenderTexture previous = RenderTexture.active;
+            Texture2D copy = null;
+            try
+            {
+                Graphics.Blit(sprite.texture, temporary);
+                RenderTexture.active = temporary;
+                copy = new Texture2D(sprite.texture.width, sprite.texture.height, TextureFormat.RGBA32, false);
+                copy.ReadPixels(new Rect(0, 0, copy.width, copy.height), 0, 0);
+                copy.Apply(false, false);
+                int width = Mathf.RoundToInt(sprite.rect.width);
+                int height = Mathf.RoundToInt(sprite.rect.height);
+                Color32[] texturePixels = copy.GetPixels32();
+                pixels = new Color32[width * height];
+                int startX = Mathf.RoundToInt(sprite.rect.x);
+                int startY = Mathf.RoundToInt(sprite.rect.y);
+                for (int y = 0; y < height; y++)
+                {
+                    Array.Copy(texturePixels, ((startY + y) * copy.width) + startX, pixels, y * width, width);
+                }
+                return pixels.Length == width * height;
+            }
+            catch (UnityException)
+            {
+                return false;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(temporary);
+                if (copy != null) UnityEngine.Object.DestroyImmediate(copy);
+            }
         }
 
         private static void CreateCommonSpriteGameObject(Layer layer, Sprite sprite)
@@ -5860,12 +5969,7 @@
         /// <returns>Scaled width and height.</returns>
         private static Vector2 GetUiLayerSize(Rect rect)
         {
-            if (UseTargetCanvasCoordinates)
-            {
-                return new Vector2(rect.width * GetTargetCanvasScaleX(), rect.height * GetTargetCanvasScaleY());
-            }
-
-            return new Vector2(rect.width / PixelsToUnits, rect.height / PixelsToUnits);
+            return new Vector2(rect.width * GetTargetCanvasScaleX(), rect.height * GetTargetCanvasScaleY());
         }
 
         /// <summary>
@@ -5952,17 +6056,12 @@
         /// <returns>Root RectTransform size.</returns>
         private static Vector2 GetRootRectSize()
         {
-            if (UseTargetCanvasCoordinates)
-            {
-                // A global-stretch root only takes the target Canvas dimensions
-                // when the user explicitly requested Canvas scaling. In direct
-                // 1:1 mode this must remain the authored PSD size.
-                return RootUseGlobalAnchorByDefault && ScaleToTargetCanvas
-                    ? TargetCanvasSize
-                    : GetScaledRootSize();
-            }
-
-            return new Vector2(CanvasSize.x / PixelsToUnits, CanvasSize.y / PixelsToUnits);
+            // A global-stretch root only takes the target Canvas dimensions
+            // when the user explicitly requested Canvas scaling. In direct
+            // 1:1 mode this must remain the authored PSD size.
+            return UseTargetCanvasCoordinates && RootUseGlobalAnchorByDefault && ScaleToTargetCanvas
+                ? TargetCanvasSize
+                : GetScaledRootSize();
         }
 
         /// <summary>
@@ -5987,16 +6086,18 @@
         /// <returns>Scaled UI font size.</returns>
         private static float GetUIFontSize(Layer layer)
         {
-            if (UseTargetCanvasCoordinates)
-            {
-                // PSD font size is in points (1pt = 1px at 72 DPI).  Scale uniformly
-                // by the same fit factor used for the PSD root so the text stays
-                // proportional to both width and height, preventing overlap when the
-                // target canvas aspect ratio differs from the PSD canvas.
-                return layer.FontSize * GetTargetCanvasUniformScale();
-            }
+            // PSD font size is in points (1pt = 1px at 72 DPI). Scale uniformly
+            // by the same fit factor used for the PSD root so the text stays
+            // proportional to both width and height, preventing overlap when the
+            // target canvas aspect ratio differs from the PSD canvas.
+            return ResolveTextTransform(layer).EffectiveFontSize(layer.FontSize) * GetTargetCanvasUniformScale();
+        }
 
-            return layer.FontSize / PixelsToUnits;
+        private static PsdTextTransform ResolveTextTransform(Layer layer)
+        {
+            return layer != null && layer.TextStyle != null
+                ? layer.TextStyle.Transform
+                : PsdTextTransform.Identity;
         }
 
         /// <summary>

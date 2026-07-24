@@ -57,6 +57,104 @@ namespace PsdLayoutTool2.Tests
             Assert.That(actual, Is.EqualTo(0.125f).Within(0.0001f));
         }
 
+        [TestCase(2f, 0f, 2f, 0f)]
+        [TestCase(2f, 50f, 1f, 1f)]
+        [TestCase(2f, 100f, 0f, 2f)]
+        public void PhotoshopChokeSplitsBlurIntoSoftnessAndSolidSpread(
+            float blur,
+            float chokePercent,
+            float expectedSoftness,
+            float expectedDilate)
+        {
+            float softness;
+            float dilate;
+
+            PsdTextEffectConversion.SplitShadowBlur(
+                blur,
+                chokePercent,
+                out softness,
+                out dilate);
+
+            Assert.That(softness, Is.EqualTo(expectedSoftness).Within(0.0001f));
+            Assert.That(dilate, Is.EqualTo(expectedDilate).Within(0.0001f));
+        }
+
+        [Test]
+        public void UnderlayPixelsUseFontPointSizeAndGradientScale()
+        {
+            float actual = PsdTextEffectConversion.ConvertUnderlayPixelValue(
+                4f,
+                100f,
+                58f,
+                11f,
+                true);
+
+            Assert.That(actual, Is.EqualTo(0.21091f).Within(0.0001f));
+        }
+
+        [Test]
+        public void PhotoshopDownwardShadowMapsToNegativeTmpY()
+        {
+            Vector2 actual = PsdTextEffectConversion.ConvertShadowOffset(90f, 4f);
+
+            Assert.That(actual.x, Is.EqualTo(0f).Within(0.0001f));
+            Assert.That(actual.y, Is.EqualTo(-4f).Within(0.0001f));
+        }
+
+        [Test]
+        public void PlainTextCanReuseACleanBaseMaterial()
+        {
+            Material material = CreateTmpMaterial();
+            try
+            {
+                var effect = new PsdPrefabTextEffectModel();
+
+                Assert.That(
+                    PsdPrefabTextMaterialFactory.CanUseBaseMaterialDirectly(effect, material),
+                    Is.True);
+
+                material.EnableKeyword("UNDERLAY_ON");
+                Assert.That(
+                    PsdPrefabTextMaterialFactory.CanUseBaseMaterialDirectly(effect, material),
+                    Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(material);
+            }
+        }
+
+        [TestCase("CommonFont", "CommonFont_PSDTextMaterial_ea65ea44.mat")]
+        [TestCase("Common/Font", "Common_Font_PSDTextMaterial_ea65ea44.mat")]
+        public void GeneratedMaterialNameUsesConfiguredFontPrefix(
+            string fontName,
+            string expected)
+        {
+            Assert.That(
+                PsdPrefabTextMaterialFactory.BuildMaterialFileName(fontName, "ea65ea44"),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void ExistingGeneratedMaterialMainObjectNameMatchesItsFileName()
+        {
+            Material material = CreateTmpMaterial();
+            try
+            {
+                material.name = "PSDTextMaterial_ea65ea44_1";
+
+                PsdPrefabTextMaterialFactory.EnsureMainObjectNameMatchesFileName(
+                    material,
+                    "Assets/CommonFont_PSDTextMaterial_ea65ea44.mat");
+
+                Assert.That(material.name, Is.EqualTo("CommonFont_PSDTextMaterial_ea65ea44"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(material);
+            }
+        }
+
         [Test]
         public void MaterialSignatureSeparatesFontSizesWhenEffectsArePixelBased()
         {
@@ -75,6 +173,35 @@ namespace PsdLayoutTool2.Tests
             string largeSignature = PsdPrefabTextMaterialSignature.Build(large, "font", "material");
 
             Assert.That(smallSignature, Is.Not.EqualTo(largeSignature));
+        }
+
+        [Test]
+        public void MaterialSignatureSeparatesDifferentShadowDilateValues()
+        {
+            var soft = new PsdPrefabTextModel
+            {
+                fontSize = 100f,
+                effect = new PsdPrefabTextEffectModel
+                {
+                    hasShadow = true,
+                    shadowSoftness = 2f,
+                    shadowDilate = 0f
+                }
+            };
+            var choked = new PsdPrefabTextModel
+            {
+                fontSize = 100f,
+                effect = new PsdPrefabTextEffectModel
+                {
+                    hasShadow = true,
+                    shadowSoftness = 0f,
+                    shadowDilate = 2f
+                }
+            };
+
+            Assert.That(
+                PsdPrefabTextMaterialSignature.Build(soft, "font", "material"),
+                Is.Not.EqualTo(PsdPrefabTextMaterialSignature.Build(choked, "font", "material")));
         }
 
         [Test]

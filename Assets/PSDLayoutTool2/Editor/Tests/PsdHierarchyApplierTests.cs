@@ -474,6 +474,69 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ApplyAllowsDisjointNonContiguousVisualLeavesToBecomeSemanticGroup()
+        {
+            RectTransform first = Leaf("First", 0, Vector2.zero);
+            RectTransform unrelated = Leaf("Unrelated", 1, new Vector2(300f, 0f));
+            RectTransform last = Leaf("Last", 2, Vector2.zero);
+            first.gameObject.AddComponent<Image>();
+            unrelated.gameObject.AddComponent<Image>();
+            last.gameObject.AddComponent<Image>();
+            Dictionary<string, RectTransform> registry = Registry(first, unrelated, last);
+
+            Assert.DoesNotThrow(() => PsdHierarchyApplier.Apply(
+                root,
+                Plan(Group("semantic-card", "", "Semantic Card", "101", "103")),
+                registry,
+                EmptyGroups()));
+            Assert.That(first.parent, Is.SameAs(last.parent));
+            Assert.That(unrelated.parent, Is.SameAs(root));
+        }
+
+        [Test]
+        public void ApplyRejectsOverlappingNonContiguousVisualLeaves()
+        {
+            RectTransform first = Leaf("First", 0, Vector2.zero);
+            RectTransform overlapping = Leaf("Overlapping", 1, Vector2.zero);
+            RectTransform last = Leaf("Last", 2, Vector2.zero);
+            first.gameObject.AddComponent<Image>();
+            overlapping.gameObject.AddComponent<Image>();
+            last.gameObject.AddComponent<Image>();
+            Dictionary<string, RectTransform> registry = Registry(first, overlapping, last);
+
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root,
+                Plan(Group("unsafe-card", "", "Unsafe Card", "101", "103")),
+                registry,
+                EmptyGroups()));
+            Assert.That(first.parent, Is.SameAs(root));
+            Assert.That(overlapping.parent, Is.SameAs(root));
+            Assert.That(last.parent, Is.SameAs(root));
+        }
+
+        [Test]
+        public void ApplyRejectsReorderWhenCrossedVisualHasNoRectTransformGeometry()
+        {
+            RectTransform first = Leaf("First", 0, Vector2.zero);
+            var spriteObject = new GameObject("Sprite", typeof(SpriteRenderer));
+            spriteObject.transform.SetParent(root, false);
+            spriteObject.transform.SetSiblingIndex(1);
+            RectTransform last = Leaf("Last", 2, Vector2.zero);
+            first.gameObject.AddComponent<Image>();
+            last.gameObject.AddComponent<Image>();
+            Dictionary<string, RectTransform> registry = Registry(first, last);
+
+            Assert.Throws<PsdHierarchyApplyException>(() => PsdHierarchyApplier.Apply(
+                root,
+                Plan(Group("semantic-card", "", "Semantic Card", "101", "102")),
+                registry,
+                EmptyGroups()));
+            Assert.That(first.parent, Is.SameAs(root));
+            Assert.That(spriteObject.transform.parent, Is.SameAs(root));
+            Assert.That(last.parent, Is.SameAs(root));
+        }
+
+        [Test]
         public void VerifierIncludesZeroIdAndProjectOwnedVisuals()
         {
             RectTransform generated = Leaf("Generated", 0, Vector2.zero);

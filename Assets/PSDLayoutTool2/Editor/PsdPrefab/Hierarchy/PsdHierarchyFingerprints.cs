@@ -60,6 +60,7 @@ namespace PsdLayoutTool2
                 Append(value, node.text.contents);
                 Append(value, node.text.fontFamily);
                 Append(value, Float(node.text.fontSize));
+                Append(value, Float(node.text.characterHorizontalScale));
                 Append(value, ColorValue(node.text.fillColor));
                 Append(value, Float(node.text.lineHeight));
                 PsdPrefabTextEffectModel effect = node.text.effect;

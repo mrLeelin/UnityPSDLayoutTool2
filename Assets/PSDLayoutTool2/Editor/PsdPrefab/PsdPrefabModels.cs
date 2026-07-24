@@ -41,6 +41,7 @@ namespace PsdLayoutTool2
         public string contents;
         public string fontFamily;
         public float fontSize;
+        public float characterHorizontalScale = 1f;
         public Color fillColor = Color.white;
         public float lineHeight;
         public PsdPrefabTextEffectModel effect = new PsdPrefabTextEffectModel();

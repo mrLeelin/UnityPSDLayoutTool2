@@ -26,7 +26,8 @@ namespace PsdLayoutTool2
                 ColorUtility.ToHtmlStringRGBA(effect.shadowColor),
                 Mathf.RoundToInt(effect.shadowOffsetX * 100f).ToString("0000"),
                 Mathf.RoundToInt(effect.shadowOffsetY * 100f).ToString("0000"),
-                Mathf.RoundToInt(effect.shadowSoftness * 100f).ToString("0000")
+                Mathf.RoundToInt(effect.shadowSoftness * 100f).ToString("0000"),
+                Mathf.RoundToInt(effect.shadowDilate * 100f).ToString("0000")
             });
         }
     }
