@@ -11,6 +11,7 @@ namespace PsdLayoutTool2.Editor
         None,
         Analyze,
         Refine,
+        Accept,
         Apply,
         CreatePrefabs
     }

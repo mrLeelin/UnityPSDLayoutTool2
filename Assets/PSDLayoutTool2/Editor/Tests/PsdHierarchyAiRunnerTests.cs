@@ -381,6 +381,28 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task RefineSelectionUsesExactStableIdsAndBoundedInstruction()
+        {
+            PsdHierarchyRequest request = Request("101", "102", "103");
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanFor(run.request, run.modifiableStableIds.ToArray()))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, Baseline(request),
+                new PsdHierarchyReconciliationResult(), fake);
+
+            await model.RefineSelectionAsync(
+                new[] { "101", "103" },
+                "这两个任务属于同一个列表项",
+                CancellationToken.None);
+
+            CollectionAssert.AreEquivalent(new[] { "101", "103" }, fake.Requests.Single().modifiableStableIds);
+            Assert.That(fake.Requests.Single().modifiableStableIds, Does.Not.Contain("102"));
+            Assert.That(fake.Requests.Single().instruction, Is.EqualTo("这两个任务属于同一个列表项"));
+        }
+
+        [Test]
         public async Task NewNodeScopeIncludesSiblingNeighborsRelevantPreviewAndModificationMarkers()
         {
             PsdHierarchyRequest request = Request("101", "102", "103", "104");

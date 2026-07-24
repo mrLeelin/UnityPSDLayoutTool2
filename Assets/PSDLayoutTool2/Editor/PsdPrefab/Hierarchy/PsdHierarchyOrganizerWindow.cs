@@ -72,23 +72,54 @@ namespace PsdLayoutTool2
 
         public void AcceptGroup(string groupKey)
         {
+            SetGroupAccepted(groupKey, true);
+        }
+
+        public void SetGroupAccepted(string groupKey, bool accepted)
+        {
             if (string.IsNullOrEmpty(groupKey) || !(proposedPlanValue.groups ?? new List<PsdHierarchyPlanGroup>()).Any(group => group != null && group.key == groupKey))
                 throw new ArgumentException("Proposed group does not exist.", "groupKey");
-            acceptedGroupKeysValue.Add(groupKey);
+            if (accepted) acceptedGroupKeysValue.Add(groupKey);
+            else acceptedGroupKeysValue.Remove(groupKey);
         }
 
         public async Task RefineGroupAsync(string groupKey, CancellationToken cancellationToken)
         {
             if (acceptedGroupKeysValue.Contains(groupKey)) throw new InvalidOperationException("Accepted groups are locked.");
-            PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
-            PsdHierarchyPlanGroup selected = (working.groups ?? new List<PsdHierarchyPlanGroup>()).FirstOrDefault(group => group != null && group.key == groupKey);
+            PsdHierarchyPlanGroup selected = (proposedPlanValue.groups ?? new List<PsdHierarchyPlanGroup>())
+                .FirstOrDefault(group => group != null && group.key == groupKey);
             if (selected == null) throw new ArgumentException("Proposed group does not exist.", "groupKey");
+            await RefineSelectionAsync(selected.memberStableIds, string.Empty, cancellationToken);
+        }
+
+        public async Task RefineSelectionAsync(
+            IReadOnlyCollection<string> stableIds,
+            string instruction,
+            CancellationToken cancellationToken)
+        {
+            if (stableIds == null || stableIds.Count == 0)
+                throw new ArgumentException("At least one stable ID is required.", "stableIds");
+            if (instruction != null && instruction.Length > 2000)
+                throw new ArgumentException("The refinement instruction exceeds 2000 characters.", "instruction");
+
+            PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
             HashSet<string> immutableGroupKeys = GetAcceptedSubtreeGroupKeys(working);
             HashSet<string> requiredAncestorGroupKeys = GetRequiredAncestorGroupKeys(working, immutableGroupKeys);
             HashSet<string> protectedGroupKeys = new HashSet<string>(immutableGroupKeys, StringComparer.Ordinal);
             protectedGroupKeys.UnionWith(requiredAncestorGroupKeys);
             HashSet<string> locked = GetGroupMemberIds(working, protectedGroupKeys);
-            var scope = new HashSet<string>((selected.memberStableIds ?? new List<string>()).Where(id => !locked.Contains(id)), StringComparer.Ordinal);
+            var modifiableIds = new HashSet<string>(
+                fullRequest.nodes
+                    .Where(node => node != null &&
+                                   PsdStableLayerIdUtility.IsPersistable(node.stableId) &&
+                                   !node.isProtectedBoundary &&
+                                   !node.hasProjectComponents &&
+                                   string.IsNullOrEmpty(node.protectedBoundaryStableId))
+                    .Select(node => node.stableId),
+                StringComparer.Ordinal);
+            var scope = new HashSet<string>(
+                stableIds.Where(id => modifiableIds.Contains(id) && !locked.Contains(id)),
+                StringComparer.Ordinal);
             if (scope.Count == 0) throw new InvalidOperationException("The selected group has no unlocked members to refine.");
 
             isRunning = true;
@@ -102,6 +133,7 @@ namespace PsdLayoutTool2
                 var request = new PsdHierarchyAiRunRequest
                 {
                     operationId = Guid.NewGuid().ToString("N"), request = CloneScopedRequest(fullRequest, context, scope), targetPrefabPath = targetPrefabPath, timeout = TimeSpan.FromMinutes(2),
+                    instruction = (instruction ?? string.Empty).Trim(),
                     modifiableStableIds = scope.OrderBy(id => id, StringComparer.Ordinal).ToList(), contextStableIds = context.OrderBy(id => id, StringComparer.Ordinal).ToList(), baselineGroups = groups.baselineGroups,
                     modifiableGroupKeys = groups.modifiableGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(), scopeOwnedGroupKeys = groups.scopeOwnedGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),
                     hybridGroupKeys = groups.hybridGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(), readonlyNeighborGroupKeys = groups.readonlyNeighborGroupKeys.OrderBy(key => key, StringComparer.Ordinal).ToList(),

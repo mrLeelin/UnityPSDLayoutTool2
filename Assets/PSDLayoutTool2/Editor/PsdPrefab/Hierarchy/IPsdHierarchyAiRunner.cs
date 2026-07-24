@@ -22,6 +22,7 @@ namespace PsdLayoutTool2
         public string operationId;
         public PsdHierarchyRequest request;
         public string targetPrefabPath;
+        public string instruction = string.Empty;
         public TimeSpan timeout = TimeSpan.FromMinutes(2);
         public List<string> modifiableStableIds = new List<string>();
         public List<string> contextStableIds = new List<string>();
