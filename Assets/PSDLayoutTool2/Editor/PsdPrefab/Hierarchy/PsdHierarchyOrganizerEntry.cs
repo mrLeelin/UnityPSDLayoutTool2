@@ -126,6 +126,7 @@ namespace PsdLayoutTool2
             string expectedTargetPrefabPath,
             IPsdHierarchyAiRunner runner)
         {
+            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
             string resolvedTarget;
             string explanation;
             if (!TryResolveAvailability(
@@ -158,6 +159,7 @@ namespace PsdLayoutTool2
 
         public static PsdHierarchyOrganizerWindow Open(string sourcePsdPath)
         {
+            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
             string targetPath;
             string explanation;
             if (!TryResolveAvailability(

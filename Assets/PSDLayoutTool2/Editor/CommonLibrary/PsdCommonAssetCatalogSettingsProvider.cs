@@ -5,7 +5,7 @@ namespace PsdLayoutTool2
     using UnityEngine;
 
     /// <summary>
-    /// Project Settings UI for generating and inspecting the Common Asset Catalog.
+    /// 用于生成和检查公共资源映射表的项目设置界面。
     /// </summary>
     internal static class PsdCommonAssetCatalogSettingsProvider
     {
@@ -14,7 +14,7 @@ namespace PsdLayoutTool2
         {
             return new SettingsProvider("Project/PSD Layout Tool/Common Asset Catalog", SettingsScope.Project)
             {
-                label = "PSD Layout Tool - Common Asset Catalog",
+                label = "PSD Layout Tool - 公共资源映射表",
                 guiHandler = DrawGui,
                 keywords = new HashSet<string>(new[] { "PSD", "Common", "Prefab", "Texture", "Catalog" })
             };
@@ -23,10 +23,14 @@ namespace PsdLayoutTool2
         private static void DrawGui(string searchContext)
         {
             PsdCommonAssetCatalog catalog = PsdCommonAssetCatalog.Load();
+            PsdCommonAssetNamingSnapshot naming = PsdLayoutProjectSettings.instance.ResolveCommonAssetNaming();
             EditorGUILayout.HelpBox(
-                "Refresh scans the entire project for asset names beginning with Common_Prefab_ and Common_Texture_, then stores direct GUID references in the catalog. PSD import reads this catalog only.",
+                "刷新时会扫描整个项目，查找名称以 " + naming.prefabPrefix +
+                " 或 " + naming.texturePrefix +
+                " 开头的资源，并在映射表中保存直接的 GUID 引用。PSD 导入只读取该映射表。" +
+                "命名前缀请在项目的 PsdLayoutProjectSettings 配置资产中修改。",
                 MessageType.Info);
-            if (GUILayout.Button(catalog == null ? "Generate Common Asset Catalog" : "Refresh Common Asset Catalog"))
+            if (GUILayout.Button(catalog == null ? "生成公共资源映射表" : "刷新公共资源映射表"))
             {
                 catalog = PsdCommonAssetCatalog.CreateOrRefresh();
                 Selection.activeObject = catalog;
@@ -37,10 +41,10 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            EditorGUILayout.LabelField("Catalog Status", catalog.needsRefresh ? "Out of date - generate/refresh required" : "Ready (auto-updates Common_* asset changes)");
-            EditorGUILayout.LabelField("Prefabs", catalog.prefabs.Count.ToString());
-            EditorGUILayout.LabelField("Textures / Sprites", catalog.textures.Count.ToString());
-            if (GUILayout.Button("Select Catalog Asset"))
+            EditorGUILayout.LabelField("映射表状态", catalog.needsRefresh ? "已过期，需要生成或刷新" : "已就绪，可自动更新通用资源变更");
+            EditorGUILayout.LabelField("Prefab 数量", catalog.prefabs.Count.ToString());
+            EditorGUILayout.LabelField("纹理 / Sprite 数量", catalog.textures.Count.ToString());
+            if (GUILayout.Button("选中映射表资产"))
             {
                 Selection.activeObject = catalog;
             }

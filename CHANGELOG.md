@@ -2,6 +2,20 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.2] - 2026-07-24
+
+### Added
+
+- Added a project-owned PSD Layout Tool settings asset copied from the UPM package template on first use.
+- Added configurable Common Prefab and Common Texture naming prefixes.
+- Added a dedicated global settings window accessible from the PSD Inspector.
+
+### Changed
+
+- Moved shared output paths, TMP font, TMP material, and Common naming controls out of the PSD Inspector.
+- PSD imports and hierarchy tools now resolve shared output rules directly from the project settings asset.
+- Existing project settings are preserved when the package is upgraded.
+
 ## [0.1.1] - 2026-07-24
 
 ### Changed

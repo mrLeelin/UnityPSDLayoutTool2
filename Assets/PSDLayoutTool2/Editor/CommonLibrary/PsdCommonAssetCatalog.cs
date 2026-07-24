@@ -7,9 +7,8 @@ namespace PsdLayoutTool2
     using UnityEngine;
 
     /// <summary>
-    /// Generated, versioned Key-to-asset mapping for Common_* PSD rules.
-    /// The importer reads direct Unity references; full-project scanning only
-    /// occurs when the catalog is explicitly refreshed.
+    /// 为通用资源 PSD 命名规则生成并进行版本管理的“资源键到资源”映射表。
+    /// 导入器只读取直接的 Unity 资源引用；仅在明确刷新映射表时扫描整个项目。
     /// </summary>
     public sealed class PsdCommonAssetCatalog : ScriptableObject
     {
@@ -45,8 +44,25 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
-        /// Applies only the asset paths supplied by Unity's import callback.
-        /// Full-project scanning is intentionally reserved for CreateOrRefresh.
+        /// 修改前缀后，所有已生成资源键都会失效。
+        /// 在用户完整刷新映射表之前，暂停增量更新，避免混用新旧命名规则。
+        /// </summary>
+        public static void MarkNeedsRefresh()
+        {
+            PsdCommonAssetCatalog catalog = Load();
+            if (catalog == null || catalog.needsRefresh)
+            {
+                return;
+            }
+
+            catalog.needsRefresh = true;
+            EditorUtility.SetDirty(catalog);
+            AssetDatabase.SaveAssets();
+        }
+
+        /// <summary>
+        /// 只处理 Unity 资源导入回调提供的资源路径。
+        /// 全项目扫描仅由 CreateOrRefresh 主动执行。
         /// </summary>
         public static void ApplyAssetChanges(
             string[] importedAssets,
@@ -55,7 +71,8 @@ namespace PsdLayoutTool2
             string[] movedFromAssetPaths)
         {
             PsdCommonAssetCatalog catalog = Load();
-            if (catalog == null || !CouldAffectCatalog(importedAssets, deletedAssets, movedAssets, movedFromAssetPaths))
+            if (catalog == null || catalog.needsRefresh ||
+                !CouldAffectCatalog(importedAssets, deletedAssets, movedAssets, movedFromAssetPaths))
             {
                 return;
             }

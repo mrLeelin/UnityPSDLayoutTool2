@@ -235,7 +235,7 @@ namespace PsdLayoutTool2
             return signed ? Mathf.Clamp(normalized, -1f, 1f) : Mathf.Clamp01(normalized);
         }
 
-        private static bool IsCompatibleWithFont(Material material, TMP_FontAsset font)
+        internal static bool IsCompatibleWithFont(Material material, TMP_FontAsset font)
         {
             return material != null && font != null && font.atlasTexture != null && material.mainTexture == font.atlasTexture;
         }

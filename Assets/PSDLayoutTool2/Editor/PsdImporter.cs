@@ -410,6 +410,7 @@
         public static Material TextMeshProBaseMaterial { get; set; }
 
         private static bool tmpFontFallbackWarningEmitted;
+        private static bool tmpBaseMaterialFallbackWarningEmitted;
         private static Dictionary<string, TMP_FontAsset> currentTmpFontFallbacksByPsdName;
         private static Dictionary<string, string> currentPngPathByContentHash;
         private static PsdTextureReuseIndex currentTextureReuseIndex;
@@ -647,6 +648,12 @@
                 currentAutomaticNineSliceBordersInTargetCoordinates = new HashSet<Layer>();
                 useEmbeddedNineSliceMetadata = false;
                 tmpFontFallbackWarningEmitted = false;
+                tmpBaseMaterialFallbackWarningEmitted = false;
+                PsdLayoutProjectFontSnapshot projectFontSettings =
+                    PsdLayoutProjectSettings.instance.ResolveFontSettings();
+                ApplyProjectFontSettings(projectFontSettings);
+                LogProjectFontSettingsWarnings(projectFontSettings);
+                ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
                 currentTmpFontFallbacksByPsdName = new Dictionary<string, TMP_FontAsset>(StringComparer.OrdinalIgnoreCase);
                 currentPngPathByContentHash = new Dictionary<string, string>(StringComparer.Ordinal);
                 currentTextureReuseIndex = new PsdTextureReuseIndex();
@@ -4669,6 +4676,17 @@
             }
             else
             {
+                if (TextMeshProBaseMaterial != null &&
+                    !PsdPrefabTextMaterialFactory.IsCompatibleWithFont(TextMeshProBaseMaterial, textUI.font) &&
+                    !tmpBaseMaterialFallbackWarningEmitted)
+                {
+                    tmpBaseMaterialFallbackWarningEmitted = true;
+                    PsdLogger.Warning(
+                        "Configured TMP base material is incompatible with the resolved font atlas; " +
+                        "using the font material instead. material=" + TextMeshProBaseMaterial.name +
+                        ", font=" + textUI.font.name);
+                }
+
                 PsdPrefabTextModel textModel = BuildTextModel(layer);
                 Material material = PsdPrefabTextMaterialFactory.GetOrCreate(
                     textModel,
@@ -4740,6 +4758,36 @@
             }
 
             return fallback;
+        }
+
+        internal static void ApplyProjectFontSettings(PsdLayoutProjectFontSnapshot settings)
+        {
+            TextMeshProFont = settings.font;
+            TextMeshProBaseMaterial = settings.baseMaterial;
+        }
+
+        internal static void ApplyProjectOutputSettings(PsdLayoutProjectOutputSnapshot settings)
+        {
+            OutputMode = settings.outputMode;
+            OutputFolderName = settings.outputFolderName;
+            PrefabMode = settings.prefabMode;
+        }
+
+        private static void LogProjectFontSettingsWarnings(PsdLayoutProjectFontSnapshot settings)
+        {
+            if (settings.fontStatus == PsdProjectAssetStatus.Missing)
+            {
+                PsdLogger.Warning(
+                    "The project-wide TMP font reference is missing or invalid; " +
+                    "using the TMP default font when available. guid=" + settings.fontGuid);
+            }
+
+            if (settings.materialStatus == PsdProjectAssetStatus.Missing)
+            {
+                PsdLogger.Warning(
+                    "The project-wide TMP base material reference is missing or invalid; " +
+                    "using the resolved font material. guid=" + settings.materialGuid);
+            }
         }
 
         private static bool IsUsableTextMeshProFont(TMP_FontAsset font)
@@ -5236,8 +5284,11 @@
                 {
                     if (reference.Kind == PsdCommonAssetKind.Texture && layer.Children.Count > 0)
                     {
+                        PsdCommonAssetNamingSnapshot naming =
+                            PsdLayoutProjectSettings.instance.ResolveCommonAssetNaming();
                         throw new InvalidOperationException(
-                            "Common_Texture_ layers must be leaf art layers. Invalid layer: " + DescribeLayerForLog(layer));
+                            naming.texturePrefix + " layers must be leaf art layers. Invalid layer: " +
+                            DescribeLayerForLog(layer));
                     }
 
                     UnityEngine.Object asset;

@@ -42,6 +42,19 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ParserUsesConfiguredPrefixesForLayersAndCatalogAssets()
+        {
+            var naming = new PsdCommonAssetNamingSnapshot("UI_Prefab_", "UI_Texture_");
+
+            Assert.That(PsdCommonAssetNameParser.TryParse("UI_Prefab_Button_Green", naming, out PsdCommonAssetReference reference), Is.True);
+            Assert.That(reference.Kind, Is.EqualTo(PsdCommonAssetKind.Prefab));
+            Assert.That(reference.Key, Is.EqualTo("Button_Green"));
+            Assert.That(PsdCommonAssetNameParser.TryParseTextureAssetKey("UI_Texture_Lock", naming, out string textureKey), Is.True);
+            Assert.That(textureKey, Is.EqualTo("Lock"));
+            Assert.That(PsdCommonAssetNameParser.TryParse("Common_Prefab_Button_Green", naming, out reference), Is.False);
+        }
+
+        [Test]
         public void CatalogDeltaReplacesAnImportedAssetAtItsCurrentPath()
         {
             var existing = new[]

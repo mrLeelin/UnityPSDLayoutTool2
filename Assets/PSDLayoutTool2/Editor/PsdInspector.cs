@@ -3,7 +3,6 @@
     using System;
     using UnityEditor;
     using UnityEngine;
-    using TMPro;
 
     /// <summary>
     /// A custom Inspector to allow PSD files to be turned into prefabs and separate textures per layer.
@@ -35,16 +34,6 @@
         }
 
         /// <summary>
-        /// EditorPrefs key for output mode.
-        /// </summary>
-        private const string OutputModePrefKey = "PsdLayoutTool2.OutputMode";
-
-        /// <summary>
-        /// EditorPrefs key for prefab output mode.
-        /// </summary>
-        private const string PrefabModePrefKey = "PsdLayoutTool2.PrefabMode";
-
-        /// <summary>
         /// EditorPrefs key for selecting Canvas/Unity UI output mode.
         /// </summary>
         private const string UseUnityUIPrefKey = "PsdLayoutTool2.UseUnityUI";
@@ -73,16 +62,6 @@
         /// EditorPrefs key for using TextMeshProUGUI for PSD text layers.
         /// </summary>
         private const string TextMeshProEnabledPrefKey = "PsdLayoutTool2.UseTextMeshPro";
-
-        /// <summary>
-        /// EditorPrefs key for the selected TMP font asset path.
-        /// </summary>
-        private const string TextMeshProFontPathPrefKey = "PsdLayoutTool2.TextMeshProFontPath";
-
-        /// <summary>
-        /// EditorPrefs key for the selected TMP base material path.
-        /// </summary>
-        private const string TextMeshProBaseMaterialPathPrefKey = "PsdLayoutTool2.TextMeshProBaseMaterialPath";
 
         /// <summary>
         /// EditorPrefs key for inspector display language.
@@ -155,20 +134,7 @@
                 ? EditorPrefs.GetBool(ShowNativeInspectorPrefKey, DefaultShowNativeInspector)
                 : DefaultShowNativeInspector;
 
-            if (EditorPrefs.HasKey(OutputModePrefKey))
-            {
-                PsdImporter.OutputMode = (PsdImporter.OutputDirectoryMode)EditorPrefs.GetInt(OutputModePrefKey, (int)PsdImporter.OutputDirectoryMode.PsdDirectory);
-            }
-
-            // A custom output name belongs to the PSD currently being imported,
-            // not to the editor globally. Leave it empty by default so the
-            // importer resolves it from the selected PSD file name.
-            PsdImporter.OutputFolderName = string.Empty;
-
-            if (EditorPrefs.HasKey(PrefabModePrefKey))
-            {
-                PsdImporter.PrefabMode = (PsdImporter.PrefabOutputMode)EditorPrefs.GetInt(PrefabModePrefKey, (int)PsdImporter.PrefabOutputMode.SiblingToOutputFolder);
-            }
+            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
 
             bool hasSavedUseUnityUI = EditorPrefs.HasKey(UseUnityUIPrefKey);
             PsdImporter.UseUnityUI = PsdImporterDefaults.ResolveUseUnityUI(
@@ -203,12 +169,6 @@
             {
                 PsdImporter.UseTextMeshPro = EditorPrefs.GetBool(TextMeshProEnabledPrefKey, true);
             }
-
-            string textMeshProFontPath = EditorPrefs.GetString(TextMeshProFontPathPrefKey, string.Empty);
-            PsdImporter.TextMeshProFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(textMeshProFontPath);
-
-            string textMeshProBaseMaterialPath = EditorPrefs.GetString(TextMeshProBaseMaterialPathPrefKey, string.Empty);
-            PsdImporter.TextMeshProBaseMaterial = AssetDatabase.LoadAssetAtPath<Material>(textMeshProBaseMaterialPath);
 
             if (EditorPrefs.HasKey(LanguagePrefKey))
             {
@@ -245,6 +205,7 @@
 
                 if (!string.IsNullOrEmpty(assetPath) && assetPath.EndsWith(".psd", StringComparison.OrdinalIgnoreCase))
                 {
+                    PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
                     GUIContent languageLabel = LocalizedContent(
                         "界面语言",
                         "Inspector Language",
@@ -265,6 +226,17 @@
                     if (GUILayout.Button(Localize("生成预制体", "Generate Prefab"), GUILayout.Height(26)))
                     {
                         PsdImporter.GeneratePrefab(assetPath);
+                    }
+
+                    if (GUILayout.Button(
+                            new GUIContent(
+                                Localize("打开全局配置", "Open Global Settings"),
+                                Localize(
+                                    "选择项目中的 PSDLayoutProjectSettings 配置资产。输出规则、字体、材质和公共资源前缀都在该资产的 Inspector 中编辑。",
+                                    "Selects the project PSDLayoutProjectSettings asset. Output rules, fonts, materials, and Common asset prefixes are edited in that asset Inspector.")),
+                            GUILayout.Height(24)))
+                    {
+                        PsdLayoutProjectSettingsAsset.OpenInInspector();
                     }
 
                     // This action is intentionally adjacent to the primary Prefab action. Opening
@@ -304,20 +276,6 @@
                     {
                         EditorGUILayout.HelpBox(hierarchyUnavailableReason, MessageType.Info);
                     }
-
-                    GUIContent maximumDepthLabel = LocalizedContent(
-                        "最大深度（Z）",
-                        "Maximum Depth (Z)",
-                        "用于图层布局的最远 Z 值。导入时会从该值逐层递减到 0。\n数值越大，层与层之间的深度间隔越明显。",
-                        "Farthest Z value for layer layout. Import decrements this value layer by layer toward 0.\nLarger values create more depth spacing between layers.");
-                    PsdImporter.MaximumDepth = EditorGUILayout.FloatField(maximumDepthLabel, PsdImporter.MaximumDepth);
-
-                    GUIContent pixelsToUnitsLabel = LocalizedContent(
-                        "像素到单位（PPU）",
-                        "Pixels To Units (PPU)",
-                        "每多少像素对应 1 个 Unity 世界单位。\n通常建议与项目中 Sprite 的 Pixels Per Unit 保持一致（常见为 100）。",
-                        "How many pixels equal 1 Unity world unit.\nUsually keep this consistent with your Sprite Pixels Per Unit (commonly 100).");
-                    PsdImporter.PixelsToUnits = EditorGUILayout.FloatField(pixelsToUnitsLabel, PsdImporter.PixelsToUnits);
 
                     EditorGUI.BeginChangeCheck();
                     GUIContent useUnityUILabel = LocalizedContent(
@@ -398,71 +356,16 @@
                             "When enabled, PSD text layers use TextMeshProUGUI and the selected TMP_FontAsset. Disable to fall back to Unity UI Text.");
                         PsdImporter.UseTextMeshPro = EditorGUILayout.Toggle(textMeshProEnabledLabel, PsdImporter.UseTextMeshPro);
 
-                        if (PsdImporter.UseTextMeshPro)
-                        {
-                            GUIContent textMeshProFontLabel = LocalizedContent(
-                                "TMP 字体资产",
-                                "TMP Font Asset",
-                                "拖入项目中的 TMP_FontAsset。留空时使用 Unity 的默认 TMP 字体。",
-                                "Assign a TMP_FontAsset from the project. Empty uses Unity's default TMP font.");
-                            PsdImporter.TextMeshProFont = (TMP_FontAsset)EditorGUILayout.ObjectField(
-                                textMeshProFontLabel,
-                                PsdImporter.TextMeshProFont,
-                                typeof(TMP_FontAsset),
-                                false);
-
-                            GUIContent textMeshProMaterialLabel = LocalizedContent(
-                                "TMP 基础材质（可选）",
-                                "TMP Base Material (Optional)",
-                                "可选。用于复制生成描边/阴影材质；留空时使用所选 TMP 字体自带材质。",
-                                "Optional base material used to create outline/shadow materials. Empty uses the selected TMP font material.");
-                            PsdImporter.TextMeshProBaseMaterial = (Material)EditorGUILayout.ObjectField(
-                                textMeshProMaterialLabel,
-                                PsdImporter.TextMeshProBaseMaterial,
-                                typeof(Material),
-                                false);
-                        }
                     }
-
-                    GUIContent outputModeLabel = LocalizedContent(
-                        "资源输出位置",
-                        "Output Directory",
-                        "控制导出的 PNG、动画片段（.anim）和控制器（.controller）保存到哪里。",
-                        "Controls where exported PNGs, animation clips (.anim), and controllers (.controller) are saved.");
-                    int outputModeIndex = EditorGUILayout.Popup(outputModeLabel, ToOutputModeIndex(PsdImporter.OutputMode), GetOutputModeOptions());
-                    PsdImporter.OutputMode = ToOutputMode(outputModeIndex);
-
-                    GUIContent outputFolderNameLabel = LocalizedContent(
-                        "输出文件夹名",
-                        "Output Folder Name",
-                        "生成文件夹名称。留空时自动使用 PSD 文件名。\n可用于按模块命名，例如 UI_MainMenu、角色立绘等。",
-                        "Name of generated output folder. Empty uses PSD file name automatically.\nUseful for module naming such as UI_MainMenu, character portraits, etc.");
-                    PsdImporter.OutputFolderName = EditorGUILayout.TextField(outputFolderNameLabel, PsdImporter.OutputFolderName);
-
-                    GUIContent prefabModeLabel = LocalizedContent(
-                        "Prefab 输出位置",
-                        "Prefab Output",
-                        "控制 Generate Prefab 生成的预制体保存位置。",
-                        "Controls where prefabs generated by Generate Prefab are saved.");
-                    int prefabModeIndex = EditorGUILayout.Popup(prefabModeLabel, ToPrefabModeIndex(PsdImporter.PrefabMode), GetPrefabModeOptions());
-                    PsdImporter.PrefabMode = ToPrefabMode(prefabModeIndex);
 
                     if (EditorGUI.EndChangeCheck())
                     {
-                        EditorPrefs.SetInt(OutputModePrefKey, (int)PsdImporter.OutputMode);
-                        EditorPrefs.SetInt(PrefabModePrefKey, (int)PsdImporter.PrefabMode);
                         EditorPrefs.SetBool(UseUnityUIPrefKey, PsdImporter.UseUnityUI);
                         EditorPrefs.SetString(TargetCanvasPathPrefKey, PsdImporter.TargetCanvasPath ?? string.Empty);
                         EditorPrefs.SetBool(PreserveAspectPrefKey, PsdImporter.PreserveAspectWhenScalingToCanvas);
                         EditorPrefs.SetBool(AutoAnchorByNamePrefKey, PsdImporter.EnableAutoAnchorByName);
                         EditorPrefs.SetBool(RootGlobalAnchorPrefKey, PsdImporter.RootUseGlobalAnchorByDefault);
                         EditorPrefs.SetBool(TextMeshProEnabledPrefKey, PsdImporter.UseTextMeshPro);
-                        EditorPrefs.SetString(
-                            TextMeshProFontPathPrefKey,
-                            PsdImporter.TextMeshProFont != null ? AssetDatabase.GetAssetPath(PsdImporter.TextMeshProFont) : string.Empty);
-                        EditorPrefs.SetString(
-                            TextMeshProBaseMaterialPathPrefKey,
-                            PsdImporter.TextMeshProBaseMaterial != null ? AssetDatabase.GetAssetPath(PsdImporter.TextMeshProBaseMaterial) : string.Empty);
                     }
 
                     EditorGUILayout.HelpBox(
@@ -533,88 +436,6 @@
 
             // Therefore we just move the ImportedObject section out of view
             ////GUILayout.Space(2048);
-        }
-
-        /// <summary>
-        /// Converts output mode enum to popup index.
-        /// </summary>
-        /// <param name="mode">Current output mode.</param>
-        /// <returns>Popup index.</returns>
-        private static int ToOutputModeIndex(PsdImporter.OutputDirectoryMode mode)
-        {
-            return mode == PsdImporter.OutputDirectoryMode.AssetsRoot ? 1 : 0;
-        }
-
-        /// <summary>
-        /// Converts popup index to output mode enum.
-        /// </summary>
-        /// <param name="index">Popup index.</param>
-        /// <returns>Output mode enum.</returns>
-        private static PsdImporter.OutputDirectoryMode ToOutputMode(int index)
-        {
-            return index == 1 ? PsdImporter.OutputDirectoryMode.AssetsRoot : PsdImporter.OutputDirectoryMode.PsdDirectory;
-        }
-
-        /// <summary>
-        /// Converts prefab mode enum to popup index.
-        /// </summary>
-        /// <param name="mode">Current prefab mode.</param>
-        /// <returns>Popup index.</returns>
-        private static int ToPrefabModeIndex(PsdImporter.PrefabOutputMode mode)
-        {
-            return mode == PsdImporter.PrefabOutputMode.InsideOutputFolder ? 1 : 0;
-        }
-
-        /// <summary>
-        /// Converts popup index to prefab mode enum.
-        /// </summary>
-        /// <param name="index">Popup index.</param>
-        /// <returns>Prefab mode enum.</returns>
-        private static PsdImporter.PrefabOutputMode ToPrefabMode(int index)
-        {
-            return index == 1 ? PsdImporter.PrefabOutputMode.InsideOutputFolder : PsdImporter.PrefabOutputMode.SiblingToOutputFolder;
-        }
-
-        /// <summary>
-        /// Gets localized options for output directory mode popup.
-        /// </summary>
-        /// <returns>Localized options array.</returns>
-        private static GUIContent[] GetOutputModeOptions()
-        {
-            return new[]
-            {
-                LocalizedContent(
-                    "与 PSD 同目录",
-                    "Same Directory As PSD",
-                    "在 PSD 所在目录创建输出文件夹。",
-                    "Create the output folder in the same directory as the PSD."),
-                LocalizedContent(
-                    "Assets 根目录",
-                    "Assets Root",
-                    "在项目 Assets 根目录创建输出文件夹。",
-                    "Create the output folder under the project's Assets root.")
-            };
-        }
-
-        /// <summary>
-        /// Gets localized options for prefab output mode popup.
-        /// </summary>
-        /// <returns>Localized options array.</returns>
-        private static GUIContent[] GetPrefabModeOptions()
-        {
-            return new[]
-            {
-                LocalizedContent(
-                    "输出文件夹同级（默认）",
-                    "Sibling To Output Folder (Default)",
-                    "Prefab 与输出文件夹平级，便于按资源和预制体分开管理。",
-                    "Save prefab next to the output folder for cleaner separation of generated assets and prefabs."),
-                LocalizedContent(
-                    "输出文件夹内部",
-                    "Inside Output Folder",
-                    "Prefab 放在输出文件夹内部，便于打包分发单个目录。",
-                    "Save prefab inside the output folder to package and distribute a single directory.")
-            };
         }
 
         /// <summary>
