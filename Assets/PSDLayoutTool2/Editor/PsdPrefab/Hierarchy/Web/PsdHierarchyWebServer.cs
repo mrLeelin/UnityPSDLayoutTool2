@@ -32,6 +32,7 @@ namespace PsdLayoutTool2.Editor
         // Header bytes include every header line's CRLF and the terminating empty line's CRLF.
         private const int MaxHeaderBytes = 32 * 1024;
         private const int MaxBodyBytes = 1024 * 1024;
+        private const int MaxConcurrentClients = 16;
         private static readonly TimeSpan MinimumRequestDeadline = TimeSpan.FromMilliseconds(100);
         private static readonly TimeSpan MaximumRequestDeadline = TimeSpan.FromSeconds(60);
         private readonly object gate = new object();
@@ -42,7 +43,8 @@ namespace PsdLayoutTool2.Editor
         private readonly Action<CancellationToken> processingProbe;
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         private readonly Task acceptLoop;
-        private TcpClient activeClient;
+        private readonly HashSet<TcpClient> activeClients = new HashSet<TcpClient>();
+        private readonly HashSet<Task> clientTasks = new HashSet<Task>();
         private int activeDeadlineCountValue;
         private bool disposed;
 
@@ -80,17 +82,22 @@ namespace PsdLayoutTool2.Editor
 
         public void Dispose()
         {
-            TcpClient client;
+            TcpClient[] clients;
+            Task[] tasks;
             lock (gate)
             {
                 if (disposed) return;
                 disposed = true;
-                client = activeClient;
+                clients = new List<TcpClient>(activeClients).ToArray();
+                tasks = new List<Task>(clientTasks).ToArray();
             }
             shutdown.Cancel();
             try { listener.Stop(); } catch (SocketException) { }
-            try { client?.Close(); } catch (SocketException) { }
+            foreach (TcpClient client in clients)
+                try { client.Close(); } catch (SocketException) { }
             try { acceptLoop.Wait(TimeSpan.FromSeconds(2)); }
+            catch (AggregateException exception) { Report(exception); }
+            try { Task.WhenAll(tasks).Wait(TimeSpan.FromSeconds(2)); }
             catch (AggregateException exception) { Report(exception); }
             finally { shutdown.Dispose(); }
         }
@@ -110,14 +117,30 @@ namespace PsdLayoutTool2.Editor
                 lock (gate)
                 {
                     if (disposed) { client.Close(); return; }
-                    activeClient = client;
+                    if (activeClients.Count >= MaxConcurrentClients)
+                    {
+                        client.Close();
+                        continue;
+                    }
+                    activeClients.Add(client);
                 }
-                try { await ProcessClientWithinDeadlineAsync(client).ConfigureAwait(false); }
-                finally
+                Task task = HandleClientAsync(client);
+                lock (gate) clientTasks.Add(task);
+                _ = task.ContinueWith(completed =>
                 {
-                    client.Close();
-                    lock (gate) { if (ReferenceEquals(activeClient, client)) activeClient = null; }
-                }
+                    lock (gate) clientTasks.Remove(completed);
+                    if (completed.IsFaulted) Report(completed.Exception);
+                }, TaskContinuationOptions.ExecuteSynchronously);
+            }
+        }
+
+        private async Task HandleClientAsync(TcpClient client)
+        {
+            try { await ProcessClientWithinDeadlineAsync(client).ConfigureAwait(false); }
+            finally
+            {
+                client.Close();
+                lock (gate) activeClients.Remove(client);
             }
         }
 

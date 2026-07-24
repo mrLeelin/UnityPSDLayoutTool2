@@ -38,6 +38,17 @@ namespace PsdLayoutTool2.Editor
 
         public string root { get; private set; }
 
+        public PsdHierarchyWebSession FindBySessionId(string sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return null;
+            lock (gate)
+            {
+                ThrowIfDisposed();
+                return sessions.Values.FirstOrDefault(session =>
+                    string.Equals(session.sessionId, sessionId, StringComparison.Ordinal));
+            }
+        }
+
         public async Task<PsdHierarchyWebSession> GetOrCreateAsync(
             string sourcePsdGuid,
             string sourcePsdPath,

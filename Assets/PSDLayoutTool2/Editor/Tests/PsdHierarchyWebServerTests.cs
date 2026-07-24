@@ -14,6 +14,53 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdHierarchyWebServerTests
     {
         [Test]
+        public void Router_ServesOnlyTheStaticShellWithoutSessionToken()
+        {
+            using (var session = new PsdHierarchyWebSession(
+                       "known", "token", "guid", "Assets/A.psd", "C:/temp/session", null))
+            {
+                var router = new PsdHierarchyWebRouter(
+                    id => id == "known" ? session : null,
+                    (request, found) => throw new AssertionException("Static shell must not invoke a data handler."));
+
+                PsdHierarchyWebResponse open = router.Route(new PsdHierarchyWebRequest(
+                    "GET", "/open/known", new Dictionary<string, string>(), new byte[0]));
+                PsdHierarchyWebResponse script = router.Route(new PsdHierarchyWebRequest(
+                    "GET", "/organizer.js", new Dictionary<string, string>(), new byte[0]));
+                PsdHierarchyWebResponse missing = router.Route(new PsdHierarchyWebRequest(
+                    "GET", "/open/missing", new Dictionary<string, string>(), new byte[0]));
+                PsdHierarchyWebResponse protectedData = router.Route(new PsdHierarchyWebRequest(
+                    "GET", "/session/known", new Dictionary<string, string>(), new byte[0]));
+
+                Assert.That(open.statusCode, Is.EqualTo(200));
+                StringAssert.StartsWith("text/html", open.contentType);
+                Assert.That(open.body, Is.Not.Empty);
+                Assert.That(script.statusCode, Is.EqualTo(200));
+                StringAssert.StartsWith("text/javascript", script.contentType);
+                Assert.That(missing.statusCode, Is.EqualTo(404));
+                Assert.That(protectedData.statusCode, Is.EqualTo(401));
+            }
+        }
+
+        [Test]
+        public async Task Server_SpeculativeConnectionDoesNotBlockARealRequest()
+        {
+            using (PsdHierarchyWebServer server = CreateServer(TimeSpan.FromSeconds(5)))
+            using (var speculative = new TcpClient())
+            {
+                await speculative.ConnectAsync("127.0.0.1", server.port);
+                Task<RawResponse> realRequest = SendAsync(
+                    server.port, Request(server.port, "/session/known/data", "token"));
+
+                Task completed = await Task.WhenAny(realRequest, Task.Delay(TimeSpan.FromSeconds(1)));
+
+                Assert.That(completed, Is.SameAs(realRequest),
+                    "A browser preconnect without headers must not monopolize the loopback server.");
+                Assert.That((await realRequest).statusCode, Is.EqualTo(200));
+            }
+        }
+
+        [Test]
         public async Task Server_BindsLoopbackOnRandomPort_AndClosesConnection()
         {
             using (var server = CreateServer())

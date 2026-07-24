@@ -3,7 +3,6 @@ namespace PsdLayoutTool2.Editor
     using System;
     using System.Threading;
     using System.Threading.Tasks;
-    using UnityEditor;
 
     internal interface IPsdHierarchyWebMainThread
     {
@@ -14,10 +13,13 @@ namespace PsdLayoutTool2.Editor
     internal sealed class PsdHierarchyWebMainThread : IPsdHierarchyWebMainThread
     {
         private readonly int mainThreadId;
+        private readonly SynchronizationContext synchronizationContext;
 
         public PsdHierarchyWebMainThread()
         {
             mainThreadId = Thread.CurrentThread.ManagedThreadId;
+            synchronizationContext = SynchronizationContext.Current ??
+                throw new InvalidOperationException("Unity main-thread synchronization context is unavailable.");
         }
 
         public Task InvokeAsync(Func<Task> action)
@@ -26,7 +28,7 @@ namespace PsdLayoutTool2.Editor
             if (Thread.CurrentThread.ManagedThreadId == mainThreadId) return action();
 
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            EditorApplication.delayCall += async () =>
+            synchronizationContext.Post(async _ =>
             {
                 try
                 {
@@ -35,7 +37,7 @@ namespace PsdLayoutTool2.Editor
                 }
                 catch (OperationCanceledException) { completion.TrySetCanceled(); }
                 catch (Exception exception) { completion.TrySetException(exception); }
-            };
+            }, null);
             return completion.Task;
         }
 
@@ -45,11 +47,11 @@ namespace PsdLayoutTool2.Editor
             if (Thread.CurrentThread.ManagedThreadId == mainThreadId) return Task.FromResult(action());
 
             var completion = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            EditorApplication.delayCall += () =>
+            synchronizationContext.Post(_ =>
             {
                 try { completion.TrySetResult(action()); }
                 catch (Exception exception) { completion.TrySetException(exception); }
-            };
+            }, null);
             return completion.Task;
         }
     }

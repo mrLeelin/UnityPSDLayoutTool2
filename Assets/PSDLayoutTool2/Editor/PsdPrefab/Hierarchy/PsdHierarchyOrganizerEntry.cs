@@ -5,6 +5,7 @@ namespace PsdLayoutTool2
     using System.IO;
     using System.Linq;
     using PhotoshopFile;
+    using PsdLayoutTool2.Editor;
     using UnityEditor;
     using UnityEngine;
 
@@ -42,7 +43,7 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdHierarchyOrganizerEntry
     {
-        public const string PreviewButtonLabel = "AI 整理层级（预览）";
+        public const string PreviewButtonLabel = "AI 整理";
 
         public static bool TryResolveAvailability(
             string psdAssetPath,
@@ -177,6 +178,30 @@ namespace PsdLayoutTool2
                 sourcePsdPath, targetPath, new CodexCliHierarchyRunner());
             return PsdHierarchyOrganizerWindow.Open(
                 input.previewModel,
+                plan => PsdImporter.GeneratePrefabWithHierarchyPlan(
+                    input.sourcePsdPath, input.sourcePsdGuid, input.targetPrefabPath, plan));
+        }
+
+        public static void OpenWeb(string sourcePsdPath)
+        {
+            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
+            string targetPath;
+            string explanation;
+            if (!TryResolveAvailability(
+                    sourcePsdPath,
+                    PsdImporter.OutputMode,
+                    PsdImporter.OutputFolderName,
+                    PsdImporter.PrefabMode,
+                    PsdImporter.UseUnityUI,
+                    path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
+                    out targetPath,
+                    out explanation))
+                throw new InvalidOperationException(explanation);
+
+            PsdHierarchyOrganizerInput input = BuildFromAssets(
+                sourcePsdPath, targetPath, new CodexCliHierarchyRunner());
+            PsdHierarchyWebWorkbench.Open(
+                input,
                 plan => PsdImporter.GeneratePrefabWithHierarchyPlan(
                     input.sourcePsdPath, input.sourcePsdGuid, input.targetPrefabPath, plan));
         }

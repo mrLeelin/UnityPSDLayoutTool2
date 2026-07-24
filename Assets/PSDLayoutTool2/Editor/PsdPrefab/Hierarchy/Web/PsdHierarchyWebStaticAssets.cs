@@ -1,6 +1,7 @@
 namespace PsdLayoutTool2.Editor
 {
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using UnityEditor;
     using UnityEngine;
@@ -21,8 +22,29 @@ namespace PsdLayoutTool2.Editor
     internal static class PsdHierarchyWebStaticAssets
     {
         private const string StaticRelativePath = "Editor/PsdPrefab/Hierarchy/Web/Static";
+        private static readonly object Gate = new object();
+        private static Dictionary<string, PsdHierarchyWebStaticAsset> cachedAssets;
+
+        public static void WarmUp()
+        {
+            var loaded = new Dictionary<string, PsdHierarchyWebStaticAsset>(StringComparer.Ordinal);
+            foreach (string route in new[] { "/", "/organizer.css", "/organizer.js" })
+                loaded.Add(route, Load(route));
+            lock (Gate) cachedAssets = loaded;
+        }
 
         public static PsdHierarchyWebStaticAsset Resolve(string route)
+        {
+            lock (Gate)
+            {
+                PsdHierarchyWebStaticAsset cached;
+                if (cachedAssets != null && cachedAssets.TryGetValue(route, out cached)) return cached;
+                if (cachedAssets != null) return null;
+            }
+            return Load(route);
+        }
+
+        private static PsdHierarchyWebStaticAsset Load(string route)
         {
             string fileName;
             string contentType;

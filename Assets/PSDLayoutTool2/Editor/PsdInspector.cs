@@ -258,12 +258,12 @@
                         if (GUILayout.Button(
                                 new GUIContent(
                                     PsdHierarchyOrganizerEntry.PreviewButtonLabel,
-                                    "只读生成层级整理预览；不会直接修改 Prefab、Profile 或材质。"),
+                                    "在浏览器中打开完整 PSD 画布。应用前只生成整理预览，不会修改 Prefab、Profile 或材质。"),
                                 GUILayout.Height(24)))
                         {
                             try
                             {
-                                PsdHierarchyOrganizerEntry.Open(assetPath);
+                                PsdHierarchyOrganizerEntry.OpenWeb(assetPath);
                             }
                             catch (Exception exception)
                             {

@@ -35,6 +35,16 @@ namespace PsdLayoutTool2.Editor
             return new PsdHierarchyWebResponse(200, "image/png", copy);
         }
 
+        public static PsdHierarchyWebResponse Asset(string contentType, byte[] bytes)
+        {
+            if (string.IsNullOrWhiteSpace(contentType))
+                throw new ArgumentException("Content type is required.", nameof(contentType));
+            if (bytes == null) throw new ArgumentNullException(nameof(bytes));
+            var copy = new byte[bytes.Length];
+            Buffer.BlockCopy(bytes, 0, copy, 0, bytes.Length);
+            return new PsdHierarchyWebResponse(200, contentType, copy);
+        }
+
         public static PsdHierarchyWebResponse Empty(int statusCode)
         {
             return new PsdHierarchyWebResponse(statusCode, "text/plain; charset=utf-8", new byte[0]);

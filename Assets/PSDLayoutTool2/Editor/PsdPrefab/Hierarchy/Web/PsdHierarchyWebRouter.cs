@@ -22,6 +22,22 @@ namespace PsdLayoutTool2.Editor
 
         public PsdHierarchyWebResponse Route(PsdHierarchyWebRequest request)
         {
+            if (request == null) return PsdHierarchyWebResponse.Empty(404);
+            if (string.Equals(request.method, "GET", StringComparison.Ordinal))
+            {
+                PsdHierarchyWebStaticAsset asset = PsdHierarchyWebStaticAssets.Resolve(request.path);
+                if (asset != null)
+                    return PsdHierarchyWebResponse.Asset(asset.contentType, asset.bytes);
+                string openSessionId;
+                if (TryGetOpenSessionId(request.path, out openSessionId))
+                {
+                    if (findSession(openSessionId) == null) return PsdHierarchyWebResponse.Empty(404);
+                    asset = PsdHierarchyWebStaticAssets.Resolve("/");
+                    return asset == null
+                        ? PsdHierarchyWebResponse.Empty(404)
+                        : PsdHierarchyWebResponse.Asset(asset.contentType, asset.bytes);
+                }
+            }
             if (request == null || !TryGetSessionId(request.path, out string sessionId))
                 return PsdHierarchyWebResponse.Empty(404);
 
@@ -33,6 +49,19 @@ namespace PsdLayoutTool2.Editor
                 return PsdHierarchyWebResponse.Empty(401);
 
             return handleSession(request, session) ?? PsdHierarchyWebResponse.Empty(404);
+        }
+
+        private static bool TryGetOpenSessionId(string path, out string sessionId)
+        {
+            sessionId = null;
+            if (string.IsNullOrEmpty(path) || path.IndexOf('?') >= 0 || path.IndexOf('#') >= 0 ||
+                path.IndexOf('\\') >= 0 || path.IndexOf('%') >= 0) return false;
+            string[] segments = path.Split('/');
+            if (segments.Length != 3 || segments[0].Length != 0 ||
+                !string.Equals(segments[1], "open", StringComparison.Ordinal) ||
+                string.IsNullOrEmpty(segments[2])) return false;
+            sessionId = segments[2];
+            return true;
         }
 
         private static bool TryGetSessionId(string path, out string sessionId)
