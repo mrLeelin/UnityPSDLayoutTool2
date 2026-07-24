@@ -139,11 +139,24 @@ namespace PsdLayoutTool2.Editor
                 }
             }
 
-            var texture = new Texture2D(
-                psd.Width, psd.Height, TextureFormat.RGBA32, false);
-            texture.SetPixels32(colors);
-            texture.Apply(false, false);
-            return texture;
+            Texture2D texture = null;
+            bool ownershipTransferred = false;
+            try
+            {
+                texture = new Texture2D(
+                    psd.Width, psd.Height, TextureFormat.RGBA32, false);
+                texture.SetPixels32(colors);
+                texture.Apply(false, false);
+                ownershipTransferred = true;
+                return texture;
+            }
+            finally
+            {
+                if (!ownershipTransferred && texture != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(texture);
+                }
+            }
         }
     }
 }
