@@ -34,6 +34,17 @@ namespace PsdLayoutTool2.Tests
             }
         }
 
+        [TestCase(null)]
+        [TestCase("wrong")]
+        public async Task UnknownSession_ReturnsNotFoundBeforeTokenValidation(string token)
+        {
+            using (var server = CreateServer())
+            {
+                RawResponse response = await SendAsync(server.port, Request(server.port, "/sessions/missing/data", token));
+                Assert.That(response.statusCode, Is.EqualTo(404));
+            }
+        }
+
         [Test]
         public async Task Server_RejectsInvalidOrMultipleHostHeaders()
         {
@@ -80,6 +91,54 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task Server_DeliversAllowedPostBodyToTheMatchedSessionRoute()
+        {
+            using (var server = CreateServer())
+            {
+                const string body = "post-body";
+                string request = "POST /sessions/known/echo HTTP/1.1\r\nHost: localhost:" + server.port +
+                    "\r\nX-PSD-Session-Token: token\r\nContent-Length: " + body.Length + "\r\n\r\n" + body;
+                RawResponse response = await SendAsync(server.port, request);
+
+                Assert.That(response.statusCode, Is.EqualTo(200));
+                Assert.That(Encoding.UTF8.GetString(response.body),
+                    Is.EqualTo("{\"delivery\":\"POST|/sessions/known/echo|post-body\"}"));
+            }
+        }
+
+        [Test]
+        public async Task Server_AcceptsExactWireLimitsAndRejectsOneByteOver()
+        {
+            using (var server = CreateServer())
+            {
+                string requestLine = "GET /" + new string('a', 4096 - "GET / HTTP/1.1\r\n".Length) + " HTTP/1.1\r\n";
+                RawResponse exactLine = await SendAsync(server.port, requestLine + "Host: localhost:" + server.port + "\r\n\r\n");
+                RawResponse overLine = await SendAsync(server.port, "GET /" +
+                    new string('a', 4097 - "GET / HTTP/1.1\r\n".Length) + " HTTP/1.1\r\nHost: localhost:" + server.port + "\r\n\r\n");
+
+                string headerPrefix = "Host: localhost:" + server.port + "\r\nX-PSD-Session-Token: token\r\nX-Pad: ";
+                string exactHeaders = headerPrefix + new string('a', 32768 - headerPrefix.Length - 4) + "\r\n\r\n";
+                RawResponse exactHeader = await SendAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n" + exactHeaders);
+                RawResponse overHeader = await SendAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n" +
+                    headerPrefix + new string('a', 32769 - headerPrefix.Length - 4) + "\r\n\r\n");
+
+                string body = new string('b', 1024 * 1024);
+                RawResponse exactBody = await SendAsync(server.port, "POST /sessions/known/body-size HTTP/1.1\r\nHost: localhost:" +
+                    server.port + "\r\nX-PSD-Session-Token: token\r\nContent-Length: " + body.Length + "\r\n\r\n" + body);
+                RawResponse overBody = await SendAsync(server.port, "POST /sessions/known/body-size HTTP/1.1\r\nHost: localhost:" +
+                    server.port + "\r\nX-PSD-Session-Token: token\r\nContent-Length: 1048577\r\n\r\n");
+
+                Assert.That(exactLine.statusCode, Is.EqualTo(404));
+                Assert.That(overLine.statusCode, Is.EqualTo(413));
+                Assert.That(exactHeader.statusCode, Is.EqualTo(200));
+                Assert.That(overHeader.statusCode, Is.EqualTo(413));
+                Assert.That(exactBody.statusCode, Is.EqualTo(200));
+                Assert.That(Encoding.UTF8.GetString(exactBody.body), Is.EqualTo("{\"bytes\":1048576}"));
+                Assert.That(overBody.statusCode, Is.EqualTo(413));
+            }
+        }
+
+        [Test]
         public async Task Server_RejectsUnsupportedMalformedAndOversizedRequests()
         {
             using (var server = CreateServer())
@@ -113,7 +172,12 @@ namespace PsdLayoutTool2.Tests
                 id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
                 (request, session) => request.path.EndsWith("preview.png", StringComparison.Ordinal)
                     ? PsdHierarchyWebResponse.Png(new byte[] { 137, 80, 78, 71 })
-                    : PsdHierarchyWebResponse.Json("{\"ok\":true}")));
+                    : request.path.EndsWith("echo", StringComparison.Ordinal)
+                        ? PsdHierarchyWebResponse.Json("{\"delivery\":\"" + request.method + "|" + request.path + "|" +
+                            Encoding.UTF8.GetString(request.body) + "\"}")
+                        : request.path.EndsWith("body-size", StringComparison.Ordinal)
+                            ? PsdHierarchyWebResponse.Json("{\"bytes\":" + request.body.Length + "}")
+                            : PsdHierarchyWebResponse.Json("{\"ok\":true}")));
         }
 
         private static string Request(int port, string path, string token)

@@ -12,7 +12,9 @@ namespace PsdLayoutTool2.Editor
     /// <summary>Minimal HTTP/1.1 listener intentionally limited to local PSD workbench traffic.</summary>
     internal sealed class PsdHierarchyWebServer : IDisposable
     {
+        // Both line limits include the trailing CRLF so a 4 KiB request line is 4096 wire bytes.
         private const int MaxRequestLineBytes = 4 * 1024;
+        // Header bytes include every header line's CRLF and the terminating empty line's CRLF.
         private const int MaxHeaderBytes = 32 * 1024;
         private const int MaxBodyBytes = 1024 * 1024;
         private readonly object gate = new object();
@@ -159,8 +161,8 @@ namespace PsdLayoutTool2.Editor
             {
                 int value = stream.ReadByte();
                 if (value < 0) return false;
-                if (bytes.Count >= maximumBytes) { errorStatus = 413; return false; }
                 bytes.Add((byte)value);
+                if (bytes.Count > maximumBytes) { errorStatus = 413; return false; }
                 if (value == '\n')
                 {
                     if (bytes.Count < 2 || bytes[bytes.Count - 2] != '\r') return false;
