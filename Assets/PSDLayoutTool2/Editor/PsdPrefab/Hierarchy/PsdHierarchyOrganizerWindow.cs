@@ -49,6 +49,10 @@ namespace PsdLayoutTool2
         {
             get { return fullRequest.nodes.Select(CloneNode).ToList(); }
         }
+        internal PsdHierarchyRequest requestSnapshot
+        {
+            get { return CloneRequest(fullRequest); }
+        }
         public PsdHierarchyPlan proposedPlan
         {
             get { return ClonePlan(proposedPlanValue); }
