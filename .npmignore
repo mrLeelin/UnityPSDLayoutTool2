@@ -1,0 +1,12 @@
+.claude/
+.omx/
+.superpowers/
+.tmp/
+docs/
+docs.meta
+Packages/
+Packages.meta
+ProjectSettings/
+ProjectSettings.meta
+*.csproj
+*.sln

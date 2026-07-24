@@ -1,12 +1,12 @@
 {
   "name": "com.mrleelin.unity-psd-layout-tool-2",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Unity PSD Layout Tool 2",
   "description": "Import Photoshop PSD layers into Unity, export layer textures, build layouts, and generate reusable prefabs.",
   "unity": "6000.3",
   "documentationUrl": "https://github.com/mrLeelin/UnityPSDLayoutTool2#readme",
-  "changelogUrl": "https://github.com/mrLeelin/UnityPSDLayoutTool2/blob/main/Assets/PSDLayoutTool2/CHANGELOG.md",
-  "licensesUrl": "https://github.com/mrLeelin/UnityPSDLayoutTool2/blob/main/Assets/PSDLayoutTool2/LICENSE.md",
+  "changelogUrl": "https://github.com/mrLeelin/UnityPSDLayoutTool2/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/mrLeelin/UnityPSDLayoutTool2/blob/main/LICENSE.md",
   "dependencies": {
     "com.unity.nuget.newtonsoft-json": "3.2.2",
     "com.unity.test-framework": "1.6.0",

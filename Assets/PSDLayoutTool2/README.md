@@ -12,15 +12,15 @@ Unity 编辑器 PSD 导入工具，可导出图层纹理、在场景中生成布
 在 Unity 中打开 `Window > Package Management > Package Manager`，选择 **Install package from git URL**，输入：
 
 ```text
-https://github.com/mrLeelin/UnityPSDLayoutTool2.git?path=/Assets/PSDLayoutTool2
+https://github.com/mrLeelin/UnityPSDLayoutTool2.git
 ```
 
-也可以选择 **Install package from disk** 并定位到本目录的 `package.json`，或选择 **Install package from tarball** 安装发布的 `.tgz` 文件。
+也可以选择 **Install package from disk** 并定位到仓库根目录的 `package.json`，或选择 **Install package from tarball** 安装发布的 `.tgz` 文件。
 
 建议在正式项目中把 Git URL 固定到标签或提交，例如：
 
 ```text
-https://github.com/mrLeelin/UnityPSDLayoutTool2.git?path=/Assets/PSDLayoutTool2#v0.1.0
+https://github.com/mrLeelin/UnityPSDLayoutTool2.git#v0.1.1
 ```
 
 ## 使用

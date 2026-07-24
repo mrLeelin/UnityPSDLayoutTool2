@@ -43,10 +43,10 @@ This project is explicitly based on the original `UnityPSDLayoutTool` and adds c
 推荐通过 Unity Package Manager 安装。在 `Window > Package Management > Package Manager` 中选择 **Install package from git URL**，输入：
 
 ```text
-https://github.com/mrLeelin/UnityPSDLayoutTool2.git?path=/Assets/PSDLayoutTool2
+https://github.com/mrLeelin/UnityPSDLayoutTool2.git
 ```
 
-也可以从本仓库选择 `Assets/PSDLayoutTool2/package.json` 进行本地安装，安装发布的 `.tgz` 包，或继续把 `Assets/PSDLayoutTool2` 复制到 Unity 项目中。
+也可以从本仓库根目录选择 `package.json` 进行本地安装，安装发布的 `.tgz` 包，或继续把 `Assets/PSDLayoutTool2` 复制到 Unity 项目中。
 
 ### 使用方式
 
@@ -218,10 +218,10 @@ The following changes were added on top of the original `UnityPSDLayoutTool`:
 The recommended installation method is Unity Package Manager. Choose **Install package from git URL** and enter:
 
 ```text
-https://github.com/mrLeelin/UnityPSDLayoutTool2.git?path=/Assets/PSDLayoutTool2
+https://github.com/mrLeelin/UnityPSDLayoutTool2.git
 ```
 
-You can also install `Assets/PSDLayoutTool2/package.json` from disk, install a released `.tgz` tarball, or copy `Assets/PSDLayoutTool2` into your Unity project.
+You can also install the repository-root `package.json` from disk, install a released `.tgz` tarball, or copy `Assets/PSDLayoutTool2` into your Unity project.
 
 ## Usage
 

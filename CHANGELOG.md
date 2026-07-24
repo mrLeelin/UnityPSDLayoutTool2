@@ -6,8 +6,9 @@ All notable changes to this package are documented in this file.
 
 ### Changed
 
-- Moved the canonical package manifest to the repository root.
-- Git installation no longer requires a `?path=` query.
+- Moved the canonical Unity Package Manager manifest to the repository root.
+- Git installation no longer requires the `?path=/Assets/PSDLayoutTool2` query.
+- Kept the existing source and assembly layout intact to preserve Unity asset GUIDs.
 
 ## [0.1.0] - 2026-07-24
 
@@ -16,4 +17,4 @@ All notable changes to this package are documented in this file.
 - Added a Unity Package Manager manifest for Git, disk, and tarball installation.
 - Split runtime, editor, and editor-test code into dedicated assemblies.
 - Declared the uGUI, Newtonsoft Json, and Unity Test Framework package dependencies.
-- Added package-local installation and usage documentation.
+- Added package installation and usage documentation.
