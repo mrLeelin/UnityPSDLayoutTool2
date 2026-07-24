@@ -8,11 +8,21 @@
         /// <summary>
         /// No compression.
         /// </summary>
-        Raw,
+        Raw = 0,
 
         /// <summary>
         /// RLE compression.
         /// </summary>
-        Rle
+        Rle = 1,
+
+        /// <summary>
+        /// ZIP compression without prediction.
+        /// </summary>
+        Zip = 2,
+
+        /// <summary>
+        /// ZIP compression with prediction.
+        /// </summary>
+        ZipPrediction = 3
     }
 }

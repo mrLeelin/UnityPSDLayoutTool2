@@ -71,7 +71,15 @@ namespace PsdLayoutTool2.Editor
                 });
             }
 
-            BuildGroups(snapshot, plan, nodesById, acceptedGroupKeys, lockedGroupKeys);
+            Dictionary<string, PsdHierarchyWebNodeDto> webNodesById = snapshot.nodes
+                .ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            BuildGroups(
+                snapshot,
+                plan,
+                nodesById,
+                webNodesById,
+                acceptedGroupKeys,
+                lockedGroupKeys);
             BuildWarnings(snapshot, request, previewModel);
             BuildPrefabCandidates(snapshot, previewModel);
             return snapshot;
@@ -137,6 +145,7 @@ namespace PsdLayoutTool2.Editor
             PsdHierarchyWebSnapshotDto snapshot,
             PsdHierarchyPlan plan,
             Dictionary<string, PsdHierarchyRequestNode> nodesById,
+            Dictionary<string, PsdHierarchyWebNodeDto> webNodesById,
             HashSet<string> acceptedGroupKeys,
             HashSet<string> lockedGroupKeys)
         {
@@ -162,7 +171,7 @@ namespace PsdLayoutTool2.Editor
                     parentKey = source.parentKey ?? string.Empty,
                     displayName = source.displayName ?? string.Empty,
                     memberStableIds = memberStableIds,
-                    bounds = UnionBounds(memberStableIds, snapshot),
+                    bounds = UnionBounds(memberStableIds, webNodesById),
                     isAccepted = acceptedGroupKeys.Contains(source.key ?? string.Empty),
                     isLocked = lockedGroupKeys.Contains(source.key ?? string.Empty) ||
                                containsProtectedNode,
@@ -174,10 +183,8 @@ namespace PsdLayoutTool2.Editor
 
         private static PsdHierarchyWebBoundsDto UnionBounds(
             IEnumerable<string> stableIds,
-            PsdHierarchyWebSnapshotDto snapshot)
+            Dictionary<string, PsdHierarchyWebNodeDto> nodesById)
         {
-            Dictionary<string, PsdHierarchyWebNodeDto> nodesById = snapshot.nodes
-                .ToDictionary(node => node.stableId, StringComparer.Ordinal);
             List<PsdHierarchyWebBoundsDto> bounds = stableIds
                 .Where(nodesById.ContainsKey)
                 .Select(stableId => nodesById[stableId].bounds)

@@ -1,12 +1,17 @@
 namespace PsdLayoutTool2.Editor
 {
     using System;
+    using System.ComponentModel;
     using System.IO;
+    using System.Runtime.InteropServices;
     using PhotoshopFile;
     using UnityEngine;
 
     internal static class PsdHierarchyCompositePreviewWriter
     {
+        private const int MoveFileReplaceExisting = 0x1;
+        private const int MoveFileWriteThrough = 0x8;
+
         public static string Write(string psdAssetPath, string sessionDirectory)
         {
             if (string.IsNullOrWhiteSpace(psdAssetPath))
@@ -26,7 +31,9 @@ namespace PsdLayoutTool2.Editor
                     "Composite preview output escaped the supplied session directory.");
             }
 
+            EnsureDestinationIsRegularOrMissing(outputPath);
             var psd = new PsdFile(Path.GetFullPath(psdAssetPath));
+            EnsureSupportedMergedImageCompression(psd.ImageCompression);
             Texture2D texture = null;
             try
             {
@@ -38,7 +45,7 @@ namespace PsdLayoutTool2.Editor
                         "Unity could not encode the PSD composite preview.");
                 }
 
-                File.WriteAllBytes(outputPath, png);
+                WriteAtomically(canonicalDirectory, outputPath, png);
                 return outputPath;
             }
             finally
@@ -69,8 +76,102 @@ namespace PsdLayoutTool2.Editor
                     "Composite previews must not be written under Assets.");
             }
 
-            Directory.CreateDirectory(canonicalDirectory);
+            CreateAndVerifyDirectoryPath(canonicalDirectory);
             return canonicalDirectory;
+        }
+
+        private static void CreateAndVerifyDirectoryPath(string directory)
+        {
+            string root = Path.GetPathRoot(directory);
+            if (string.IsNullOrEmpty(root))
+            {
+                throw new IOException("Session directory has no filesystem root.");
+            }
+
+            VerifyExistingDirectory(root);
+            string current = root;
+            string relative = directory.Substring(root.Length);
+            string[] components = relative.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+            foreach (string component in components)
+            {
+                current = Path.Combine(current, component);
+                FileAttributes attributes;
+                if (TryGetAttributes(current, out attributes))
+                {
+                    VerifyDirectoryAttributes(current, attributes);
+                    continue;
+                }
+
+                Directory.CreateDirectory(current);
+                VerifyExistingDirectory(current);
+            }
+        }
+
+        private static void VerifyExistingDirectory(string path)
+        {
+            FileAttributes attributes;
+            if (!TryGetAttributes(path, out attributes))
+            {
+                throw new IOException("Expected directory does not exist: " + path);
+            }
+            VerifyDirectoryAttributes(path, attributes);
+        }
+
+        private static void VerifyDirectoryAttributes(
+            string path,
+            FileAttributes attributes)
+        {
+            if ((attributes & FileAttributes.Directory) == 0)
+            {
+                throw new IOException("Session path component is not a directory: " + path);
+            }
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException(
+                    "Session directories must not contain reparse points: " + path);
+            }
+        }
+
+        private static bool TryGetAttributes(
+            string path,
+            out FileAttributes attributes)
+        {
+            try
+            {
+                attributes = File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                attributes = default(FileAttributes);
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                attributes = default(FileAttributes);
+                return false;
+            }
+        }
+
+        private static void EnsureDestinationIsRegularOrMissing(string outputPath)
+        {
+            FileAttributes attributes;
+            if (!TryGetAttributes(outputPath, out attributes))
+            {
+                return;
+            }
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException(
+                    "Composite preview destination must not be a reparse point.");
+            }
+            if ((attributes & FileAttributes.Directory) != 0)
+            {
+                throw new IOException(
+                    "Composite preview destination must be a regular file.");
+            }
         }
 
         private static string NormalizeDirectory(string path)
@@ -82,6 +183,97 @@ namespace PsdLayoutTool2.Editor
                 : fullPath.TrimEnd(
                     Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
+
+        internal static void EnsureSupportedMergedImageCompression(
+            ImageCompression compression)
+        {
+            if (compression != ImageCompression.Raw &&
+                compression != ImageCompression.Rle)
+            {
+                throw new NotSupportedException(
+                    "Merged PSD composite compression is not supported: " +
+                    compression + ".");
+            }
+        }
+
+        private static void WriteAtomically(
+            string sessionDirectory,
+            string outputPath,
+            byte[] png)
+        {
+            CreateAndVerifyDirectoryPath(sessionDirectory);
+            EnsureDestinationIsRegularOrMissing(outputPath);
+            string temporaryPath = Path.Combine(
+                sessionDirectory,
+                ".composite-" + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None,
+                           4096,
+                           FileOptions.WriteThrough))
+                {
+                    stream.Write(png, 0, png.Length);
+                    stream.Flush(true);
+                }
+
+                FileAttributes temporaryAttributes = File.GetAttributes(temporaryPath);
+                if ((temporaryAttributes & FileAttributes.ReparsePoint) != 0 ||
+                    (temporaryAttributes & FileAttributes.Directory) != 0)
+                {
+                    throw new IOException(
+                        "Composite preview temporary output is not a regular file.");
+                }
+
+                CreateAndVerifyDirectoryPath(sessionDirectory);
+                EnsureDestinationIsRegularOrMissing(outputPath);
+                MoveTemporaryFile(temporaryPath, outputPath);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+        }
+
+        private static void MoveTemporaryFile(
+            string temporaryPath,
+            string outputPath)
+        {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                if (!MoveFileEx(
+                        temporaryPath,
+                        outputPath,
+                        MoveFileReplaceExisting | MoveFileWriteThrough))
+                {
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "Could not atomically publish the composite preview.");
+                }
+                return;
+            }
+
+            if (File.Exists(outputPath))
+            {
+                File.Replace(temporaryPath, outputPath, null);
+            }
+            else
+            {
+                File.Move(temporaryPath, outputPath);
+            }
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool MoveFileEx(
+            string existingFileName,
+            string newFileName,
+            int flags);
 
         private static Texture2D BuildCompositeTexture(PsdFile psd)
         {
