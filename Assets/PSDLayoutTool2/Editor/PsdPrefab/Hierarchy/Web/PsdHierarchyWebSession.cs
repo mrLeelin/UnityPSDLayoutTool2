@@ -16,6 +16,8 @@ namespace PsdLayoutTool2.Editor
         private PsdHierarchyWebOperationLease currentLease;
         private PsdHierarchyWebOperationState operationValue = NewIdleOperation();
         private PsdHierarchyOrganizerPreviewModel previewModelValue;
+        private readonly Action<PsdHierarchyPlan> applyHandler;
+        private string resultingPrefabPathValue = string.Empty;
         private long previewGeneration;
         private bool disposed;
 
@@ -25,7 +27,8 @@ namespace PsdLayoutTool2.Editor
             string sourcePsdGuid,
             string sourcePsdPath,
             string directory,
-            PsdHierarchyOrganizerPreviewModel previewModel)
+            PsdHierarchyOrganizerPreviewModel previewModel,
+            Action<PsdHierarchyPlan> applyHandler = null)
         {
             this.sessionId = Require(sessionId, "sessionId");
             this.token = Require(token, "token");
@@ -33,6 +36,7 @@ namespace PsdLayoutTool2.Editor
             this.sourcePsdPath = Require(sourcePsdPath, "sourcePsdPath");
             this.directory = Require(directory, "directory");
             previewModelValue = previewModel;
+            this.applyHandler = applyHandler;
         }
 
         public string sessionId { get; private set; }
@@ -154,7 +158,30 @@ namespace PsdLayoutTool2.Editor
             {
                 ThrowIfDisposed();
                 return new PsdHierarchyWebSessionSnapshot(
-                    sessionId, sourcePsdGuid, sourcePsdPath, directory, CloneOperation(operationValue));
+                    sessionId, sourcePsdGuid, sourcePsdPath, directory,
+                    resultingPrefabPathValue, CloneOperation(operationValue));
+            }
+        }
+
+        public void DispatchApply(PsdHierarchyPlan plan)
+        {
+            if (plan == null) throw new ArgumentNullException(nameof(plan));
+            Action<PsdHierarchyPlan> handler;
+            lock (gate)
+            {
+                ThrowIfDisposed();
+                handler = applyHandler;
+            }
+            if (handler == null) throw new InvalidOperationException("This workbench session has no hierarchy apply handler.");
+            handler(plan);
+        }
+
+        public void RecordAppliedPrefab(string prefabPath)
+        {
+            lock (gate)
+            {
+                ThrowIfDisposed();
+                resultingPrefabPathValue = Require(prefabPath, "prefabPath");
             }
         }
 
@@ -283,12 +310,14 @@ namespace PsdLayoutTool2.Editor
             string sourcePsdGuid,
             string sourcePsdPath,
             string directory,
+            string resultingPrefabPath,
             PsdHierarchyWebOperationState operation)
         {
             this.sessionId = sessionId;
             this.sourcePsdGuid = sourcePsdGuid;
             this.sourcePsdPath = sourcePsdPath;
             this.directory = directory;
+            this.resultingPrefabPath = resultingPrefabPath;
             this.operation = operation;
         }
 
@@ -296,6 +325,7 @@ namespace PsdLayoutTool2.Editor
         public string sourcePsdGuid { get; private set; }
         public string sourcePsdPath { get; private set; }
         public string directory { get; private set; }
+        public string resultingPrefabPath { get; private set; }
         public PsdHierarchyWebOperationState operation { get; private set; }
     }
 }

@@ -34,6 +34,8 @@ namespace PsdLayoutTool2.Editor
         public bool canAnalyze = false;
         public bool canApply = false;
         public bool canCreatePrefabs = false;
+        public string phase = "organize";
+        public string resultingPrefabPath = string.Empty;
         public PsdHierarchyWebOperationState operation = new PsdHierarchyWebOperationState();
     }
 

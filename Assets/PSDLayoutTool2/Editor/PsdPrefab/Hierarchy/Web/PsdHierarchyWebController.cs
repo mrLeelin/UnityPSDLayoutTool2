@@ -29,9 +29,13 @@ namespace PsdLayoutTool2.Editor
                     sessionId = sessionSnapshot.sessionId,
                     sourcePsdName = Path.GetFileName(sessionSnapshot.sourcePsdPath),
                     targetPrefabName = model == null ? string.Empty : Path.GetFileName(model.targetPrefabPath),
-                    canAnalyze = model != null && !model.isRunning,
-                    canApply = model != null && model.canApply,
-                    canCreatePrefabs = false,
+                    canAnalyze = model != null && !model.isRunning &&
+                                 string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath),
+                    canApply = model != null && model.canApply &&
+                               string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath),
+                    canCreatePrefabs = !string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath),
+                    phase = string.IsNullOrEmpty(sessionSnapshot.resultingPrefabPath) ? "organize" : "prefabReview",
+                    resultingPrefabPath = sessionSnapshot.resultingPrefabPath,
                     operation = CloneOperation(sessionSnapshot.operation)
                 }));
         }
@@ -96,6 +100,60 @@ namespace PsdLayoutTool2.Editor
                     foreach (string groupKey in groupKeys) model.SetGroupAccepted(groupKey, request.isAccepted);
                     return Task.CompletedTask;
                 });
+        }
+
+        public async Task ApplyAsync(PsdHierarchyWebSession session, PsdHierarchyWebApplyRequest request)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (request == null || !request.confirmed)
+                throw new ArgumentException("Explicit apply confirmation is required.", nameof(request));
+            if (session.Snapshot().operation.status == PsdHierarchyWebOperationStatus.Running)
+                throw new InvalidOperationException("A session operation is already running.");
+
+            PsdHierarchyPlan plan = await session.UsePreviewAsync(model => mainThread.InvokeAsync(() =>
+            {
+                if ((model.validationErrors ?? new List<string>()).Count > 0)
+                    throw new InvalidOperationException(model.validationErrors[0]);
+                var accepted = new HashSet<string>(model.acceptedGroupKeys, StringComparer.Ordinal);
+                List<string> pendingGroups = (model.proposedPlan.groups ?? new List<PsdHierarchyPlanGroup>())
+                    .Where(group => group != null && !accepted.Contains(group.key))
+                    .Select(group => group.key)
+                    .ToList();
+                if (pendingGroups.Count > 0)
+                    throw new InvalidOperationException("Accept every proposed group before applying the hierarchy.");
+                PsdHierarchyPlan validated;
+                string error;
+                if (!model.TryCreateValidatedApplyPlan(out validated, out error))
+                    throw new InvalidOperationException(string.IsNullOrEmpty(error)
+                        ? "Hierarchy preview is not ready to apply."
+                        : error);
+                return validated;
+            }));
+
+            PsdHierarchyWebOperationLease lease = session.Start(
+                PsdHierarchyWebOperationKind.Apply,
+                "Applying validated naming and hierarchy changes.");
+            try
+            {
+                await mainThread.InvokeAsync(() =>
+                {
+                    session.DispatchApply(plan);
+                    return Task.CompletedTask;
+                });
+                string prefabPath = await session.UsePreviewAsync(model =>
+                    mainThread.InvokeAsync(() => model.targetPrefabPath));
+                session.RecordAppliedPrefab(prefabPath);
+                await RefreshSnapshotAsync(session);
+                session.Complete(lease, "Hierarchy applied. Review common Prefab candidates.");
+            }
+            catch (Exception exception)
+            {
+                session.Fail(lease, BoundedMessage(exception));
+            }
+            finally
+            {
+                lease.Dispose();
+            }
         }
 
         public PsdHierarchyWebOperationState GetStatus(PsdHierarchyWebSession session)
