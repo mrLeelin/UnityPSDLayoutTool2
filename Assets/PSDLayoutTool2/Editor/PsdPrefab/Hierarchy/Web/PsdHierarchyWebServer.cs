@@ -284,7 +284,7 @@ namespace PsdLayoutTool2.Editor
 
         private void ReportRouteFailure(Exception exception)
         {
-            Report(new InvalidOperationException("Psd hierarchy web route handler failed: " + exception.GetType().Name));
+            Report(exception);
         }
 
         private void ObserveFault(Task task)

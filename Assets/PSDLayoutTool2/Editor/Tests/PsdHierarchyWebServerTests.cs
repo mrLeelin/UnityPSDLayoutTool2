@@ -289,6 +289,7 @@ namespace PsdLayoutTool2.Tests
                 }
                 listener.Flush();
                 StringAssert.Contains(typeof(InvalidOperationException).FullName, output.ToString());
+                StringAssert.Contains("Server_DefaultDiagnosticsUseTraceWithoutSecretText", output.ToString());
                 StringAssert.DoesNotContain("secret-token-and-body", output.ToString());
             }
             finally
