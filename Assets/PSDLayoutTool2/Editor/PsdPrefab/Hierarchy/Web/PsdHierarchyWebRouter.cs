@@ -41,8 +41,8 @@ namespace PsdLayoutTool2.Editor
             if (string.IsNullOrEmpty(path) || path.IndexOf('?') >= 0 || path.IndexOf('#') >= 0 ||
                 path.IndexOf('\\') >= 0 || path.IndexOf('%') >= 0) return false;
             string[] segments = path.Split('/');
-            if (segments.Length < 4 || segments[0].Length != 0 ||
-                !string.Equals(segments[1], "sessions", StringComparison.Ordinal) ||
+            if (segments.Length < 3 || segments[0].Length != 0 ||
+                !string.Equals(segments[1], "session", StringComparison.Ordinal) ||
                 string.IsNullOrEmpty(segments[2])) return false;
             for (int index = 1; index < segments.Length; index++)
                 if (segments[index] == "." || segments[index] == "..") return false;

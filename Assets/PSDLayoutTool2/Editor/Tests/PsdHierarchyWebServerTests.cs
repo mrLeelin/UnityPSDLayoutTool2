@@ -20,7 +20,7 @@ namespace PsdLayoutTool2.Tests
             {
                 Assert.That(server.port, Is.GreaterThan(0));
                 Assert.That(server.port, Is.Not.EqualTo(80));
-                RawResponse response = await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"));
+                RawResponse response = await SendAsync(server.port, Request(server.port, "/session/known", "token"));
                 Assert.That(response.statusCode, Is.EqualTo(200));
                 Assert.That(response.headers["Connection"], Is.EqualTo("close"));
             }
@@ -32,7 +32,7 @@ namespace PsdLayoutTool2.Tests
         {
             using (var server = CreateServer())
             {
-                RawResponse response = await SendAsync(server.port, Request(server.port, "/sessions/known/data", token));
+                RawResponse response = await SendAsync(server.port, Request(server.port, "/session/known/data", token));
                 Assert.That(response.statusCode, Is.EqualTo(401));
             }
         }
@@ -43,7 +43,7 @@ namespace PsdLayoutTool2.Tests
         {
             using (var server = CreateServer())
             {
-                RawResponse response = await SendAsync(server.port, Request(server.port, "/sessions/missing/data", token));
+                RawResponse response = await SendAsync(server.port, Request(server.port, "/session/missing/data", token));
                 Assert.That(response.statusCode, Is.EqualTo(404));
             }
         }
@@ -54,9 +54,9 @@ namespace PsdLayoutTool2.Tests
             using (var server = CreateServer())
             {
                 RawResponse invalid = await SendAsync(server.port,
-                    "GET /sessions/known/data HTTP/1.1\r\nHost: example.com\r\nX-PSD-Session-Token: token\r\n\r\n");
+                    "GET /session/known/data HTTP/1.1\r\nHost: example.com\r\nX-PSD-Session-Token: token\r\n\r\n");
                 RawResponse multiple = await SendAsync(server.port,
-                    "GET /sessions/known/data HTTP/1.1\r\nHost: localhost:" + server.port +
+                    "GET /session/known/data HTTP/1.1\r\nHost: localhost:" + server.port +
                     "\r\nHost: 127.0.0.1:" + server.port + "\r\nX-PSD-Session-Token: token\r\n\r\n");
                 Assert.That(invalid.statusCode, Is.EqualTo(400));
                 Assert.That(multiple.statusCode, Is.EqualTo(400));
@@ -68,7 +68,7 @@ namespace PsdLayoutTool2.Tests
         {
             using (var server = CreateServer())
             {
-                string prefix = "GET /sessions/known/data HTTP/1.1\r\n";
+                string prefix = "GET /session/known/data HTTP/1.1\r\n";
                 string host = "Host: localhost:" + server.port + "\r\nX-PSD-Session-Token: token\r\n";
                 string[] invalid =
                 {
@@ -90,8 +90,8 @@ namespace PsdLayoutTool2.Tests
         {
             using (var server = CreateServer())
             {
-                RawResponse unknownSession = await SendAsync(server.port, Request(server.port, "/sessions/missing/data", "token"));
-                RawResponse traversal = await SendAsync(server.port, Request(server.port, "/sessions/known/../secret", "token"));
+                RawResponse unknownSession = await SendAsync(server.port, Request(server.port, "/session/missing/data", "token"));
+                RawResponse traversal = await SendAsync(server.port, Request(server.port, "/session/known/../secret", "token"));
                 RawResponse unknownRoute = await SendAsync(server.port, Request(server.port, "/not-a-route", "token"));
                 Assert.That(unknownSession.statusCode, Is.EqualTo(404));
                 Assert.That(traversal.statusCode, Is.EqualTo(404));
@@ -104,8 +104,8 @@ namespace PsdLayoutTool2.Tests
         {
             using (var server = CreateServer())
             {
-                RawResponse json = await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"));
-                RawResponse png = await SendAsync(server.port, Request(server.port, "/sessions/known/preview.png", "token"));
+                RawResponse json = await SendAsync(server.port, Request(server.port, "/session/known/data", "token"));
+                RawResponse png = await SendAsync(server.port, Request(server.port, "/session/known/preview.png", "token"));
                 Assert.That(json.headers["Content-Type"], Is.EqualTo("application/json; charset=utf-8"));
                 Assert.That(Encoding.UTF8.GetString(json.body), Is.EqualTo("{\"ok\":true}"));
                 Assert.That(png.headers["Content-Type"], Is.EqualTo("image/png"));
@@ -121,13 +121,13 @@ namespace PsdLayoutTool2.Tests
             using (var server = CreateServer())
             {
                 const string body = "post-body";
-                string request = "POST /sessions/known/echo HTTP/1.1\r\nHost: localhost:" + server.port +
+                string request = "POST /session/known/echo HTTP/1.1\r\nHost: localhost:" + server.port +
                     "\r\nX-PSD-Session-Token: token\r\nContent-Length: " + body.Length + "\r\n\r\n" + body;
                 RawResponse response = await SendAsync(server.port, request);
 
                 Assert.That(response.statusCode, Is.EqualTo(200));
                 Assert.That(Encoding.UTF8.GetString(response.body),
-                    Is.EqualTo("{\"delivery\":\"POST|/sessions/known/echo|post-body\"}"));
+                    Is.EqualTo("{\"delivery\":\"POST|/session/known/echo|post-body\"}"));
             }
         }
 
@@ -143,14 +143,14 @@ namespace PsdLayoutTool2.Tests
 
                 string headerPrefix = "Host: localhost:" + server.port + "\r\nX-PSD-Session-Token: token\r\nX-Pad: ";
                 string exactHeaders = headerPrefix + new string('a', 32768 - headerPrefix.Length - 4) + "\r\n\r\n";
-                RawResponse exactHeader = await SendAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n" + exactHeaders);
-                RawResponse overHeader = await SendAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n" +
+                RawResponse exactHeader = await SendAsync(server.port, "GET /session/known/data HTTP/1.1\r\n" + exactHeaders);
+                RawResponse overHeader = await SendAsync(server.port, "GET /session/known/data HTTP/1.1\r\n" +
                     headerPrefix + new string('a', 32769 - headerPrefix.Length - 4) + "\r\n\r\n");
 
                 string body = new string('b', 1024 * 1024);
-                RawResponse exactBody = await SendAsync(server.port, "POST /sessions/known/body-size HTTP/1.1\r\nHost: localhost:" +
+                RawResponse exactBody = await SendAsync(server.port, "POST /session/known/body-size HTTP/1.1\r\nHost: localhost:" +
                     server.port + "\r\nX-PSD-Session-Token: token\r\nContent-Length: " + body.Length + "\r\n\r\n" + body);
-                RawResponse overBody = await SendAsync(server.port, "POST /sessions/known/body-size HTTP/1.1\r\nHost: localhost:" +
+                RawResponse overBody = await SendAsync(server.port, "POST /session/known/body-size HTTP/1.1\r\nHost: localhost:" +
                     server.port + "\r\nX-PSD-Session-Token: token\r\nContent-Length: 1048577\r\n\r\n");
 
                 Assert.That(exactLine.statusCode, Is.EqualTo(404));
@@ -191,16 +191,16 @@ namespace PsdLayoutTool2.Tests
             Assert.DoesNotThrow(() => server.Dispose());
         }
 
-        [TestCase("GET /sessions/known/data HTTP/1.1\r\n")]
-        [TestCase("GET /sessions/known/data HTTP/1.1\r\nHost: localhost:1\r\n")]
-        [TestCase("POST /sessions/known/data HTTP/1.1\r\nHost: localhost:1\r\nContent-Length: 4\r\n\r\na")]
+        [TestCase("GET /session/known/data HTTP/1.1\r\n")]
+        [TestCase("GET /session/known/data HTTP/1.1\r\nHost: localhost:1\r\n")]
+        [TestCase("POST /session/known/data HTTP/1.1\r\nHost: localhost:1\r\nContent-Length: 4\r\n\r\na")]
         public async Task Server_TimesOutPartialRequestsAndAcceptsTheNextClient(string partialRequest)
         {
             using (var server = CreateServer(TimeSpan.FromMilliseconds(100)))
             using (var client = await ConnectAndWriteAsync(server.port, partialRequest.Replace("localhost:1", "localhost:" + server.port)))
             {
                 await WaitForCloseAsync(client);
-                Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                Assert.That((await SendAsync(server.port, Request(server.port, "/session/known/data", "token"))).statusCode,
                     Is.EqualTo(200));
             }
         }
@@ -211,7 +211,7 @@ namespace PsdLayoutTool2.Tests
             var server = CreateServer(TimeSpan.FromSeconds(10));
             try
             {
-                using (var client = await ConnectAndWriteAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n"))
+                using (var client = await ConnectAndWriteAsync(server.port, "GET /session/known/data HTTP/1.1\r\n"))
                 {
                     server.Dispose();
                     await WaitForCloseAsync(client);
@@ -226,7 +226,7 @@ namespace PsdLayoutTool2.Tests
             using (var server = CreateServer())
             {
                 for (int index = 0; index < 12; index++)
-                    Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                    Assert.That((await SendAsync(server.port, Request(server.port, "/session/known/data", "token"))).statusCode,
                         Is.EqualTo(200));
                 Assert.That(server.activeDeadlineCount, Is.EqualTo(0));
             }
@@ -236,7 +236,7 @@ namespace PsdLayoutTool2.Tests
         public async Task Server_ContainsThrowingHandlersAndContinuesAcceptingClients()
         {
             int calls = 0;
-            var errors = new List<Exception>();
+            var diagnostics = new List<PsdHierarchyWebDiagnostic>();
             using (var server = new PsdHierarchyWebServer(new PsdHierarchyWebRouter(
                 id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
                 (request, session) =>
@@ -244,15 +244,18 @@ namespace PsdLayoutTool2.Tests
                     calls++;
                     if (calls == 1) throw new InvalidOperationException("token and body must not be logged");
                     return PsdHierarchyWebResponse.Json("{\"healthy\":true}");
-                }), TimeSpan.FromSeconds(1), errors.Add))
+                }), TimeSpan.FromSeconds(1), diagnostics.Add))
             {
-                RawResponse failed = await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"));
-                RawResponse healthy = await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"));
+                RawResponse failed = await SendAsync(server.port, Request(server.port, "/session/known/data", "token"));
+                RawResponse healthy = await SendAsync(server.port, Request(server.port, "/session/known/data", "token"));
                 Assert.That(failed.statusCode, Is.EqualTo(500));
                 Assert.That(Encoding.UTF8.GetString(failed.body), Is.EqualTo("{\"error\":\"internal_error\"}"));
                 Assert.That(healthy.statusCode, Is.EqualTo(200));
-                Assert.That(errors.Count, Is.EqualTo(1));
-                StringAssert.DoesNotContain("token", errors[0].Message);
+                Assert.That(diagnostics.Count, Is.EqualTo(1));
+                Assert.That(diagnostics[0].exceptionType, Is.EqualTo(typeof(InvalidOperationException).FullName));
+                StringAssert.Contains("Server_ContainsThrowingHandlersAndContinuesAcceptingClients", diagnostics[0].stackTrace);
+                StringAssert.DoesNotContain("token and body must not be logged", diagnostics[0].exceptionType);
+                StringAssert.DoesNotContain("token and body must not be logged", diagnostics[0].stackTrace);
             }
         }
 
@@ -264,10 +267,10 @@ namespace PsdLayoutTool2.Tests
                 id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
                 (request, session) => PsdHierarchyWebResponse.Json("{\"ok\":true}")), TimeSpan.FromMilliseconds(100), null,
                 token => { if (Interlocked.Increment(ref probeCalls) == 1) token.WaitHandle.WaitOne(); }))
-            using (var stalled = await ConnectAndWriteAsync(server.port, "GET /sessions/known/data HTTP/1.1\r\n"))
+            using (var stalled = await ConnectAndWriteAsync(server.port, "GET /session/known/data HTTP/1.1\r\n"))
             {
                 await WaitForCloseAsync(stalled);
-                Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                Assert.That((await SendAsync(server.port, Request(server.port, "/session/known/data", "token"))).statusCode,
                     Is.EqualTo(200));
             }
         }
@@ -284,7 +287,7 @@ namespace PsdLayoutTool2.Tests
                     id => id == "known" ? new PsdHierarchyWebSession("known", "token", "guid", "Assets/A.psd", "C:/temp/session", null) : null,
                     (request, session) => { throw new InvalidOperationException("secret-token-and-body"); })))
                 {
-                    Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                    Assert.That((await SendAsync(server.port, Request(server.port, "/session/known/data", "token"))).statusCode,
                         Is.EqualTo(500));
                 }
                 listener.Flush();

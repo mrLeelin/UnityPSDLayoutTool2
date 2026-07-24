@@ -11,6 +11,19 @@ namespace PsdLayoutTool2.Editor
     using System.Threading;
     using System.Threading.Tasks;
 
+    internal sealed class PsdHierarchyWebDiagnostic
+    {
+        public readonly string exceptionType;
+        public readonly string stackTrace;
+
+        public PsdHierarchyWebDiagnostic(Exception exception)
+        {
+            if (exception == null) throw new ArgumentNullException(nameof(exception));
+            exceptionType = exception.GetType().FullName ?? exception.GetType().Name;
+            stackTrace = exception.StackTrace ?? string.Empty;
+        }
+    }
+
     /// <summary>Minimal HTTP/1.1 listener intentionally limited to local PSD workbench traffic.</summary>
     internal sealed class PsdHierarchyWebServer : IDisposable
     {
@@ -25,7 +38,7 @@ namespace PsdLayoutTool2.Editor
         private readonly TcpListener listener;
         private readonly PsdHierarchyWebRouter router;
         private readonly TimeSpan requestDeadline;
-        private readonly Action<Exception> errorSink;
+        private readonly Action<PsdHierarchyWebDiagnostic> errorSink;
         private readonly Action<CancellationToken> processingProbe;
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         private readonly Task acceptLoop;
@@ -38,7 +51,7 @@ namespace PsdLayoutTool2.Editor
         {
         }
 
-        public PsdHierarchyWebServer(PsdHierarchyWebRouter router, TimeSpan requestDeadline, Action<Exception> errorSink)
+        public PsdHierarchyWebServer(PsdHierarchyWebRouter router, TimeSpan requestDeadline, Action<PsdHierarchyWebDiagnostic> errorSink)
             : this(router, requestDeadline, errorSink, null)
         {
         }
@@ -46,7 +59,7 @@ namespace PsdLayoutTool2.Editor
         internal PsdHierarchyWebServer(
             PsdHierarchyWebRouter router,
             TimeSpan requestDeadline,
-            Action<Exception> errorSink,
+            Action<PsdHierarchyWebDiagnostic> errorSink,
             Action<CancellationToken> processingProbe)
         {
             if (router == null) throw new ArgumentNullException(nameof(router));
@@ -297,13 +310,13 @@ namespace PsdLayoutTool2.Editor
 
         private void Report(Exception exception)
         {
-            try { errorSink?.Invoke(exception); } catch { }
+            try { errorSink?.Invoke(new PsdHierarchyWebDiagnostic(exception)); } catch { }
         }
 
-        private static void ReportToTrace(Exception exception)
+        private static void ReportToTrace(PsdHierarchyWebDiagnostic diagnostic)
         {
-            Trace.WriteLine("PsdHierarchyWebServer exception type: " + exception.GetType().FullName);
-            Trace.WriteLine(exception.StackTrace ?? string.Empty);
+            Trace.WriteLine("PsdHierarchyWebServer exception type: " + diagnostic.exceptionType);
+            Trace.WriteLine(diagnostic.stackTrace);
         }
     }
 }
