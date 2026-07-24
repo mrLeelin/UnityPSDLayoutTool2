@@ -218,6 +218,18 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task Server_ReleasesDeadlineStateAfterRepeatedHealthyRequests()
+        {
+            using (var server = CreateServer())
+            {
+                for (int index = 0; index < 12; index++)
+                    Assert.That((await SendAsync(server.port, Request(server.port, "/sessions/known/data", "token"))).statusCode,
+                        Is.EqualTo(200));
+                Assert.That(server.activeDeadlineCount, Is.EqualTo(0));
+            }
+        }
+
+        [Test]
         public async Task Server_ContainsThrowingHandlersAndContinuesAcceptingClients()
         {
             int calls = 0;

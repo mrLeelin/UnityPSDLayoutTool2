@@ -18,6 +18,8 @@ namespace PsdLayoutTool2.Editor
         // Header bytes include every header line's CRLF and the terminating empty line's CRLF.
         private const int MaxHeaderBytes = 32 * 1024;
         private const int MaxBodyBytes = 1024 * 1024;
+        private static readonly TimeSpan MinimumRequestDeadline = TimeSpan.FromMilliseconds(100);
+        private static readonly TimeSpan MaximumRequestDeadline = TimeSpan.FromSeconds(60);
         private readonly object gate = new object();
         private readonly TcpListener listener;
         private readonly PsdHierarchyWebRouter router;
@@ -26,6 +28,7 @@ namespace PsdLayoutTool2.Editor
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         private readonly Task acceptLoop;
         private TcpClient activeClient;
+        private int activeDeadlineCountValue;
         private bool disposed;
 
         public PsdHierarchyWebServer(PsdHierarchyWebRouter router)
@@ -36,7 +39,8 @@ namespace PsdLayoutTool2.Editor
         public PsdHierarchyWebServer(PsdHierarchyWebRouter router, TimeSpan requestDeadline, Action<Exception> errorSink)
         {
             if (router == null) throw new ArgumentNullException(nameof(router));
-            if (requestDeadline <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(requestDeadline));
+            if (requestDeadline < MinimumRequestDeadline || requestDeadline > MaximumRequestDeadline)
+                throw new ArgumentOutOfRangeException(nameof(requestDeadline));
             this.router = router;
             this.requestDeadline = requestDeadline;
             this.errorSink = errorSink;
@@ -47,6 +51,7 @@ namespace PsdLayoutTool2.Editor
         }
 
         public int port { get; private set; }
+        internal int activeDeadlineCount { get { return Volatile.Read(ref activeDeadlineCountValue); } }
 
         public void Dispose()
         {
@@ -93,30 +98,43 @@ namespace PsdLayoutTool2.Editor
 
         private async Task ProcessClientWithinDeadlineAsync(TcpClient client)
         {
-            // Parsing uses blocking stream reads, so schedule it before arming the deadline race.
-            Task process = Task.Run((Func<Task>)(() => ProcessClientAsync(client)));
-            Task timeout = Task.Delay(requestDeadline, shutdown.Token);
-            Task completed = await Task.WhenAny(process, timeout).ConfigureAwait(false);
-            if (completed == process)
+            using (var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token))
             {
-                await process.ConfigureAwait(false);
-                return;
-            }
+                requestCancellation.CancelAfter(requestDeadline);
+                Interlocked.Increment(ref activeDeadlineCountValue);
+                try
+                {
+                    // Parsing uses blocking stream reads, so schedule it before arming the deadline race.
+                    Task process = Task.Run((Func<Task>)(() => ProcessClientAsync(client, requestCancellation.Token)));
+                    Task cancellation = Task.Delay(Timeout.InfiniteTimeSpan, requestCancellation.Token);
+                    Task completed = await Task.WhenAny(process, cancellation).ConfigureAwait(false);
+                    if (completed == process)
+                    {
+                        await process.ConfigureAwait(false);
+                        return;
+                    }
 
-            try { client.Close(); } catch (SocketException) { }
-            ObserveFault(process);
+                    try { client.Close(); } catch (SocketException) { }
+                    ObserveFault(process);
+                }
+                finally
+                {
+                    requestCancellation.Cancel();
+                    Interlocked.Decrement(ref activeDeadlineCountValue);
+                }
+            }
         }
 
-        private async Task ProcessClientAsync(TcpClient client)
+        private async Task ProcessClientAsync(TcpClient client, CancellationToken cancellationToken)
         {
             try
             {
                 NetworkStream stream = client.GetStream();
                 PsdHierarchyWebRequest request;
                 int errorStatus;
-                if (!TryReadRequest(stream, out request, out errorStatus))
+                if (!TryReadRequest(stream, cancellationToken, out request, out errorStatus))
                 {
-                    await WriteResponseAsync(stream, PsdHierarchyWebResponse.Empty(errorStatus)).ConfigureAwait(false);
+                    await WriteResponseAsync(stream, PsdHierarchyWebResponse.Empty(errorStatus), cancellationToken).ConfigureAwait(false);
                     return;
                 }
                 PsdHierarchyWebResponse response;
@@ -124,23 +142,23 @@ namespace PsdLayoutTool2.Editor
                 catch (Exception exception)
                 {
                     ReportRouteFailure(exception);
-                    await WriteResponseAsync(stream, PsdHierarchyWebResponse.Json(500, "{\"error\":\"internal_error\"}"))
+                    await WriteResponseAsync(stream, PsdHierarchyWebResponse.Json(500, "{\"error\":\"internal_error\"}"), cancellationToken)
                         .ConfigureAwait(false);
                     return;
                 }
-                await WriteResponseAsync(stream, response).ConfigureAwait(false);
+                await WriteResponseAsync(stream, response, cancellationToken).ConfigureAwait(false);
             }
             catch (IOException) { }
             catch (ObjectDisposedException) { }
             catch (SocketException) { }
         }
 
-        private bool TryReadRequest(NetworkStream stream, out PsdHierarchyWebRequest request, out int errorStatus)
+        private bool TryReadRequest(NetworkStream stream, CancellationToken cancellationToken, out PsdHierarchyWebRequest request, out int errorStatus)
         {
             request = null;
             errorStatus = 400;
             string requestLine;
-            if (!TryReadLine(stream, MaxRequestLineBytes, out requestLine, out errorStatus)) return false;
+            if (!TryReadLine(stream, cancellationToken, MaxRequestLineBytes, out requestLine, out errorStatus)) return false;
             string[] requestParts = requestLine.Split(' ');
             if (requestParts.Length != 3 || requestParts[1].Length == 0 || requestParts[1][0] != '/' ||
                 !string.Equals(requestParts[2], "HTTP/1.1", StringComparison.Ordinal)) return false;
@@ -152,7 +170,7 @@ namespace PsdLayoutTool2.Editor
             {
                 string line;
                 int lineStatus;
-                if (!TryReadLine(stream, MaxHeaderBytes - headerBytes, out line, out lineStatus))
+                if (!TryReadLine(stream, cancellationToken, MaxHeaderBytes - headerBytes, out line, out lineStatus))
                 {
                     errorStatus = lineStatus;
                     return false;
@@ -175,6 +193,7 @@ namespace PsdLayoutTool2.Editor
             int received = 0;
             while (received < body.Length)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int read = stream.Read(body, received, body.Length - received);
                 if (read == 0) return false;
                 received += read;
@@ -202,7 +221,7 @@ namespace PsdLayoutTool2.Editor
                 string.Equals(host, "localhost:" + port, StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool TryReadLine(NetworkStream stream, int maximumBytes, out string line, out int errorStatus)
+        private static bool TryReadLine(NetworkStream stream, CancellationToken cancellationToken, int maximumBytes, out string line, out int errorStatus)
         {
             line = null;
             errorStatus = 400;
@@ -210,6 +229,7 @@ namespace PsdLayoutTool2.Editor
             var bytes = new List<byte>();
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int value = stream.ReadByte();
                 if (value < 0) return false;
                 bytes.Add((byte)value);
@@ -225,7 +245,7 @@ namespace PsdLayoutTool2.Editor
             }
         }
 
-        private static async Task WriteResponseAsync(NetworkStream stream, PsdHierarchyWebResponse response)
+        private static async Task WriteResponseAsync(NetworkStream stream, PsdHierarchyWebResponse response, CancellationToken cancellationToken)
         {
             if (response == null) response = PsdHierarchyWebResponse.Empty(500);
             string statusText = response.statusCode == 200 ? "OK" : response.statusCode == 400 ? "Bad Request" :
@@ -235,8 +255,13 @@ namespace PsdLayoutTool2.Editor
                 response.contentType + "\r\nContent-Length: " + response.body.Length + "\r\nConnection: close\r\n" +
                 (response.statusCode == 405 ? "Allow: GET, POST\r\n" : string.Empty) + "\r\n";
             byte[] headerBytes = Encoding.ASCII.GetBytes(headers);
+            cancellationToken.ThrowIfCancellationRequested();
             await stream.WriteAsync(headerBytes, 0, headerBytes.Length).ConfigureAwait(false);
-            if (response.body.Length > 0) await stream.WriteAsync(response.body, 0, response.body.Length).ConfigureAwait(false);
+            if (response.body.Length > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await stream.WriteAsync(response.body, 0, response.body.Length).ConfigureAwait(false);
+            }
         }
 
         private void ReportRouteFailure(Exception exception)
