@@ -78,23 +78,25 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     wrappers = require_list(raw.get("wrappers", []), "wrappers")
     moves = require_list(raw.get("moves", []), "moves")
     renames = require_list(raw.get("renames", []), "renames")
+    empty_container_removals = require_list(raw.get("emptyContainerRemovals", []), "emptyContainerRemovals")
     tight_bounds = require_list(raw.get("tightBounds", []), "tightBounds")
     texture_renames = require_list(raw.get("textureRenames", []), "textureRenames")
     atlas_renames = require_list(raw.get("spriteAtlasRenames", []), "spriteAtlasRenames")
     component_extractions = require_list(raw.get("componentExtractions", []), "componentExtractions")
     state_component_extractions = require_list(raw.get("stateComponentExtractions", []), "stateComponentExtractions")
     variant_component_extractions = require_list(raw.get("variantComponentExtractions", []), "variantComponentExtractions")
+    stateful_component_extractions = require_list(raw.get("statefulComponentExtractions", []), "statefulComponentExtractions")
     verify = raw.get("verify", {})
     if not isinstance(verify, dict):
         fail("verify must be an object")
 
     if (texture_renames or atlas_renames) and not VIEW_RE.match(prefab_name):
         fail("prefabName must be PascalCase and end with View when renaming private assets")
-    if (component_extractions or state_component_extractions or variant_component_extractions) and (wrappers or moves or renames or tight_bounds):
+    if (component_extractions or state_component_extractions or variant_component_extractions or stateful_component_extractions) and (wrappers or moves or renames or empty_container_removals or tight_bounds):
         fail("component extraction must run as a standalone plan after hierarchy cleanup")
-    extraction_modes = sum(bool(entries) for entries in (component_extractions, state_component_extractions, variant_component_extractions))
+    extraction_modes = sum(bool(entries) for entries in (component_extractions, state_component_extractions, variant_component_extractions, stateful_component_extractions))
     if extraction_modes > 1:
-        fail("componentExtractions, stateComponentExtractions, and variantComponentExtractions must run in separate plans")
+        fail("componentExtractions, stateComponentExtractions, variantComponentExtractions, and statefulComponentExtractions must run in separate plans")
 
     wrapper_ids: set[str] = set()
     for index, wrapper in enumerate(wrappers):
@@ -130,6 +132,15 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         if target.startswith("@") and target[1:] not in wrapper_ids:
             fail(f"renames[{index}].target references an unknown wrapper")
         require_string(rename.get("name"), f"renames[{index}].name")
+
+    removal_sources: set[str] = set()
+    for index, removal in enumerate(empty_container_removals):
+        source = require_string(removal.get("source"), f"emptyContainerRemovals[{index}].source")
+        if "/" not in source:
+            fail(f"emptyContainerRemovals[{index}].source must not be the Prefab root")
+        if source in removal_sources:
+            fail(f"duplicate empty container removal source: {source}")
+        removal_sources.add(source)
 
     if not tight_bounds:
         tight_bounds = [{"target": "@" + wrapper["id"]} for wrapper in wrappers]
@@ -315,6 +326,129 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         if instance_sources != state_sources:
             fail(f"{label}.instances must replace every approved state source exactly once")
 
+    for index, extraction in enumerate(stateful_component_extractions):
+        label = f"statefulComponentExtractions[{index}]"
+        extraction_id = require_string(extraction.get("id"), f"{label}.id")
+        if not re.match(r"^[a-z][a-z0-9_]*$", extraction_id):
+            fail(f"{label}.id must be lower snake_case")
+        if extraction_id in extraction_ids:
+            fail(f"duplicate component extraction id: {extraction_id}")
+        extraction_ids.add(extraction_id)
+        template = require_string(extraction.get("template"), f"{label}.template")
+        template_parent = template.rsplit("/", 1)[0] if "/" in template else ""
+        if not template_parent:
+            fail(f"{label}.template must not be the Prefab root")
+        component_asset_path = asset_path(extraction.get("assetPath"), f"{label}.assetPath")
+        if not component_asset_path.endswith(".prefab"):
+            fail(f"{label}.assetPath must end with .prefab")
+        if component_asset_path in extraction_asset_paths:
+            fail(f"duplicate component extraction assetPath: {component_asset_path}")
+        if component_asset_path in {prefab_path, output_path}:
+            fail(f"{label}.assetPath must not replace the target Prefab")
+        extraction_asset_paths.add(component_asset_path)
+
+        common = extraction.get("common")
+        if not isinstance(common, dict):
+            fail(f"{label}.common must be an object")
+        common_source = require_string(common.get("source"), f"{label}.common.source")
+        if common_source.rsplit("/", 1)[0] != template_parent:
+            fail(f"{label}.common.source must be a sibling of template")
+        common_members = require_list(common.get("members"), f"{label}.common.members")
+        if not common_members:
+            fail(f"{label}.common.members must not be empty")
+
+        def normalize_members(members: list[dict[str, Any]], member_label: str) -> tuple[list[str], list[str]]:
+            source_names: list[str] = []
+            target_names: list[str] = []
+            for member_index, member in enumerate(members):
+                source_name = require_string(member.get("sourceName"), f"{member_label}[{member_index}].sourceName")
+                target_name = require_string(member.get("name"), f"{member_label}[{member_index}].name")
+                source_names.append(source_name)
+                target_names.append(target_name)
+            if len(source_names) != len(set(source_names)):
+                fail(f"{member_label} sourceName entries must not contain duplicates")
+            if len(target_names) != len(set(target_names)):
+                fail(f"{member_label} name entries must not contain duplicates")
+            return source_names, target_names
+
+        common_source_names, common_target_names = normalize_members(common_members, f"{label}.common.members")
+        states = require_list(extraction.get("states"), f"{label}.states")
+        if len(states) < 2:
+            fail(f"{label}.states must contain at least two visual states")
+        state_ids: set[str] = set()
+        state_sources: set[str] = set()
+        state_member_counts: dict[str, int] = {}
+        for state_index, state in enumerate(states):
+            state_label = f"{label}.states[{state_index}]"
+            state_id = require_string(state.get("id"), f"{state_label}.id")
+            if not re.match(r"^[a-z][a-z0-9_]*$", state_id):
+                fail(f"{state_label}.id must be lower snake_case")
+            if state_id in state_ids:
+                fail(f"duplicate state id: {state_id}")
+            state_ids.add(state_id)
+            source = require_string(state.get("source"), f"{state_label}.source")
+            if source.rsplit("/", 1)[0] != template_parent:
+                fail(f"{state_label}.source must be a sibling of template")
+            if source in state_sources:
+                fail(f"duplicate state source: {source}")
+            state_sources.add(source)
+            name = require_string(state.get("name"), f"{state_label}.name")
+            if not (name.startswith("[") and name.endswith("]")):
+                fail(f"{state_label}.name must be a bracketed structural state name")
+            state_members = require_list(state.get("members"), f"{state_label}.members")
+            if not state_members:
+                fail(f"{state_label}.members must not be empty")
+            source_names, _ = normalize_members(state_members, f"{state_label}.members")
+            if set(source_names).intersection(common_source_names):
+                fail(f"{state_label}.members overlap common members")
+            state_member_counts[state_id] = len(state_members)
+
+        default_state = require_string(extraction.get("defaultState"), f"{label}.defaultState")
+        if default_state not in state_ids:
+            fail(f"{label}.defaultState must match a states[].id")
+        instances = require_list(extraction.get("instances"), f"{label}.instances")
+        if len(instances) < 2:
+            fail(f"{label}.instances must contain at least two visible instances")
+        instance_sources: set[str] = set()
+        instance_names: set[str] = set()
+        for instance_index, instance in enumerate(instances):
+            instance_label = f"{label}.instances[{instance_index}]"
+            source = require_string(instance.get("source"), f"{instance_label}.source")
+            if source.rsplit("/", 1)[0] != template_parent:
+                fail(f"{instance_label}.source must be a sibling of template")
+            if source in instance_sources:
+                fail(f"duplicate stateful component instance source: {source}")
+            instance_sources.add(source)
+            for existing_path in extraction_instance_paths:
+                if source == existing_path or source.startswith(existing_path + "/") or existing_path.startswith(source + "/"):
+                    fail(f"stateful component source overlaps another component extraction: {source} and {existing_path}")
+            extraction_instance_paths.add(source)
+            name = require_string(instance.get("name"), f"{instance_label}.name")
+            if not (name.startswith("[") and name.endswith("]")):
+                fail(f"{instance_label}.name must be a bracketed semantic item name")
+            if name in instance_names:
+                fail(f"duplicate stateful component instance name: {name}")
+            instance_names.add(name)
+            state_id = require_string(instance.get("state"), f"{instance_label}.state")
+            if state_id not in state_ids:
+                fail(f"{instance_label}.state must match a states[].id")
+            common_sources = instance.get("commonSourceNames")
+            if not isinstance(common_sources, list) or not all(isinstance(item, str) and item for item in common_sources):
+                fail(f"{instance_label}.commonSourceNames must be a string list")
+            if len(common_sources) != len(common_source_names) or len(common_sources) != len(set(common_sources)):
+                fail(f"{instance_label}.commonSourceNames must map every common member once")
+            state_sources_for_instance = instance.get("stateSourceNames")
+            if not isinstance(state_sources_for_instance, list) or not all(isinstance(item, str) and item for item in state_sources_for_instance):
+                fail(f"{instance_label}.stateSourceNames must be a string list")
+            if len(state_sources_for_instance) != state_member_counts[state_id] or len(state_sources_for_instance) != len(set(state_sources_for_instance)):
+                fail(f"{instance_label}.stateSourceNames must map every selected-state member once")
+            if set(common_sources).intersection(state_sources_for_instance):
+                fail(f"{instance_label}.commonSourceNames and stateSourceNames must not overlap")
+        if template not in instance_sources or common_source not in instance_sources:
+            fail(f"{label}.template and common.source must appear in instances[].source")
+        if not state_sources.issubset(instance_sources):
+            fail(f"{label}.states[].source must appear in instances[].source")
+
     asset_targets: set[str] = set()
     for label, entries in (("textureRenames", texture_renames), ("spriteAtlasRenames", atlas_renames)):
         for index, rename in enumerate(entries):
@@ -348,6 +482,9 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     verify_tight_bounds = require_list(verify.get("tightBounds", []), "verify.tightBounds")
     for index, target in enumerate(verify_tight_bounds):
         require_string(target.get("path"), f"verify.tightBounds[{index}].path")
+    absent_paths = verify.get("absentPaths", [])
+    if not isinstance(absent_paths, list) or not all(isinstance(path, str) and path for path in absent_paths):
+        fail("verify.absentPaths must be a string list")
     if "requireEnglishNames" in verify and not isinstance(verify["requireEnglishNames"], bool):
         fail("verify.requireEnglishNames must be a boolean")
     forbidden_name_patterns = verify.get("forbiddenObjectNamePatterns", [])
@@ -378,12 +515,14 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         "wrappers": wrappers,
         "moves": moves,
         "renames": renames,
+        "empty_container_removals": empty_container_removals,
         "tight_bounds": tight_bounds,
         "texture_renames": texture_renames,
         "atlas_renames": atlas_renames,
         "component_extractions": component_extractions,
         "state_component_extractions": state_component_extractions,
         "variant_component_extractions": variant_component_extractions,
+        "stateful_component_extractions": stateful_component_extractions,
         "verify": verify,
     }
 
@@ -455,6 +594,8 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
                 f"    AssertExpected({csharp(item['path'] + '.childCount')}, hierarchyNode{index}.transform.childCount, {item['childCount']});",
             ]
         )
+    for path in verify.get("absentPaths", []):
+        lines.append(f"    AssertPathAbsent(reopened, {csharp(path)});")
     for index, item in enumerate(verify.get("directChildren", [])):
         expected_children = ", ".join(csharp(child) for child in item["children"])
         lines.extend(
@@ -520,6 +661,35 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
                     f"    var variantInstance_{extraction['id']}_{instance_index} = FindByPath(reopened, {csharp(instance_path)});",
                     f"    AssertNestedPrefabInstance(variantInstance_{extraction['id']}_{instance_index}, {csharp(extraction['assetPath'])});",
                     f"    AssertVariantState(variantInstance_{extraction['id']}_{instance_index}.transform, {csharp(expected_state['name'])}, {csharp(instance_path)});",
+                ]
+            )
+
+    for extraction in plan["stateful_component_extractions"]:
+        common_target_names = ", ".join(csharp(member["name"]) for member in extraction["common"]["members"])
+        state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
+        lines.extend(
+            [
+                f"    var statefulComponentAsset_{extraction['id']} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])});",
+                f"    if (statefulComponentAsset_{extraction['id']} == null) throw new InvalidOperationException(\"Extracted stateful component Prefab did not load: \" + {csharp(extraction['assetPath'])});",
+                f"    var statefulCommon_{extraction['id']} = statefulComponentAsset_{extraction['id']}.transform.Find(\"[Common]\");",
+                f"    var statefulStates_{extraction['id']} = statefulComponentAsset_{extraction['id']}.transform.Find(\"[States]\");",
+                f"    if (statefulCommon_{extraction['id']} == null || statefulStates_{extraction['id']} == null) throw new InvalidOperationException(\"Stateful component must contain [Common] and [States]: \" + statefulComponentAsset_{extraction['id']}.name);",
+                f"    AssertDirectChildren(statefulCommon_{extraction['id']}, new[] {{ {common_target_names} }}, {csharp(extraction['assetPath'] + '/[Common]')});",
+                f"    AssertDirectChildren(statefulStates_{extraction['id']}, new[] {{ {state_names} }}, {csharp(extraction['assetPath'] + '/[States]')});",
+            ]
+        )
+        for state_index, state in enumerate(extraction["states"]):
+            member_names = ", ".join(csharp(member["name"]) for member in state["members"])
+            lines.append(f"    AssertDirectChildren(statefulStates_{extraction['id']}.GetChild({state_index}), new[] {{ {member_names} }}, {csharp(extraction['assetPath'] + '/[States]/' + state['name'])});")
+        state_names_by_id = {state["id"]: state["name"] for state in extraction["states"]}
+        for instance_index, instance in enumerate(extraction["instances"]):
+            instance_path = instance["source"].rsplit("/", 1)[0] + "/" + instance["name"]
+            expected_state = state_names_by_id[instance["state"]]
+            lines.extend(
+                [
+                    f"    var statefulInstance_{extraction['id']}_{instance_index} = FindByPath(reopened, {csharp(instance_path)});",
+                    f"    AssertNestedPrefabInstance(statefulInstance_{extraction['id']}_{instance_index}, {csharp(extraction['assetPath'])});",
+                    f"    AssertVariantState(statefulInstance_{extraction['id']}_{instance_index}.transform, {csharp(expected_state)}, {csharp(instance_path)});",
                 ]
             )
 
@@ -596,6 +766,23 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    return current.gameObject;",
         "}",
         "",
+        "bool PathExists(GameObject root, string path)",
+        "{",
+        "    var segments = path.Split('/'); if (segments.Length == 0 || segments[0] != root.name) return false;",
+        "    var current = root.transform;",
+        "    for (var segmentIndex = 1; segmentIndex < segments.Length; segmentIndex++)",
+        "    {",
+        "        Transform next = null; for (var childIndex = 0; childIndex < current.childCount; childIndex++) { var child = current.GetChild(childIndex); if (child.name == segments[segmentIndex]) { next = child; break; } }",
+        "        if (next == null) return false; current = next;",
+        "    }",
+        "    return true;",
+        "}",
+        "",
+        "void AssertPathAbsent(GameObject root, string path)",
+        "{",
+        "    if (PathExists(root, path)) throw new InvalidOperationException(\"Path must be absent: \" + path);",
+        "}",
+        "",
         "string TransformPath(Transform node)",
         "{",
         "    var names = new List<string>(); for (var current = node; current != null; current = current.parent) names.Add(current.name); names.Reverse(); return string.Join(\"/\", names.ToArray());",
@@ -629,6 +816,15 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    rect.sizeDelta = Vector2.zero; rect.localScale = Vector3.one; rect.localRotation = Quaternion.identity;",
         "    rect.SetSiblingIndex(siblingIndex);",
         "    return wrapper;",
+        "}",
+        "",
+        "void RemoveEmptyContainer(Transform prefabRoot, Transform container)",
+        "{",
+        "    if (container.parent == null) throw new InvalidOperationException(\"Cannot remove the Prefab root\");",
+        "    if (container.childCount != 0) throw new InvalidOperationException(\"Container is not empty: \" + TransformPath(container));",
+        "    foreach (var component in container.GetComponents<Component>()) if (component != null && !(component is Transform)) throw new InvalidOperationException(\"Container has non-Transform components: \" + TransformPath(container));",
+        "    AssertNoExternalReferences(prefabRoot, container);",
+        "    Object.DestroyImmediate(container.gameObject);",
         "}",
         "",
         "void TightenToChildren(RectTransform rect)",
@@ -824,9 +1020,9 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    if (changed) serialized.ApplyModifiedPropertiesWithoutUndo();",
         "}",
         "",
-        "void CopyHierarchyOverrides(Transform source, Transform destination, Dictionary<Object, Object> objectMap)",
+        "void CopyHierarchyOverrides(Transform source, Transform destination, Dictionary<Object, Object> objectMap, bool copyNames)",
         "{",
-        "    destination.name = source.name; destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag; CopyTransformData(source, destination);",
+        "    if (copyNames) destination.name = source.name; destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag; CopyTransformData(source, destination);",
         "    foreach (var sourceComponent in source.GetComponents<Component>())",
         "    {",
         "        if (sourceComponent == null || sourceComponent is Transform) continue;",
@@ -834,7 +1030,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "        PrefabUtility.RecordPrefabInstancePropertyModifications(destinationComponent);",
         "    }",
         "    PrefabUtility.RecordPrefabInstancePropertyModifications(destination); PrefabUtility.RecordPrefabInstancePropertyModifications(destination.gameObject);",
-        "    for (var childIndex = 0; childIndex < source.childCount; childIndex++) CopyHierarchyOverrides(source.GetChild(childIndex), destination.GetChild(childIndex), objectMap);",
+        "    for (var childIndex = 0; childIndex < source.childCount; childIndex++) CopyHierarchyOverrides(source.GetChild(childIndex), destination.GetChild(childIndex), objectMap, copyNames);",
         "    destination.gameObject.SetActive(source.gameObject.activeSelf);",
         "}",
         "",
@@ -872,7 +1068,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    var siblingIndex = source.GetSiblingIndex(); var beforeCorners = new List<Vector3[]>(); CaptureHierarchyCorners(source, beforeCorners);",
         "    var instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject; if (instance == null) throw new InvalidOperationException(\"Failed to instantiate component Prefab: \" + componentAsset.name);",
         "    var destination = instance.transform; destination.SetParent(parent, false); destination.SetSiblingIndex(siblingIndex);",
-        "    var objectMap = new Dictionary<Object, Object>(); BuildObjectMap(source, destination, objectMap); CopyHierarchyOverrides(source, destination, objectMap);",
+        "    var objectMap = new Dictionary<Object, Object>(); BuildObjectMap(source, destination, objectMap); CopyHierarchyOverrides(source, destination, objectMap, true);",
         "    Object.DestroyImmediate(source.gameObject); AssertHierarchyCorners(destination, beforeCorners, destination.name);",
         "}",
         "",
@@ -964,6 +1160,74 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    for (var index = 0; index < states.childCount; index++) if (states.GetChild(index).name == name) return index; throw new InvalidOperationException(\"Variant state not found: \" + name);",
         "}",
         "",
+        "Transform FindDirectChild(Transform parent, string name)",
+        "{",
+        "    for (var index = 0; index < parent.childCount; index++) if (parent.GetChild(index).name == name) return parent.GetChild(index);",
+        "    throw new InvalidOperationException(\"Direct child was not found: \" + TransformPath(parent) + \"/\" + name);",
+        "}",
+        "",
+        "void AssertDirectSourceMembers(Transform source, string[] commonSourceNames, string[] stateSourceNames)",
+        "{",
+        "    var expected = new HashSet<string>(commonSourceNames); foreach (var name in stateSourceNames) if (!expected.Add(name)) throw new InvalidOperationException(\"Common and state members overlap: \" + name);",
+        "    if (source.childCount != expected.Count) throw new InvalidOperationException(\"Stateful source has an unmapped member: \" + TransformPath(source));",
+        "    for (var index = 0; index < source.childCount; index++) if (!expected.Contains(source.GetChild(index).name)) throw new InvalidOperationException(\"Stateful source has an unmapped member: \" + TransformPath(source.GetChild(index)));",
+        "}",
+        "",
+        "RectTransform CreateStructuralContainer(string name, Transform parent, RectTransform template)",
+        "{",
+        "    var container = new GameObject(name, typeof(RectTransform)); var rect = container.GetComponent<RectTransform>(); rect.SetParent(parent, false);",
+        "    rect.anchorMin = template.anchorMin; rect.anchorMax = template.anchorMax; rect.pivot = template.pivot; rect.anchoredPosition3D = Vector3.zero; rect.sizeDelta = template.sizeDelta; rect.localScale = Vector3.one; rect.localRotation = Quaternion.identity; return rect;",
+        "}",
+        "",
+        "void CloneMappedMember(Transform sourceParent, string sourceName, string targetName, Transform destinationParent)",
+        "{",
+        "    var source = FindDirectChild(sourceParent, sourceName); var clone = Object.Instantiate(source.gameObject); clone.name = targetName; clone.transform.SetParent(destinationParent, false); CopyTransformData(source, clone.transform); clone.SetActive(source.gameObject.activeSelf);",
+        "}",
+        "",
+        "void CopyMappedMemberOverride(Transform sourceParent, string sourceName, Transform destinationParent, string targetName, List<List<Vector3[]>> beforeCorners, List<Transform> destinations)",
+        "{",
+        "    var source = FindDirectChild(sourceParent, sourceName); var destination = FindDirectChild(destinationParent, targetName); var corners = new List<Vector3[]>(); CaptureHierarchyCorners(source, corners); beforeCorners.Add(corners); destinations.Add(destination);",
+        "    var objectMap = new Dictionary<Object, Object>(); BuildObjectMap(source, destination, objectMap); CopyHierarchyOverrides(source, destination, objectMap, false);",
+        "}",
+        "",
+        "GameObject CreateStatefulComponentPrefab(Transform template, Transform commonSource, string[] commonSourceNames, string[] commonTargetNames, Transform[] stateSources, string[] stateNames, string[][] stateSourceNames, string[][] stateTargetNames, int defaultStateIndex, string assetPath)",
+        "{",
+        "    if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null) throw new InvalidOperationException(\"Stateful component Prefab target already exists: \" + assetPath);",
+        "    if (commonSourceNames.Length != commonTargetNames.Length || stateSources.Length != stateNames.Length || stateSources.Length != stateSourceNames.Length || stateSources.Length != stateTargetNames.Length || defaultStateIndex < 0 || defaultStateIndex >= stateSources.Length) throw new InvalidOperationException(\"Invalid stateful component extraction contract\");",
+        "    var parent = template.parent; if (parent == null) throw new InvalidOperationException(\"Cannot extract a stateful component from the Prefab root\"); EnsureAssetFolder(assetPath);",
+        "    var builder = new GameObject(Path.GetFileNameWithoutExtension(assetPath), typeof(RectTransform)); builder.transform.SetParent(parent, false); builder.transform.SetSiblingIndex(template.GetSiblingIndex()); builder.layer = template.gameObject.layer; builder.tag = template.gameObject.tag; CopyTransformData(template, builder.transform);",
+        "    var templateRect = template as RectTransform; if (templateRect == null) throw new InvalidOperationException(\"Stateful component sources must use RectTransform\");",
+        "    var states = CreateStructuralContainer(\"[States]\", builder.transform, templateRect);",
+        "    var common = CreateStructuralContainer(\"[Common]\", builder.transform, templateRect);",
+        "    try",
+        "    {",
+        "        for (var index = 0; index < commonSourceNames.Length; index++) CloneMappedMember(commonSource, commonSourceNames[index], commonTargetNames[index], common.transform);",
+        "        for (var stateIndex = 0; stateIndex < stateSources.Length; stateIndex++)",
+        "        {",
+        "            if (stateSourceNames[stateIndex].Length != stateTargetNames[stateIndex].Length) throw new InvalidOperationException(\"State member mapping length differs\");",
+        "            var state = CreateStructuralContainer(stateNames[stateIndex], states.transform, templateRect); state.gameObject.SetActive(stateIndex == defaultStateIndex);",
+        "            for (var memberIndex = 0; memberIndex < stateSourceNames[stateIndex].Length; memberIndex++) CloneMappedMember(stateSources[stateIndex], stateSourceNames[stateIndex][memberIndex], stateTargetNames[stateIndex][memberIndex], state.transform);",
+        "        }",
+        "        AssertDirectChildren(states.transform, stateNames, builder.name + \"/[States]\"); AssertDirectChildren(common.transform, commonTargetNames, builder.name + \"/[Common]\"); AssertExclusiveActiveState(states.transform, stateNames[defaultStateIndex], builder.name);",
+        "        var componentAsset = PrefabUtility.SaveAsPrefabAsset(builder, assetPath); if (componentAsset == null) throw new InvalidOperationException(\"Failed to save stateful component Prefab: \" + assetPath); return componentAsset;",
+        "    }",
+        "    finally { Object.DestroyImmediate(builder); }",
+        "}",
+        "",
+        "GameObject ReplaceStatefulSourceWithComponent(Transform source, string instanceName, string activeStateName, string[] commonSourceNames, string[] commonTargetNames, string[] stateSourceNames, string[] stateTargetNames, GameObject componentAsset)",
+        "{",
+        "    AssertDirectSourceMembers(source, commonSourceNames, stateSourceNames); var parent = source.parent; if (parent == null) throw new InvalidOperationException(\"Cannot replace the Prefab root with a stateful component instance\"); var siblingIndex = source.GetSiblingIndex();",
+        "    var instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject; if (instance == null) throw new InvalidOperationException(\"Failed to instantiate stateful component Prefab: \" + componentAsset.name);",
+        "    var destination = instance.transform; destination.SetParent(parent, false); destination.SetSiblingIndex(siblingIndex); destination.name = instanceName; destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag; CopyTransformData(source, destination); destination.gameObject.SetActive(source.gameObject.activeSelf);",
+        "    var states = destination.Find(\"[States]\"); var common = destination.Find(\"[Common]\"); if (states == null || common == null) throw new InvalidOperationException(\"Stateful component has no [States] or [Common] container: \" + destination.name);",
+        "    for (var index = 0; index < states.childCount; index++) states.GetChild(index).gameObject.SetActive(states.GetChild(index).name == activeStateName); var activeState = states.Find(activeStateName); if (activeState == null) throw new InvalidOperationException(\"Stateful component state was not found: \" + activeStateName);",
+        "    if (commonSourceNames.Length != commonTargetNames.Length || stateSourceNames.Length != stateTargetNames.Length) throw new InvalidOperationException(\"Stateful instance member mapping length differs\");",
+        "    var beforeCorners = new List<List<Vector3[]>>(); var destinations = new List<Transform>();",
+        "    for (var index = 0; index < commonSourceNames.Length; index++) CopyMappedMemberOverride(source, commonSourceNames[index], common, commonTargetNames[index], beforeCorners, destinations);",
+        "    for (var index = 0; index < stateSourceNames.Length; index++) CopyMappedMemberOverride(source, stateSourceNames[index], activeState, stateTargetNames[index], beforeCorners, destinations);",
+        "    Object.DestroyImmediate(source.gameObject); for (var index = 0; index < destinations.Count; index++) AssertHierarchyCorners(destinations[index], beforeCorners[index], destination.name); AssertVariantState(destination, activeStateName, destination.name); return instance;",
+        "}",
+        "",
         "void AssertNestedPrefabInstance(GameObject instance, string assetPath)",
         "{",
         "    if (!PrefabUtility.IsAnyPrefabInstanceRoot(instance)) throw new InvalidOperationException(\"Expected nested Prefab instance: \" + instance.name);",
@@ -1019,6 +1283,8 @@ def render(plan: dict[str, Any], mode: str) -> str:
         lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"State component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
     for extraction in plan["variant_component_extractions"]:
         lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Variant component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+    for extraction in plan["stateful_component_extractions"]:
+        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Stateful component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
 
     lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
     lines.extend(
@@ -1034,6 +1300,11 @@ def render(plan: dict[str, Any], mode: str) -> str:
     for index, rename in enumerate(plan["renames"]):
         if not rename["target"].startswith("@"):
             lines.append(f"    var renameTarget{index} = FindByPath(root, {csharp(rename['target'])});")
+    removal_vars: list[str] = []
+    for index, removal in enumerate(plan["empty_container_removals"]):
+        variable = f"emptyContainerRemoval{index}"
+        removal_vars.append(variable)
+        lines.append(f"    var {variable} = FindByPath(root, {csharp(removal['source'])}).transform;")
     extraction_vars: list[tuple[str, list[str]]] = []
     for extraction_index, extraction in enumerate(plan["component_extractions"]):
         template_var = f"componentTemplate{extraction_index}"
@@ -1069,6 +1340,23 @@ def render(plan: dict[str, Any], mode: str) -> str:
             lines.append(f"    var {instance_var} = FindByPath(root, {csharp(instance['source'])}).transform;")
             instance_vars.append(instance_var)
         variant_extraction_vars.append((template_var, source_vars, instance_vars))
+    stateful_extraction_vars: list[tuple[str, str, list[str], list[str]]] = []
+    for extraction_index, extraction in enumerate(plan["stateful_component_extractions"]):
+        template_var = f"statefulTemplate{extraction_index}"
+        common_source_var = f"statefulCommonSource{extraction_index}"
+        lines.append(f"    var {template_var} = FindByPath(root, {csharp(extraction['template'])}).transform;")
+        lines.append(f"    var {common_source_var} = FindByPath(root, {csharp(extraction['common']['source'])}).transform;")
+        state_source_vars: list[str] = []
+        for state_index, state in enumerate(extraction["states"]):
+            state_source_var = f"statefulStateSource{extraction_index}_{state_index}"
+            lines.append(f"    var {state_source_var} = FindByPath(root, {csharp(state['source'])}).transform;")
+            state_source_vars.append(state_source_var)
+        instance_vars: list[str] = []
+        for instance_index, instance in enumerate(extraction["instances"]):
+            instance_var = f"statefulInstance{extraction_index}_{instance_index}"
+            lines.append(f"    var {instance_var} = FindByPath(root, {csharp(instance['source'])}).transform;")
+            instance_vars.append(instance_var)
+        stateful_extraction_vars.append((template_var, common_source_var, state_source_vars, instance_vars))
     wrapper_vars: dict[str, str] = {}
     for index, wrapper in enumerate(plan["wrappers"]):
         variable = f"wrapper{index}"
@@ -1087,6 +1375,8 @@ def render(plan: dict[str, Any], mode: str) -> str:
         lines.append(f"    var {variable} = {target_expr};")
     for variable in tight_vars:
         lines.append(f"    excludedCornerNodes.Add({variable}.transform);")
+    for variable in removal_vars:
+        lines.append(f"    excludedCornerNodes.Add({variable});")
     for _, instance_vars in extraction_vars:
         for instance_var in instance_vars:
             lines.append(f"    ExcludeHierarchy({instance_var}, excludedCornerNodes);")
@@ -1094,6 +1384,9 @@ def render(plan: dict[str, Any], mode: str) -> str:
         for source_var in source_vars:
             lines.append(f"    ExcludeHierarchy({source_var}, excludedCornerNodes);")
     for _, _, instance_vars in variant_extraction_vars:
+        for instance_var in instance_vars:
+            lines.append(f"    ExcludeHierarchy({instance_var}, excludedCornerNodes);")
+    for _, _, _, instance_vars in stateful_extraction_vars:
         for instance_var in instance_vars:
             lines.append(f"    ExcludeHierarchy({instance_var}, excludedCornerNodes);")
     lines.append("    CaptureWorldCorners(root.transform, beforeCorners, excludedCornerNodes);")
@@ -1113,6 +1406,8 @@ def render(plan: dict[str, Any], mode: str) -> str:
         lines.append(f"    {target_expr}.name = {csharp(rename['name'])};")
     for variable in tight_vars:
         lines.append(f"    TightenToChildren({variable});")
+    for variable in removal_vars:
+        lines.append(f"    RemoveEmptyContainer(root.transform, {variable});")
     for extraction_index, extraction in enumerate(plan["component_extractions"]):
         template_var, instance_vars = extraction_vars[extraction_index]
         signature_var = f"componentSignature{extraction_index}"
@@ -1161,6 +1456,35 @@ def render(plan: dict[str, Any], mode: str) -> str:
         state_names_by_id = {state["id"]: state["name"] for state in extraction["states"]}
         for instance, instance_var in zip(extraction["instances"], instance_vars):
             lines.append(f"    ReplaceVariantSourceWithComponent({instance_var}, {csharp(instance['name'])}, {csharp(state_names_by_id[instance['state']])}, {component_asset_var});")
+    for extraction_index, extraction in enumerate(plan["stateful_component_extractions"]):
+        template_var, common_source_var, state_source_vars, instance_vars = stateful_extraction_vars[extraction_index]
+        default_state_index = next(index for index, state in enumerate(extraction["states"]) if state["id"] == extraction["defaultState"])
+        common_source_names = ", ".join(csharp(member["sourceName"]) for member in extraction["common"]["members"])
+        common_target_names = ", ".join(csharp(member["name"]) for member in extraction["common"]["members"])
+        state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
+        state_source_array = ", ".join(state_source_vars)
+        state_member_source_arrays = ", ".join("new[] { " + ", ".join(csharp(member["sourceName"]) for member in state["members"]) + " }" for state in extraction["states"])
+        state_member_target_arrays = ", ".join("new[] { " + ", ".join(csharp(member["name"]) for member in state["members"]) + " }" for state in extraction["states"])
+        for instance_var in instance_vars:
+            lines.extend(
+                [
+                    f"    AssertNoNestedPrefabRoots({instance_var});",
+                    f"    AssertNoExternalReferences(root.transform, {instance_var});",
+                ]
+            )
+        component_asset_var = f"statefulComponentAsset{extraction_index}"
+        lines.append(
+            f"    var {component_asset_var} = CreateStatefulComponentPrefab({template_var}, {common_source_var}, new[] {{ {common_source_names} }}, new[] {{ {common_target_names} }}, new[] {{ {state_source_array} }}, new[] {{ {state_names} }}, new[] {{ {state_member_source_arrays} }}, new[] {{ {state_member_target_arrays} }}, {default_state_index}, {csharp(extraction['assetPath'])});"
+        )
+        state_by_id = {state["id"]: state for state in extraction["states"]}
+        for instance, instance_var in zip(extraction["instances"], instance_vars):
+            state = state_by_id[instance["state"]]
+            instance_common_names = ", ".join(csharp(name) for name in instance["commonSourceNames"])
+            instance_state_names = ", ".join(csharp(name) for name in instance["stateSourceNames"])
+            state_target_names = ", ".join(csharp(member["name"]) for member in state["members"])
+            lines.append(
+                f"    ReplaceStatefulSourceWithComponent({instance_var}, {csharp(instance['name'])}, {csharp(state['name'])}, new[] {{ {instance_common_names} }}, new[] {{ {common_target_names} }}, new[] {{ {instance_state_names} }}, new[] {{ {state_target_names} }}, {component_asset_var});"
+            )
 
     lines.extend(
         [

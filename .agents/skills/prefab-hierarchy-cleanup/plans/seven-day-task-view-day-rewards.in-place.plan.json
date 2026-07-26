@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab"
+  },
+  "prefabName": "SevenDayTaskView",
+  "wrappers": [
+    { "id": "day_01", "parent": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[Day_01]", "siblingIndex": 0 },
+    { "id": "day_02", "parent": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[Day_02]", "siblingIndex": 1 },
+    { "id": "day_03", "parent": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[Day_03]", "siblingIndex": 2 },
+    { "id": "day_04", "parent": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[Day_04]", "siblingIndex": 3 },
+    { "id": "day_05", "parent": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[Day_05]", "siblingIndex": 4 },
+    { "id": "day_06", "parent": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[Day_06]", "siblingIndex": 5 },
+    { "id": "day_07", "parent": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[Day_07]", "siblingIndex": 6 }
+  ],
+  "moves": [
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]/Day01RewardBackground", "destination": "@day_01", "siblingIndex": 0 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day01Label", "destination": "@day_01", "siblingIndex": 1 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day01Number", "destination": "@day_01", "siblingIndex": 2 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day01RewardIcon", "destination": "@day_01", "siblingIndex": 3 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day01RewardAmount", "destination": "@day_01", "siblingIndex": 4 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]/Day02RewardBackground", "destination": "@day_02", "siblingIndex": 0 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day02Label", "destination": "@day_02", "siblingIndex": 1 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day02Number", "destination": "@day_02", "siblingIndex": 2 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]/Day03RewardBackground", "destination": "@day_03", "siblingIndex": 0 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day03Label", "destination": "@day_03", "siblingIndex": 1 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day03Number", "destination": "@day_03", "siblingIndex": 2 },
+    { "source": "SevenDayTaskView/AnimatorRoot/Day03Lock", "destination": "@day_03", "siblingIndex": 3 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]/Day04RewardBackground", "destination": "@day_04", "siblingIndex": 0 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day04Label", "destination": "@day_04", "siblingIndex": 1 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day04Number", "destination": "@day_04", "siblingIndex": 2 },
+    { "source": "SevenDayTaskView/AnimatorRoot/Day04Lock", "destination": "@day_04", "siblingIndex": 3 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]/Day05RewardBackground", "destination": "@day_05", "siblingIndex": 0 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day05Label", "destination": "@day_05", "siblingIndex": 1 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day05Number", "destination": "@day_05", "siblingIndex": 2 },
+    { "source": "SevenDayTaskView/AnimatorRoot/Day05Lock", "destination": "@day_05", "siblingIndex": 3 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]/Day06RewardBackground", "destination": "@day_06", "siblingIndex": 0 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day06Label", "destination": "@day_06", "siblingIndex": 1 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day06Number", "destination": "@day_06", "siblingIndex": 2 },
+    { "source": "SevenDayTaskView/AnimatorRoot/Day06Lock", "destination": "@day_06", "siblingIndex": 3 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]/Day07RewardBackground", "destination": "@day_07", "siblingIndex": 0 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day07Label", "destination": "@day_07", "siblingIndex": 1 },
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]/Day07Number", "destination": "@day_07", "siblingIndex": 2 },
+    { "source": "SevenDayTaskView/AnimatorRoot/Day07Lock", "destination": "@day_07", "siblingIndex": 3 }
+  ],
+  "renames": [
+    { "target": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]", "name": "[DayRewards]" }
+  ],
+  "emptyContainerRemovals": [
+    { "source": "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]" }
+  ],
+  "tightBounds": [
+    { "target": "@day_01" },
+    { "target": "@day_02" },
+    { "target": "@day_03" },
+    { "target": "@day_04" },
+    { "target": "@day_05" },
+    { "target": "@day_06" },
+    { "target": "@day_07" },
+    { "target": "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]" }
+  ],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentExtractions": [],
+  "stateComponentExtractions": [],
+  "variantComponentExtractions": [],
+  "verify": {
+    "missingComponents": 0,
+    "requireEnglishNames": true,
+    "forbiddenObjectNamePatterns": [
+      "^(?:\\d+|\\+|img_v3_|ui_daily_|daily_)",
+      "^\\d+(?:_\\d+)?$",
+      "^\\d+(?:\\.\\d+)?[kKmM]$",
+      "^\\d+[A-Za-z]\\d+[A-Za-z]$",
+      "^day(?:_\\d+)?$"
+    ],
+    "allowedMissingImagePathPrefixes": [
+      "SevenDayTaskView/AnimatorRoot/Down_1/"
+    ],
+    "texturePathPrefix": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/SevenDayTaskView_",
+    "privateTextureDirectory": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture",
+    "requireAllPrivateTextureAssetsPrefixed": true,
+    "hierarchy": [
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]", "childCount": 7 }
+    ],
+    "absentPaths": [
+      "SevenDayTaskView/AnimatorRoot/[DayRewardBackgrounds]",
+      "SevenDayTaskView/AnimatorRoot/[DayRewardLabels]"
+    ],
+    "directChildren": [
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]", "children": ["[Day_01]", "[Day_02]", "[Day_03]", "[Day_04]", "[Day_05]", "[Day_06]", "[Day_07]"] },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_01]", "children": ["Day01RewardBackground", "Day01Label", "Day01Number", "Day01RewardIcon", "Day01RewardAmount"] },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_02]", "children": ["Day02RewardBackground", "Day02Label", "Day02Number"] },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_03]", "children": ["Day03RewardBackground", "Day03Label", "Day03Number", "Day03Lock"] },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_04]", "children": ["Day04RewardBackground", "Day04Label", "Day04Number", "Day04Lock"] },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_05]", "children": ["Day05RewardBackground", "Day05Label", "Day05Number", "Day05Lock"] },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_06]", "children": ["Day06RewardBackground", "Day06Label", "Day06Number", "Day06Lock"] },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_07]", "children": ["Day07RewardBackground", "Day07Label", "Day07Number", "Day07Lock"] }
+    ],
+    "tightBounds": [
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]" },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_01]" },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_02]" },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_03]" },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_04]" },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_05]" },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_06]" },
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_07]" }
+    ]
+  }
+}

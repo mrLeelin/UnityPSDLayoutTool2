@@ -16,12 +16,14 @@ Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed executio
   "wrappers": [],
   "moves": [],
   "renames": [],
+  "emptyContainerRemovals": [],
   "tightBounds": [],
   "textureRenames": [],
   "spriteAtlasRenames": [],
   "componentExtractions": [],
   "stateComponentExtractions": [],
   "variantComponentExtractions": [],
+  "statefulComponentExtractions": [],
   "verify": {}
 }
 ```
@@ -50,6 +52,16 @@ All asset paths are project-relative paths beginning with `Assets/`. `prefabName
 ```
 
 Each move source must be unique. A wrapper cannot overwrite an existing child. Reparenting is performed with world-position preservation. Every wrapper is tightened to the exact union of its direct child `RectTransform` bounds after all moves; use `tightBounds` to also tighten existing semantic containers.
+
+`emptyContainerRemovals` is intentionally narrow: use it only to remove an existing structural grouping container after all of its children were moved. The runner rejects a non-empty target, any target with a component other than `Transform`, or a target referenced elsewhere in the Prefab. Pair every removal with `verify.absentPaths` so the saved hierarchy proves that a former flat type/layer group was not left behind.
+
+```json
+{
+  "emptyContainerRemovals": [
+    { "source": "RewardPanel/[LegacyLabels]" }
+  ]
+}
+```
 
 For repeated foreground units, keep area-scale backgrounds in a sibling region group. For example, use `[MapSectors] / SectorBackground_*` beside `[MapMarkers] / [MapMarker_*] / MarkerBackground + MarkerIcon`; do not include a map sector in the marker wrapper just because it is spatially adjacent.
 
@@ -150,6 +162,67 @@ Use `variantComponentExtractions` when several rows are visible at different lis
 
 `states[].source` must be direct siblings of `template`; every state source must appear exactly once in `instances`. The output root has direct `[Common]` and `[States]` children. Move only members proven common to every state into `[Common]`; leave it empty if no such proof exists. The runner normalizes each state root to the component origin, preserves each instance's original list position, and activates exactly `instances[].state`. `variantComponentExtractions` cannot be combined with the other extraction modes or hierarchy changes.
 
+## Stateful Repeated Component Extraction
+
+Use `statefulComponentExtractions` for repeated items that contain real shared content plus a small number of visual states. It creates one shared nested Prefab, moves the reviewed shared members into `[Common]`, creates one state branch per visual state, and replaces every source item with an instance of that asset. `[States]` is created before `[Common]`, preserving the expected UI draw order for shared labels over state backgrounds.
+
+```json
+{
+  "statefulComponentExtractions": [
+    {
+      "id": "day_reward_item",
+      "template": "SevenDayTaskView/[DayRewards]/[Day_01]",
+      "assetPath": "Assets/UI/Prefab/Common/SevenDayRewardItem.prefab",
+      "common": {
+        "source": "SevenDayTaskView/[DayRewards]/[Day_01]",
+        "members": [
+          { "sourceName": "Day01Label", "name": "DayLabel" },
+          { "sourceName": "Day01Number", "name": "DayNumber" }
+        ]
+      },
+      "states": [
+        {
+          "id": "claimed",
+          "source": "SevenDayTaskView/[DayRewards]/[Day_01]",
+          "name": "[State_Claimed]",
+          "members": [
+            { "sourceName": "Day01RewardBackground", "name": "ClaimedBackground" }
+          ]
+        },
+        {
+          "id": "locked",
+          "source": "SevenDayTaskView/[DayRewards]/[Day_03]",
+          "name": "[State_Locked]",
+          "members": [
+            { "sourceName": "Day03RewardBackground", "name": "LockedBackground" },
+            { "sourceName": "Day03Lock", "name": "LockIcon" }
+          ]
+        }
+      ],
+      "defaultState": "claimed",
+      "instances": [
+        {
+          "source": "SevenDayTaskView/[DayRewards]/[Day_01]",
+          "name": "[DayRewardItem_01]",
+          "state": "claimed",
+          "commonSourceNames": ["Day01Label", "Day01Number"],
+          "stateSourceNames": ["Day01RewardBackground"]
+        },
+        {
+          "source": "SevenDayTaskView/[DayRewards]/[Day_03]",
+          "name": "[DayRewardItem_03]",
+          "state": "locked",
+          "commonSourceNames": ["Day03Label", "Day03Number"],
+          "stateSourceNames": ["Day03RewardBackground", "Day03Lock"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+`common.members` specifies the reusable `[Common]` contract. Each state specifies its branch members. Each instance maps all its direct members using `commonSourceNames` and `stateSourceNames`; the runner rejects an unmapped or duplicated child. This mode is exclusive with every other extraction mode and hierarchy operation. It rejects nested Prefabs, external references, incomplete member mapping, and an existing output asset.
+
 ## Private Asset Renames
 
 List only assets proven private to the current Prefab. `toName` has no extension and must use the exact `PrefabName_` prefix.
@@ -209,6 +282,9 @@ Use counts captured during the read-only snapshot. `hierarchy` paths are post-ap
       { "path": "RewardPanel/[Screen]", "childCount": 1 },
       { "path": "RewardPanel/[Screen]/[Content]", "childCount": 2 }
     ],
+    "absentPaths": [
+      "RewardPanel/[LegacyLabels]"
+    ],
     "directChildren": [
       {
         "path": "RewardPanel/[Screen]/[Content]/[Item_1]",
@@ -220,6 +296,8 @@ Use counts captured during the read-only snapshot. `hierarchy` paths are post-ap
 ```
 
 `directChildren` is optional for unrelated containers, but required for every repeated unit whose semantic membership is changed. It verifies exact direct-child names and sibling order after saving.
+
+`absentPaths` is an optional string list. Use it with `emptyContainerRemovals` to prove the old grouping container is gone after saving.
 
 `forbiddenObjectNamePatterns` is a regex list checked against every GameObject name. Use it to reject PSD/export tokens, UUID names, punctuation-only names, and literal text values. `allowedMissingImagePathPrefixes` is an explicit exception list for known inherited nested-Prefab images with intentionally missing Sprite references; do not use it to silence missing Sprites in the target Prefab.
 

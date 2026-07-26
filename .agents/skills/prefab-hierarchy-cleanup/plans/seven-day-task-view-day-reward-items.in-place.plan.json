@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab"
+  },
+  "prefabName": "SevenDayTaskView",
+  "wrappers": [],
+  "moves": [],
+  "renames": [],
+  "emptyContainerRemovals": [],
+  "tightBounds": [],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentExtractions": [],
+  "stateComponentExtractions": [],
+  "variantComponentExtractions": [],
+  "statefulComponentExtractions": [
+    {
+      "id": "day_reward_item",
+      "template": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_01]",
+      "assetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/Common/SevenDayRewardItem.prefab",
+      "common": {
+        "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_01]",
+        "members": [
+          { "sourceName": "Day01Label", "name": "DayLabel" },
+          { "sourceName": "Day01Number", "name": "DayNumber" }
+        ]
+      },
+      "states": [
+        {
+          "id": "claimed",
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_01]",
+          "name": "[State_Claimed]",
+          "members": [
+            { "sourceName": "Day01RewardBackground", "name": "ClaimedBackground" },
+            { "sourceName": "Day01RewardIcon", "name": "RewardIcon" },
+            { "sourceName": "Day01RewardAmount", "name": "RewardAmount" }
+          ]
+        },
+        {
+          "id": "current",
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_02]",
+          "name": "[State_Current]",
+          "members": [
+            { "sourceName": "Day02RewardBackground", "name": "CurrentBackground" }
+          ]
+        },
+        {
+          "id": "locked",
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_03]",
+          "name": "[State_Locked]",
+          "members": [
+            { "sourceName": "Day03RewardBackground", "name": "LockedBackground" },
+            { "sourceName": "Day03Lock", "name": "LockIcon" }
+          ]
+        }
+      ],
+      "defaultState": "claimed",
+      "instances": [
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_01]",
+          "name": "[DayRewardItem_01]",
+          "state": "claimed",
+          "commonSourceNames": ["Day01Label", "Day01Number"],
+          "stateSourceNames": ["Day01RewardBackground", "Day01RewardIcon", "Day01RewardAmount"]
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_02]",
+          "name": "[DayRewardItem_02]",
+          "state": "current",
+          "commonSourceNames": ["Day02Label", "Day02Number"],
+          "stateSourceNames": ["Day02RewardBackground"]
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_03]",
+          "name": "[DayRewardItem_03]",
+          "state": "locked",
+          "commonSourceNames": ["Day03Label", "Day03Number"],
+          "stateSourceNames": ["Day03RewardBackground", "Day03Lock"]
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_04]",
+          "name": "[DayRewardItem_04]",
+          "state": "locked",
+          "commonSourceNames": ["Day04Label", "Day04Number"],
+          "stateSourceNames": ["Day04RewardBackground", "Day04Lock"]
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_05]",
+          "name": "[DayRewardItem_05]",
+          "state": "locked",
+          "commonSourceNames": ["Day05Label", "Day05Number"],
+          "stateSourceNames": ["Day05RewardBackground", "Day05Lock"]
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_06]",
+          "name": "[DayRewardItem_06]",
+          "state": "locked",
+          "commonSourceNames": ["Day06Label", "Day06Number"],
+          "stateSourceNames": ["Day06RewardBackground", "Day06Lock"]
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[DayRewards]/[Day_07]",
+          "name": "[DayRewardItem_07]",
+          "state": "locked",
+          "commonSourceNames": ["Day07Label", "Day07Number"],
+          "stateSourceNames": ["Day07RewardBackground", "Day07Lock"]
+        }
+      ]
+    }
+  ],
+  "verify": {
+    "missingComponents": 0,
+    "requireEnglishNames": true,
+    "forbiddenObjectNamePatterns": [
+      "^(?:\\d+|\\+|img_v3_|ui_daily_|daily_)",
+      "^\\d+(?:_\\d+)?$",
+      "^\\d+(?:\\.\\d+)?[kKmM]$",
+      "^\\d+[A-Za-z]\\d+[A-Za-z]$",
+      "^day(?:_\\d+)?$"
+    ],
+    "allowedMissingImagePathPrefixes": [
+      "SevenDayTaskView/AnimatorRoot/Down_1/"
+    ],
+    "texturePathPrefix": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/SevenDayTaskView_",
+    "privateTextureDirectory": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture",
+    "requireAllPrivateTextureAssetsPrefixed": true,
+    "hierarchy": [
+      { "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]", "childCount": 7 }
+    ],
+    "directChildren": [
+      {
+        "path": "SevenDayTaskView/AnimatorRoot/[DayRewards]",
+        "children": ["[DayRewardItem_01]", "[DayRewardItem_02]", "[DayRewardItem_03]", "[DayRewardItem_04]", "[DayRewardItem_05]", "[DayRewardItem_06]", "[DayRewardItem_07]"]
+      }
+    ],
+    "tightBounds": []
+  }
+}
