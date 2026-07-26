@@ -51,6 +51,12 @@ namespace PsdLayoutTool2
         public static string Content(PsdPrefabNodeModel node)
         {
             var value = new StringBuilder();
+            // The layer name belongs to content rather than structure: it never
+            // changes parentage or sibling order, so a rename must not force a
+            // hierarchy replan by itself. Including it here is what makes a
+            // rename visible in the reconciliation result and in the incremental
+            // diff instead of being invisible to every fingerprint.
+            Append(value, node.name);
             Append(value, node.assetFingerprint);
             Append(value, node.visible ? "1" : "0");
             Append(value, Float(node.opacity));

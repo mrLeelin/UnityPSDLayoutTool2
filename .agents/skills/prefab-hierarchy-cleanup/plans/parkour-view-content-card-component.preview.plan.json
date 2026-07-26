@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/跑酷 新ui-导出版本.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/跑酷 新ui-导出版本.prefab"
+  },
+  "prefabName": "ParkourView",
+  "wrappers": [],
+  "moves": [],
+  "renames": [],
+  "tightBounds": [
+    { "target": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]" },
+    { "target": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_2]" },
+    { "target": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_3]" },
+    { "target": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]" }
+  ],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentExtractions": [
+    {
+      "id": "content_card",
+      "template": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]",
+      "assetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/Components/ContentCard.prefab",
+      "instances": [
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]",
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_2]",
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_3]"
+      ]
+    }
+  ],
+  "verify": {
+    "nodes": 72,
+    "components": 171,
+    "objectReferences": 111,
+    "missingComponents": 0,
+    "images": 35,
+    "prefixedTextures": 33,
+    "texturePathPrefix": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ParkourView_",
+    "requireAllImageTexturesPrefixed": true,
+    "requireEnglishNames": false,
+    "directChildren": [
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]",
+        "children": ["CardFrame", "DescriptionText", "[Reward]"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_2]",
+        "children": ["CardFrame", "DescriptionText", "[Reward]"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_3]",
+        "children": ["CardFrame", "DescriptionText", "[Reward]"]
+      }
+    ]
+  }
+}

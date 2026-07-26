@@ -20,9 +20,10 @@ This project is explicitly based on the original `UnityPSDLayoutTool` and adds c
 3. 增加中文友好的字体回退策略，降低中文文本乱码/方块字问题。
 4. 增加更稳定的渲染顺序，减少相机角度变化导致的图层遮挡异常。
 5. 增加导出目录可配置能力（资源输出目录可调整）。
-6. 增加 Prefab 输出位置可配置：
-   - 默认：Prefab 输出到生成资源文件夹的同级目录
-   - 可选：Prefab 输出到生成资源文件夹内部
+6. 生成 Prefab 时，输出根目录会固定创建并使用三个子目录：
+   - `Atlas`：按公共设置创建 Sprite Atlas V1（默认，`.spriteatlas`）或 V2（`.spriteatlasv2`），并收集 `Texture` 文件夹
+   - `Texture`：PSD 图层 PNG 贴图目录
+   - `Prefab`：生成的 Prefab 目录
 7. 增加可选“目标 Canvas”对齐：
    - 选择场景中的 Canvas 后，导入 UI 会按该 Canvas 像素坐标对齐
    - 不选择时保持旧行为，自动创建 World Space Canvas
@@ -69,7 +70,8 @@ https://github.com/mrLeelin/UnityPSDLayoutTool2.git
 - `ROOT 默认使用全局锚点`
 - `资源输出位置`
 - `输出文件夹名`
-- `Prefab 输出位置`
+- `Prefab 输出位置`（旧配置字段保留用于兼容，生成结果统一写入 `Prefab` 子目录）
+- `图集版本`（默认 Sprite Atlas V1，可切换 Sprite Atlas V2）
 
 主要操作：
 

@@ -63,16 +63,19 @@ namespace PsdLayoutTool2
         internal PsdLayoutProjectOutputSnapshot(
             PsdImporter.OutputDirectoryMode outputMode,
             string outputFolderName,
-            PsdImporter.PrefabOutputMode prefabMode)
+            PsdImporter.PrefabOutputMode prefabMode,
+            PsdImporter.SpriteAtlasVersion spriteAtlasVersion)
         {
             this.outputMode = outputMode;
             this.outputFolderName = outputFolderName ?? string.Empty;
             this.prefabMode = prefabMode;
+            this.spriteAtlasVersion = spriteAtlasVersion;
         }
 
         internal readonly PsdImporter.OutputDirectoryMode outputMode;
         internal readonly string outputFolderName;
         internal readonly PsdImporter.PrefabOutputMode prefabMode;
+        internal readonly PsdImporter.SpriteAtlasVersion spriteAtlasVersion;
     }
 
     internal readonly struct PsdLayoutProjectSettingsMigrationSnapshot
@@ -164,15 +167,20 @@ namespace PsdLayoutTool2
         [SerializeField]
         private PsdImporter.PrefabOutputMode prefabMode = PsdImporter.PrefabOutputMode.SiblingToOutputFolder;
 
+        [SerializeField]
+        private PsdImporter.SpriteAtlasVersion spriteAtlasVersion = PsdImporter.SpriteAtlasVersion.V1;
+
         internal bool Set(
             PsdImporter.OutputDirectoryMode newOutputMode,
             string newOutputFolderName,
-            PsdImporter.PrefabOutputMode newPrefabMode)
+            PsdImporter.PrefabOutputMode newPrefabMode,
+            PsdImporter.SpriteAtlasVersion newSpriteAtlasVersion)
         {
             string normalizedFolderName = (newOutputFolderName ?? string.Empty).Trim();
             if (outputMode == newOutputMode &&
                 outputFolderName == normalizedFolderName &&
-                prefabMode == newPrefabMode)
+                prefabMode == newPrefabMode &&
+                spriteAtlasVersion == newSpriteAtlasVersion)
             {
                 return false;
             }
@@ -180,12 +188,17 @@ namespace PsdLayoutTool2
             outputMode = newOutputMode;
             outputFolderName = normalizedFolderName;
             prefabMode = newPrefabMode;
+            spriteAtlasVersion = newSpriteAtlasVersion;
             return true;
         }
 
         internal PsdLayoutProjectOutputSnapshot Resolve()
         {
-            return new PsdLayoutProjectOutputSnapshot(outputMode, outputFolderName, prefabMode);
+            return new PsdLayoutProjectOutputSnapshot(
+                outputMode,
+                outputFolderName,
+                prefabMode,
+                spriteAtlasVersion);
         }
     }
 
@@ -290,6 +303,17 @@ namespace PsdLayoutTool2
         [SerializeField]
         private PsdLayoutProjectOutputSettings outputSettings = new PsdLayoutProjectOutputSettings();
 
+        [SerializeField]
+        private PsdHierarchyAiProvider aiProvider = PsdHierarchyAiProvider.Codex;
+
+        [SerializeField]
+        private PsdHierarchyAiConnectionSettings codexAiConnection =
+            new PsdHierarchyAiConnectionSettings();
+
+        [SerializeField]
+        private PsdHierarchyAiConnectionSettings claudeAiConnection =
+            new PsdHierarchyAiConnectionSettings();
+
         internal static PsdLayoutProjectSettings instance => PsdLayoutProjectSettingsAsset.GetOrCreate();
 
         internal PsdLayoutProjectFontSnapshot ResolveFontSettings()
@@ -319,13 +343,118 @@ namespace PsdLayoutTool2
             return outputSettings.Resolve();
         }
 
+        internal PsdHierarchyAiSettingsSnapshot ResolveAiSettings()
+        {
+            EnsureData();
+            return new PsdHierarchyAiSettingsSnapshot(
+                aiProvider,
+                codexAiConnection.Resolve(),
+                claudeAiConnection.Resolve());
+        }
+
+        internal void SetAiProvider(PsdHierarchyAiProvider provider)
+        {
+            EnsureData();
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Codex:
+                case PsdHierarchyAiProvider.Claude:
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(
+                        nameof(provider),
+                        provider,
+                        "Unsupported hierarchy AI provider.");
+            }
+
+            if (aiProvider == provider)
+            {
+                return;
+            }
+
+            aiProvider = provider;
+            SaveAsset();
+        }
+
+        internal void SetAiConnectionMode(
+            PsdHierarchyAiProvider provider,
+            PsdHierarchyAiConnectionMode mode)
+        {
+            EnsureData();
+            if (GetAiConnection(provider).SetMode(mode))
+            {
+                SaveAsset();
+            }
+        }
+
+        internal void SetAiBaseUrl(PsdHierarchyAiProvider provider, string baseUrl)
+        {
+            EnsureData();
+            PsdHierarchyAiConnectionSettings connection = GetAiConnection(provider);
+            string normalizedBaseUrl = (baseUrl ?? string.Empty).Trim();
+            if (!string.IsNullOrEmpty(normalizedBaseUrl) &&
+                !PsdHierarchyAiConnectionSettings.TryValidateBaseUrl(normalizedBaseUrl, out string error))
+            {
+                throw new ArgumentException(error, nameof(baseUrl));
+            }
+
+            if (connection.SetBaseUrl(normalizedBaseUrl))
+            {
+                SaveAsset();
+            }
+        }
+
+        internal bool HasSavedAiKey(
+            PsdHierarchyAiProvider provider,
+            IPsdAiSecretStore secretStore,
+            string projectIdentity)
+        {
+            if (secretStore == null)
+            {
+                throw new ArgumentNullException(nameof(secretStore));
+            }
+
+            ValidateAiProvider(provider);
+            return secretStore.HasSavedCredential(projectIdentity, provider);
+        }
+
+        internal void SaveAiKey(
+            PsdHierarchyAiProvider provider,
+            string key,
+            IPsdAiSecretStore secretStore,
+            string projectIdentity)
+        {
+            if (secretStore == null)
+            {
+                throw new ArgumentNullException(nameof(secretStore));
+            }
+
+            ValidateAiProvider(provider);
+            secretStore.Save(projectIdentity, provider, key);
+        }
+
+        internal void ClearAiKey(
+            PsdHierarchyAiProvider provider,
+            IPsdAiSecretStore secretStore,
+            string projectIdentity)
+        {
+            if (secretStore == null)
+            {
+                throw new ArgumentNullException(nameof(secretStore));
+            }
+
+            ValidateAiProvider(provider);
+            secretStore.Clear(projectIdentity, provider);
+        }
+
         internal void SetOutputSettings(
             PsdImporter.OutputDirectoryMode outputMode,
             string outputFolderName,
-            PsdImporter.PrefabOutputMode prefabMode)
+            PsdImporter.PrefabOutputMode prefabMode,
+            PsdImporter.SpriteAtlasVersion spriteAtlasVersion)
         {
             EnsureData();
-            if (outputSettings.Set(outputMode, outputFolderName, prefabMode))
+            if (outputSettings.Set(outputMode, outputFolderName, prefabMode, spriteAtlasVersion))
             {
                 SaveAsset();
             }
@@ -382,6 +511,37 @@ namespace PsdLayoutTool2
             AssetDatabase.SaveAssets();
         }
 
+        private PsdHierarchyAiConnectionSettings GetAiConnection(PsdHierarchyAiProvider provider)
+        {
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Codex:
+                    return codexAiConnection;
+                case PsdHierarchyAiProvider.Claude:
+                    return claudeAiConnection;
+                default:
+                    throw new ArgumentOutOfRangeException(
+                        nameof(provider),
+                        provider,
+                        "Unsupported hierarchy AI provider.");
+            }
+        }
+
+        private static void ValidateAiProvider(PsdHierarchyAiProvider provider)
+        {
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Codex:
+                case PsdHierarchyAiProvider.Claude:
+                    return;
+                default:
+                    throw new ArgumentOutOfRangeException(
+                        nameof(provider),
+                        provider,
+                        "Unsupported hierarchy AI provider.");
+            }
+        }
+
         private void EnsureData()
         {
             bool changed = false;
@@ -406,6 +566,18 @@ namespace PsdLayoutTool2
             if (outputSettings == null)
             {
                 outputSettings = new PsdLayoutProjectOutputSettings();
+                changed = true;
+            }
+
+            if (codexAiConnection == null)
+            {
+                codexAiConnection = new PsdHierarchyAiConnectionSettings();
+                changed = true;
+            }
+
+            if (claudeAiConnection == null)
+            {
+                claudeAiConnection = new PsdHierarchyAiConnectionSettings();
                 changed = true;
             }
 

@@ -12,6 +12,10 @@ namespace PsdLayoutTool2
     /// </summary>
     internal static class PsdGeneratedPrefabPathResolver
     {
+        internal const string AtlasFolderName = "Atlas";
+        internal const string TextureFolderName = "Texture";
+        internal const string PrefabFolderName = "Prefab";
+
         private static readonly HashSet<char> InvalidGeneratedNameChars = new HashSet<char>(
             Path.GetInvalidFileNameChars().Concat(new[] { '<', '>', ':', '"', '/', '\\', '|', '?', '*' }));
 
@@ -46,19 +50,40 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            if (prefabMode == PsdImporter.PrefabOutputMode.InsideOutputFolder)
+            // Keep the legacy enum parameter for serialized settings compatibility,
+            // but generated Prefabs now always live in the fixed Prefab folder.
+            prefabAssetPath = string.Format(
+                "{0}/{1}/{2}.prefab",
+                outputRootAssetPath,
+                PrefabFolderName,
+                psdName);
+            return true;
+        }
+
+        /// <summary>
+        /// Calculates the three fixed content folders created under one PSD output root.
+        /// </summary>
+        internal static bool TryResolveContentFolders(
+            string psdAssetPath,
+            PsdImporter.OutputDirectoryMode outputMode,
+            string outputFolderName,
+            out string atlasFolderAssetPath,
+            out string textureFolderAssetPath,
+            out string prefabFolderAssetPath)
+        {
+            atlasFolderAssetPath = string.Empty;
+            textureFolderAssetPath = string.Empty;
+            prefabFolderAssetPath = string.Empty;
+
+            string outputRootAssetPath;
+            if (!TryResolveOutputRoot(psdAssetPath, outputMode, outputFolderName, out outputRootAssetPath))
             {
-                prefabAssetPath = string.Format("{0}/{1}.prefab", outputRootAssetPath, psdName);
-                return true;
+                return false;
             }
 
-            string outputParent = NormalizeAssetPath(Path.GetDirectoryName(outputRootAssetPath));
-            if (string.IsNullOrEmpty(outputParent))
-            {
-                outputParent = "Assets";
-            }
-
-            prefabAssetPath = string.Format("{0}/{1}.prefab", outputParent.TrimEnd('/'), psdName);
+            atlasFolderAssetPath = outputRootAssetPath + "/" + AtlasFolderName;
+            textureFolderAssetPath = outputRootAssetPath + "/" + TextureFolderName;
+            prefabFolderAssetPath = outputRootAssetPath + "/" + PrefabFolderName;
             return true;
         }
 

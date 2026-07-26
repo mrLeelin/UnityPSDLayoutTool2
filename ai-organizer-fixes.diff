@@ -1,0 +1,464 @@
+diff --git a/Assets/PSDLayoutTool2/Editor/PsdImporter.cs b/Assets/PSDLayoutTool2/Editor/PsdImporter.cs
+index 4ed728c..3f35418 100644
+--- a/Assets/PSDLayoutTool2/Editor/PsdImporter.cs
++++ b/Assets/PSDLayoutTool2/Editor/PsdImporter.cs
+@@ -1548,24 +1548,46 @@ private static void CloseTargetPrefabStageIfOpen(string prefabRelativePath)
+                     if (reconciliation != null && !reconciliation.pendingMissingStableIds.Contains(pendingEmission))
+                         reconciliation.pendingMissingStableIds.Add(pendingEmission);
+ 
+-                if (reconciliation != null && reconciliation.geometryValidationStableIds.Count > 0)
++                // A plan derived from the persisted Profile must clear the same
++                // membership, protected-boundary and rename-protection rules as
++                // a freshly planned one. Reconcile has already decided staleness
++                // per node, so only the document fingerprint gate is skipped;
++                // without this a stale Profile could rename or reparent a node
++                // that gained project-owned components since it was planned.
++                if (reconciliation != null)
+                 {
+-                    if (reconciliation.pendingMissingStableIds.Count > 0)
+-                        throw new InvalidOperationException(
+-                            "Geometry validation cannot reuse a plan while generated nodes are pending; open focused preview.");
+-                    try
++                    PsdHierarchyRequest reconciledRequest = PsdHierarchyContextBuilder.Build(
++                        sourceModel,
++                        PsdPrefabIncrementalMerge.BuildProfilePrefabMetadata(prefabPath, working),
++                        sourceGuid);
++                    if (reconciliation.geometryValidationStableIds.Count > 0)
+                     {
+-                        PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(
+-                            sourceModel,
+-                            PsdPrefabIncrementalMerge.BuildProfilePrefabMetadata(prefabPath, working),
+-                            sourceGuid);
+-                        PsdHierarchyPlanValidator.ValidateGeometryReuse(plan, request);
+-                        working.AcceptValidatedGeometry(sourceModel, reconciliation.geometryValidationStableIds);
++                        if (reconciliation.pendingMissingStableIds.Count > 0)
++                            throw new InvalidOperationException(
++                                "Geometry validation cannot reuse a plan while generated nodes are pending; open focused preview.");
++                        try
++                        {
++                            PsdHierarchyPlanValidator.ValidateGeometryReuse(plan, reconciledRequest);
++                            working.AcceptValidatedGeometry(sourceModel, reconciliation.geometryValidationStableIds);
++                        }
++                        catch (PsdHierarchyPlanValidationException exception)
++                        {
++                            throw new InvalidOperationException(
++                                "Geometry-only reuse failed deterministic hierarchy validation; open focused preview.", exception);
++                        }
+                     }
+-                    catch (PsdHierarchyPlanValidationException exception)
++                    else
+                     {
+-                        throw new InvalidOperationException(
+-                            "Geometry-only reuse failed deterministic hierarchy validation; open focused preview.", exception);
++                        try
++                        {
++                            PsdHierarchyPlanValidator.ValidateReconciledPlan(plan, reconciledRequest);
++                        }
++                        catch (PsdHierarchyPlanValidationException exception)
++                        {
++                            throw new InvalidOperationException(
++                                "The persisted hierarchy Profile no longer passes deterministic validation " +
++                                "against the current PSD and Prefab; open focused preview.", exception);
++                        }
+                     }
+                 }
+ 
+diff --git a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyFingerprints.cs b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyFingerprints.cs
+index fcf874d..0440a13 100644
+--- a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyFingerprints.cs
++++ b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyFingerprints.cs
+@@ -51,6 +51,12 @@ public static string Asset(IEnumerable<KeyValuePair<short, byte[]>> channels)
+         public static string Content(PsdPrefabNodeModel node)
+         {
+             var value = new StringBuilder();
++            // The layer name belongs to content rather than structure: it never
++            // changes parentage or sibling order, so a rename must not force a
++            // hierarchy replan by itself. Including it here is what makes a
++            // rename visible in the reconciliation result and in the incremental
++            // diff instead of being invisible to every fingerprint.
++            Append(value, node.name);
+             Append(value, node.assetFingerprint);
+             Append(value, node.visible ? "1" : "0");
+             Append(value, Float(node.opacity));
+diff --git a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyPlanValidator.cs b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyPlanValidator.cs
+index a978c7d..bb5564c 100644
+--- a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyPlanValidator.cs
++++ b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyPlanValidator.cs
+@@ -11,9 +11,29 @@ namespace PsdLayoutTool2
+     /// </summary>
+     public static class PsdHierarchyPlanValidator
+     {
++        /// <summary>
++        /// Selects how strictly the fingerprint freshness gate is applied. Every
++        /// structural, ownership, protected-boundary and rename rule runs in all
++        /// three modes; only the staleness question differs.
++        /// </summary>
++        private enum FingerprintGate
++        {
++            /// <summary>Plan must match the request exactly (direct apply).</summary>
++            Strict,
++
++            /// <summary>Geometry-only drift is tolerated after deterministic reuse checks.</summary>
++            AllowGeometryDrift,
++
++            /// <summary>
++            /// Freshness was already decided by a completed Profile reconciliation,
++            /// so the document-level fingerprints are not re-judged here.
++            /// </summary>
++            AlreadyReconciled
++        }
++
+         public static void Validate(PsdHierarchyPlan plan, PsdHierarchyRequest request)
+         {
+-            ValidateInternal(plan, request, false);
++            ValidateInternal(plan, request, FingerprintGate.Strict);
+         }
+ 
+         /// <summary>
+@@ -26,10 +46,28 @@ public static void ValidateGeometryReuse(PsdHierarchyPlan plan, PsdHierarchyRequ
+         {
+             if (EvaluateFingerprints(plan, request) != PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation)
+                 Fail("Geometry reuse requires geometry-only fingerprint drift.");
+-            ValidateInternal(plan, request, true);
++            ValidateInternal(plan, request, FingerprintGate.AllowGeometryDrift);
++        }
++
++        /// <summary>
++        /// Validates a plan derived from an already reconciled hierarchy Profile.
++        /// Reconcile has just decided staleness per node and refuses to advance
++        /// the document fingerprints while anything is pending, so re-running the
++        /// document-level freshness gate here would reject legitimate imports
++        /// (for example a PSD layer that was intentionally deleted). Every
++        /// membership, protected-boundary, descendant closure, sibling-reorder
++        /// and rename-protection rule still applies, which is what stops a stale
++        /// Profile from renaming or reparenting project-owned objects.
++        /// </summary>
++        public static void ValidateReconciledPlan(PsdHierarchyPlan plan, PsdHierarchyRequest request)
++        {
++            ValidateInternal(plan, request, FingerprintGate.AlreadyReconciled);
+         }
+ 
+-        private static void ValidateInternal(PsdHierarchyPlan plan, PsdHierarchyRequest request, bool allowGeometryDrift)
++        private static void ValidateInternal(
++            PsdHierarchyPlan plan,
++            PsdHierarchyRequest request,
++            FingerprintGate gate)
+         {
+             if (plan == null)
+             {
+@@ -59,19 +97,28 @@ private static void ValidateInternal(PsdHierarchyPlan plan, PsdHierarchyRequest
+                 Fail("Plan source PSD GUID does not match the current PSD context.");
+             }
+ 
+-            PsdHierarchyPlanFingerprintStatus fingerprintStatus = EvaluateFingerprints(plan, request);
+-            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresReplan)
++            if (gate != FingerprintGate.AlreadyReconciled)
+             {
+-                Fail("Plan structure fingerprint does not match the current PSD context and requires replanning.");
+-            }
++                PsdHierarchyPlanFingerprintStatus fingerprintStatus = EvaluateFingerprints(plan, request);
++                if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresReplan)
++                {
++                    Fail("Plan structure fingerprint does not match the current PSD context and requires replanning.");
++                }
+ 
+-            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation && !allowGeometryDrift)
+-            {
+-                Fail("Plan geometry fingerprint changed and requires geometry validation before apply.");
++                if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation &&
++                    gate != FingerprintGate.AllowGeometryDrift)
++                {
++                    Fail("Plan geometry fingerprint changed and requires geometry validation before apply.");
++                }
+             }
+ 
+             Dictionary<string, PsdHierarchyRequestNode> nodes = BuildNodeIndex(request.nodes);
+             ApplyPrefabProtectionMetadata(nodes, request.currentPrefabHierarchy);
++            if (gate == FingerprintGate.AlreadyReconciled)
++            {
++                AdoptRetainedPrefabOnlyNodes(nodes, request.currentPrefabHierarchy, plan);
++            }
++
+             List<PsdHierarchyPlanGroup> groups = plan.groups ?? new List<PsdHierarchyPlanGroup>();
+             Dictionary<string, PsdHierarchyPlanGroup> groupsByKey = BuildGroupIndex(groups);
+             ValidateGroupParents(groupsByKey);
+@@ -401,6 +448,57 @@ private static PsdHierarchyRequestNode CloneNode(PsdHierarchyRequestNode source)
+             }
+         }
+ 
++        /// <summary>
++        /// Represents nodes that a reconciled plan still legitimately references
++        /// even though the current PSD no longer contains them. A layer deleted
++        /// from the PSD stays in the Profile and in the Prefab until the user
++        /// confirms cleanup, so the plan keeps its membership while the request
++        /// describes only present PSD layers. Their protection facts are read
++        /// from the live Prefab metadata, never assumed to be safe, and their
++        /// geometry is left unusable so a non-contiguous reorder involving them
++        /// is treated as possibly overlapping rather than provably safe.
++        /// </summary>
++        private static void AdoptRetainedPrefabOnlyNodes(
++            Dictionary<string, PsdHierarchyRequestNode> nodes,
++            IEnumerable<PsdHierarchyPrefabNodeMetadata> prefabHierarchy,
++            PsdHierarchyPlan plan)
++        {
++            var referenced = new HashSet<string>(StringComparer.Ordinal);
++            foreach (PsdHierarchyPlanGroup group in plan.groups ?? new List<PsdHierarchyPlanGroup>())
++            {
++                if (group == null) continue;
++                foreach (string memberId in group.memberStableIds ?? new List<string>())
++                {
++                    if (!string.IsNullOrEmpty(memberId)) referenced.Add(memberId);
++                }
++            }
++
++            foreach (PsdHierarchyPlanRename rename in plan.renames ?? new List<PsdHierarchyPlanRename>())
++            {
++                if (rename != null && !string.IsNullOrEmpty(rename.stableId)) referenced.Add(rename.stableId);
++            }
++
++            foreach (PsdHierarchyPrefabNodeMetadata metadata in
++                     prefabHierarchy ?? Enumerable.Empty<PsdHierarchyPrefabNodeMetadata>())
++            {
++                if (metadata == null || string.IsNullOrEmpty(metadata.stableId)) continue;
++                if (!referenced.Contains(metadata.stableId)) continue;
++                if (nodes.ContainsKey(metadata.stableId)) continue;
++                nodes.Add(metadata.stableId, new PsdHierarchyRequestNode
++                {
++                    stableId = metadata.stableId,
++                    originalName = string.Empty,
++                    kind = string.Empty,
++                    parentStableId = metadata.parentStableId ?? string.Empty,
++                    siblingIndex = metadata.siblingIndex,
++                    rectangle = default(PsdHierarchyRectangle),
++                    hasProjectComponents = metadata.hasProjectComponents,
++                    isProtectedBoundary = metadata.isProtectedBoundary,
++                    protectedBoundaryStableId = metadata.protectedBoundaryStableId ?? string.Empty
++                });
++            }
++        }
++
+         private static Dictionary<string, PsdHierarchyPlanGroup> BuildGroupIndex(
+             IEnumerable<PsdHierarchyPlanGroup> groups)
+         {
+diff --git a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyProfile.cs b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyProfile.cs
+index 6b65d6d..df6ad42 100644
+--- a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyProfile.cs
++++ b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyProfile.cs
+@@ -80,6 +80,15 @@ public sealed class PsdHierarchyProfileRename
+     {
+         public string stableId;
+         public string name;
++
++        // The PSD layer name that was visible when this rename was decided.
++        // Added without changing the schema version: an empty value means the
++        // record predates rename-drift tracking and is deliberately not
++        // checked, rather than being guessed from the current document.
++        // Reconcile compares this against the live layer name so that renaming
++        // a layer in Photoshop invalidates a decision that was made about the
++        // old name instead of silently reapplying it.
++        public string sourceName;
+     }
+ 
+     public sealed class PsdHierarchyReconciliationResult
+@@ -182,18 +191,43 @@ public sealed class PsdHierarchyProfile : ScriptableObject
+                 profile.groups.Add(group);
+             }
+ 
++            // Renames are recorded together with the PSD layer name they were
++            // decided against. The plan that produced them was validated
++            // against this very document, so the current name is the correct
++            // baseline; an explicitly supplied value still wins so that a
++            // reloaded Profile keeps its original baseline instead of silently
++            // re-baselining itself against a renamed layer.
++            Dictionary<string, string> currentNames = (document.nodes ?? new List<PsdPrefabNodeModel>())
++                .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
++                .GroupBy(node => node.stableId, StringComparer.Ordinal)
++                .ToDictionary(group => group.Key, group => group.First().name ?? string.Empty, StringComparer.Ordinal);
+             profile.renames = (sourceRenames ?? Enumerable.Empty<PsdHierarchyProfileRename>())
+                 .Where(rename => rename != null && PsdStableLayerIdUtility.IsPersistable(rename.stableId))
+                 .GroupBy(rename => rename.stableId, StringComparer.Ordinal)
+                 .Select(group => new PsdHierarchyProfileRename
+                 {
+                     stableId = group.Key,
+-                    name = group.First().name ?? string.Empty
++                    name = group.First().name ?? string.Empty,
++                    sourceName = ResolveRenameSourceName(group.First().sourceName, group.Key, currentNames)
+                 })
+                 .ToList();
+             return profile;
+         }
+ 
++        private static string ResolveRenameSourceName(
++            string explicitSourceName,
++            string stableId,
++            Dictionary<string, string> currentNames)
++        {
++            if (!string.IsNullOrEmpty(explicitSourceName))
++            {
++                return explicitSourceName;
++            }
++
++            string current;
++            return currentNames.TryGetValue(stableId, out current) ? current : string.Empty;
++        }
++
+         public bool IsStale(string psdGuid, string fingerprint)
+         {
+             return !CheckSchema().canApply ||
+@@ -314,6 +348,34 @@ public PsdHierarchyReconciliationResult Reconcile(PsdPrefabDocumentModel documen
+                 old.contentFingerprint = content;
+             }
+ 
++            // A rename decision is about a specific PSD layer name. Neither the
++            // structure nor the geometry fingerprint covers the name, so
++            // renaming a layer in Photoshop would otherwise leave the old
++            // decision looking perfectly fresh and reapply a name the user has
++            // just moved away from. Legacy records carry no baseline; the old
++            // name is genuinely unknown, so the current one is adopted once
++            // rather than inventing a drift that cannot be proven.
++            foreach (PsdHierarchyProfileRename rename in renames)
++            {
++                PsdPrefabNodeModel node;
++                if (!current.TryGetValue(rename.stableId, out node))
++                {
++                    continue;
++                }
++
++                string currentName = node.name ?? string.Empty;
++                if (string.IsNullOrEmpty(rename.sourceName))
++                {
++                    rename.sourceName = currentName;
++                    continue;
++                }
++
++                if (!string.Equals(currentName, rename.sourceName, StringComparison.Ordinal))
++                {
++                    AddUnique(result.focusedInvalidatedScopeStableIds, rename.stableId);
++                }
++            }
++
+             List<string> missing = previous.Keys.Where(id => !current.ContainsKey(id)).OrderBy(id => id, StringComparer.Ordinal).ToList();
+             if (confirmMissingCleanup)
+             {
+diff --git a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabIncrementalMerge.cs b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabIncrementalMerge.cs
+index c11c731..bda3cf5 100644
+--- a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabIncrementalMerge.cs
++++ b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabIncrementalMerge.cs
+@@ -307,22 +307,12 @@ public static class PsdPrefabIncrementalMerge
+                 .ToArray();
+             if (positionMatches.Length == 1) return positionMatches[0];
+ 
+-            // Some exported PSD layers are intentionally identical containers.
+-            // When both trees contain the same number of same-name/component
+-            // nodes, their stable traversal ordinal is the remaining identity.
+-            // A count mismatch remains ambiguous and must not be guessed.
+-            RectTransform[] candidateShapeMatches = candidateRoot.GetComponentsInChildren<RectTransform>(true)
+-                .Where(value => value != candidateRoot && IsComponentShapeEqual(candidate, value))
+-                .ToArray();
+-            RectTransform[] existingShapeMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
+-                .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
+-                .Where(value => IsComponentShapeEqual(candidate, value))
+-                .ToArray();
+-            if (candidateShapeMatches.Length > 1 && candidateShapeMatches.Length == existingShapeMatches.Length)
+-            {
+-                int ordinal = Array.IndexOf(candidateShapeMatches, candidate);
+-                if (ordinal >= 0) return existingShapeMatches[ordinal];
+-            }
++            // Traversal ordinal is deliberately NOT used as a last resort here.
++            // Pairing two trees by enumeration order assumes both sides expose
++            // the same nodes, which is false as soon as one existing object owns
++            // a project component and is filtered out: every later index would
++            // then bind an identity to an unrelated object.  Reaching this point
++            // means identity is genuinely unknown, so the merge stays fail-closed.
+             if (visualMatches.Length > 1)
+                 throw new PsdPrefabIncrementalMergeException(
+                     BuildAmbiguousAdoptionMessage(candidate, visualMatches));
+@@ -340,13 +330,17 @@ public static class PsdPrefabIncrementalMerge
+             if (shapeMatches.Length == 1) return shapeMatches[0];
+             throw new PsdPrefabIncrementalMergeException(shapeMatches.Length > 1
+                 ? BuildAmbiguousAdoptionMessage(candidate, shapeMatches)
+-                : "First adoption has no unique full hierarchy match for '" + candidate.name + "'.");
++                : "First adoption has no unique full hierarchy match for '" + candidate.name +
++                  "'. The existing Prefab has no object that can be identified as this PSD layer. " +
++                  "Regenerate the Prefab from this PSD before running AI 整理, or remove the stale object manually.");
+         }
+ 
+         private static string BuildAmbiguousAdoptionMessage(RectTransform candidate, IEnumerable<RectTransform> matches)
+         {
+             return "First adoption is ambiguous: multiple same-name/resource objects match '" + candidate.name +
+-                   "'. candidatePos=" + candidate.anchoredPosition3D + ", candidateSize=" + candidate.sizeDelta +
++                   "'. Identity cannot be guessed from traversal order, so no object was adopted. " +
++                   "Give the duplicated PSD layers distinct names, or regenerate the Prefab from this PSD. " +
++                   "candidatePos=" + candidate.anchoredPosition3D + ", candidateSize=" + candidate.sizeDelta +
+                    ", matches=" + string.Join(";", matches.Select(value => value.anchoredPosition3D + "/" + value.sizeDelta));
+         }
+ 
+diff --git a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabTransactionalSave.cs b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabTransactionalSave.cs
+index 3e94d94..24b861e 100644
+--- a/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabTransactionalSave.cs
++++ b/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdPrefabTransactionalSave.cs
+@@ -321,6 +321,7 @@ private static string CanonicalProfile(PsdHierarchyProfile profile)
+             {
+                 Append(value, rename.stableId);
+                 Append(value, rename.name);
++                Append(value, rename.sourceName);
+             }
+             return value.ToString();
+         }
+diff --git a/Assets/PSDLayoutTool2/Editor/Tests/PsdHierarchyProfileTests.cs b/Assets/PSDLayoutTool2/Editor/Tests/PsdHierarchyProfileTests.cs
+index 04aa30e..b63f6d7 100644
+--- a/Assets/PSDLayoutTool2/Editor/Tests/PsdHierarchyProfileTests.cs
++++ b/Assets/PSDLayoutTool2/Editor/Tests/PsdHierarchyProfileTests.cs
+@@ -11,16 +11,21 @@ public sealed class PsdHierarchyProfileTests
+         [Test]
+         public void NativeLayerRenameAndContentChangeReusePersistedPlan()
+         {
+-            PsdPrefabDocumentModel original = Document(Node("101", "Old", 0, new Rect(0, 0, 10, 10), "pixels-a"));
+-            PsdHierarchyProfile profile = Profile(original, "101");
++            // "102" carries no rename decision, so renaming it in Photoshop is
++            // pure content drift and must not disturb the persisted grouping.
++            PsdPrefabDocumentModel original = Document(
++                Node("101", "Anchor", 0, new Rect(0, 0, 10, 10), "pixels-a"),
++                Node("102", "Old", 1, new Rect(0, 0, 10, 10), "pixels-a"));
++            PsdHierarchyProfile profile = Profile(original, "101", "102");
+             byte[] originalPlan = profile.groups[0].GetPlanBytes();
+ 
+-            PsdHierarchyReconciliationResult result = profile.Reconcile(
+-                Document(Node("101", "Renamed", 0, new Rect(0, 0, 10, 10), "pixels-b")));
++            PsdHierarchyReconciliationResult result = profile.Reconcile(Document(
++                Node("101", "Anchor", 0, new Rect(0, 0, 10, 10), "pixels-a"),
++                Node("102", "Renamed", 1, new Rect(0, 0, 10, 10), "pixels-b")));
+ 
+             Assert.That(result.requiresReplan, Is.False);
+-            Assert.That(result.contentOnlyStableIds, Is.EqualTo(new[] { "101" }));
+-            Assert.That(profile.groups[0].stableLayerIds, Is.EqualTo(new[] { "101" }));
++            Assert.That(result.contentOnlyStableIds, Is.EqualTo(new[] { "102" }));
++            Assert.That(profile.groups[0].stableLayerIds, Is.EqualTo(new[] { "101", "102" }));
+             Assert.That(profile.groups[0].GetPlanBytes(), Is.EqualTo(originalPlan));
+         }
+ 
+@@ -406,16 +411,20 @@ public void TruthFingerprintsUseSha256AndChangeWithTheirRealInputs()
+         [Test]
+         public void ContentOnlyReconcileAdvancesAcceptedSourceFingerprint()
+         {
+-            PsdPrefabDocumentModel original = Document(Node("101", "A", 0, Rect.zero, "pixels-a"));
++            PsdPrefabDocumentModel original = Document(
++                Node("101", "A", 0, Rect.zero, "pixels-a"),
++                Node("102", "B", 1, Rect.zero, "pixels-a"));
+             original.sourceFingerprint = PsdHierarchyFingerprints.Document(original);
+-            PsdHierarchyProfile profile = Profile(original, "101");
+-            PsdPrefabDocumentModel changed = Document(Node("101", "Renamed", 0, Rect.zero, "pixels-b"));
++            PsdHierarchyProfile profile = Profile(original, "101", "102");
++            PsdPrefabDocumentModel changed = Document(
++                Node("101", "A", 0, Rect.zero, "pixels-a"),
++                Node("102", "Renamed", 1, Rect.zero, "pixels-b"));
+             changed.sourceFingerprint = PsdHierarchyFingerprints.Document(changed);
+ 
+             PsdHierarchyReconciliationResult first = profile.Reconcile(changed);
+             PsdHierarchyReconciliationResult repeated = profile.Reconcile(changed);
+ 
+-            Assert.That(first.contentOnlyStableIds, Is.EqualTo(new[] { "101" }));
++            Assert.That(first.contentOnlyStableIds, Is.EqualTo(new[] { "102" }));
+             Assert.That(profile.sourceFingerprint, Is.EqualTo(changed.sourceFingerprint));
+             Assert.That(profile.IsStale("guid-123", changed.sourceFingerprint), Is.False);
+             Assert.That(repeated.contentOnlyStableIds, Is.Empty);

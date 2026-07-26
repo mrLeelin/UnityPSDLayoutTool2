@@ -56,10 +56,12 @@ namespace PsdLayoutTool2
     {
         public string executable;
         public List<string> arguments = new List<string>();
+        public Dictionary<string, string> childEnvironment = new Dictionary<string, string>(StringComparer.Ordinal);
         public string workingDirectory;
         public string standardInput;
         public string OutputPath;
         public bool useShellExecute;
+        public string providerName = string.Empty;
     }
 
     public sealed class PsdHierarchyProcessResult

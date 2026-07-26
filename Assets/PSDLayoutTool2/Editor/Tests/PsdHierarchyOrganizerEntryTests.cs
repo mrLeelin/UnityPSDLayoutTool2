@@ -44,6 +44,16 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void OrganizerUsesOnlyTheNativeWindowEntryPoint()
+        {
+            Assert.That(
+                typeof(PsdHierarchyOrganizerEntry).GetMethod("OpenWeb"),
+                Is.Null,
+                "The hierarchy organizer must not retain a browser workbench entry point.");
+            Assert.That(typeof(PsdHierarchyOrganizerEntry).GetMethod("Open"), Is.Not.Null);
+        }
+
+        [Test]
         public void MissingConfiguredTargetReturnsActionableMessageWithoutSearching()
         {
             var probed = new List<string>();

@@ -11,9 +11,29 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdHierarchyPlanValidator
     {
+        /// <summary>
+        /// Selects how strictly the fingerprint freshness gate is applied. Every
+        /// structural, ownership, protected-boundary and rename rule runs in all
+        /// three modes; only the staleness question differs.
+        /// </summary>
+        private enum FingerprintGate
+        {
+            /// <summary>Plan must match the request exactly (direct apply).</summary>
+            Strict,
+
+            /// <summary>Geometry-only drift is tolerated after deterministic reuse checks.</summary>
+            AllowGeometryDrift,
+
+            /// <summary>
+            /// Freshness was already decided by a completed Profile reconciliation,
+            /// so the document-level fingerprints are not re-judged here.
+            /// </summary>
+            AlreadyReconciled
+        }
+
         public static void Validate(PsdHierarchyPlan plan, PsdHierarchyRequest request)
         {
-            ValidateInternal(plan, request, false);
+            ValidateInternal(plan, request, FingerprintGate.Strict);
         }
 
         /// <summary>
@@ -26,10 +46,28 @@ namespace PsdLayoutTool2
         {
             if (EvaluateFingerprints(plan, request) != PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation)
                 Fail("Geometry reuse requires geometry-only fingerprint drift.");
-            ValidateInternal(plan, request, true);
+            ValidateInternal(plan, request, FingerprintGate.AllowGeometryDrift);
         }
 
-        private static void ValidateInternal(PsdHierarchyPlan plan, PsdHierarchyRequest request, bool allowGeometryDrift)
+        /// <summary>
+        /// Validates a plan derived from an already reconciled hierarchy Profile.
+        /// Reconcile has just decided staleness per node and refuses to advance
+        /// the document fingerprints while anything is pending, so re-running the
+        /// document-level freshness gate here would reject legitimate imports
+        /// (for example a PSD layer that was intentionally deleted). Every
+        /// membership, protected-boundary, descendant closure, sibling-reorder
+        /// and rename-protection rule still applies, which is what stops a stale
+        /// Profile from renaming or reparenting project-owned objects.
+        /// </summary>
+        public static void ValidateReconciledPlan(PsdHierarchyPlan plan, PsdHierarchyRequest request)
+        {
+            ValidateInternal(plan, request, FingerprintGate.AlreadyReconciled);
+        }
+
+        private static void ValidateInternal(
+            PsdHierarchyPlan plan,
+            PsdHierarchyRequest request,
+            FingerprintGate gate)
         {
             if (plan == null)
             {
@@ -59,19 +97,28 @@ namespace PsdLayoutTool2
                 Fail("Plan source PSD GUID does not match the current PSD context.");
             }
 
-            PsdHierarchyPlanFingerprintStatus fingerprintStatus = EvaluateFingerprints(plan, request);
-            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresReplan)
+            if (gate != FingerprintGate.AlreadyReconciled)
             {
-                Fail("Plan structure fingerprint does not match the current PSD context and requires replanning.");
-            }
+                PsdHierarchyPlanFingerprintStatus fingerprintStatus = EvaluateFingerprints(plan, request);
+                if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresReplan)
+                {
+                    Fail("Plan structure fingerprint does not match the current PSD context and requires replanning.");
+                }
 
-            if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation && !allowGeometryDrift)
-            {
-                Fail("Plan geometry fingerprint changed and requires geometry validation before apply.");
+                if (fingerprintStatus == PsdHierarchyPlanFingerprintStatus.RequiresGeometryValidation &&
+                    gate != FingerprintGate.AllowGeometryDrift)
+                {
+                    Fail("Plan geometry fingerprint changed and requires geometry validation before apply.");
+                }
             }
 
             Dictionary<string, PsdHierarchyRequestNode> nodes = BuildNodeIndex(request.nodes);
             ApplyPrefabProtectionMetadata(nodes, request.currentPrefabHierarchy);
+            if (gate == FingerprintGate.AlreadyReconciled)
+            {
+                AdoptRetainedPrefabOnlyNodes(nodes, request.currentPrefabHierarchy, plan);
+            }
+
             List<PsdHierarchyPlanGroup> groups = plan.groups ?? new List<PsdHierarchyPlanGroup>();
             Dictionary<string, PsdHierarchyPlanGroup> groupsByKey = BuildGroupIndex(groups);
             ValidateGroupParents(groupsByKey);
@@ -398,6 +445,57 @@ namespace PsdLayoutTool2
                 pair.Value.hasProjectComponents = metadata.hasProjectComponents;
                 pair.Value.isProtectedBoundary = metadata.isProtectedBoundary;
                 pair.Value.protectedBoundaryStableId = metadata.protectedBoundaryStableId ?? string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Represents nodes that a reconciled plan still legitimately references
+        /// even though the current PSD no longer contains them. A layer deleted
+        /// from the PSD stays in the Profile and in the Prefab until the user
+        /// confirms cleanup, so the plan keeps its membership while the request
+        /// describes only present PSD layers. Their protection facts are read
+        /// from the live Prefab metadata, never assumed to be safe, and their
+        /// geometry is left unusable so a non-contiguous reorder involving them
+        /// is treated as possibly overlapping rather than provably safe.
+        /// </summary>
+        private static void AdoptRetainedPrefabOnlyNodes(
+            Dictionary<string, PsdHierarchyRequestNode> nodes,
+            IEnumerable<PsdHierarchyPrefabNodeMetadata> prefabHierarchy,
+            PsdHierarchyPlan plan)
+        {
+            var referenced = new HashSet<string>(StringComparer.Ordinal);
+            foreach (PsdHierarchyPlanGroup group in plan.groups ?? new List<PsdHierarchyPlanGroup>())
+            {
+                if (group == null) continue;
+                foreach (string memberId in group.memberStableIds ?? new List<string>())
+                {
+                    if (!string.IsNullOrEmpty(memberId)) referenced.Add(memberId);
+                }
+            }
+
+            foreach (PsdHierarchyPlanRename rename in plan.renames ?? new List<PsdHierarchyPlanRename>())
+            {
+                if (rename != null && !string.IsNullOrEmpty(rename.stableId)) referenced.Add(rename.stableId);
+            }
+
+            foreach (PsdHierarchyPrefabNodeMetadata metadata in
+                     prefabHierarchy ?? Enumerable.Empty<PsdHierarchyPrefabNodeMetadata>())
+            {
+                if (metadata == null || string.IsNullOrEmpty(metadata.stableId)) continue;
+                if (!referenced.Contains(metadata.stableId)) continue;
+                if (nodes.ContainsKey(metadata.stableId)) continue;
+                nodes.Add(metadata.stableId, new PsdHierarchyRequestNode
+                {
+                    stableId = metadata.stableId,
+                    originalName = string.Empty,
+                    kind = string.Empty,
+                    parentStableId = metadata.parentStableId ?? string.Empty,
+                    siblingIndex = metadata.siblingIndex,
+                    rectangle = default(PsdHierarchyRectangle),
+                    hasProjectComponents = metadata.hasProjectComponents,
+                    isProtectedBoundary = metadata.isProtectedBoundary,
+                    protectedBoundaryStableId = metadata.protectedBoundaryStableId ?? string.Empty
+                });
             }
         }
 

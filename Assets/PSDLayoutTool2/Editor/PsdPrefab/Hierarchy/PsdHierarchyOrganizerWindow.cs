@@ -8,6 +8,7 @@ namespace PsdLayoutTool2
     using System.Threading.Tasks;
     using UnityEditor;
     using UnityEngine;
+    using UnityEngine.UIElements;
 
     /// <summary>
     /// Pure preview/orchestration state. It clones all plans and pending lists,
@@ -78,17 +79,183 @@ namespace PsdLayoutTool2
         public void SetGroupAccepted(string groupKey, bool accepted)
         {
             if (string.IsNullOrEmpty(groupKey) || !(proposedPlanValue.groups ?? new List<PsdHierarchyPlanGroup>()).Any(group => group != null && group.key == groupKey))
-                throw new ArgumentException("Proposed group does not exist.", "groupKey");
+                throw new ArgumentException("草稿中不存在该分组。", "groupKey");
             if (accepted) acceptedGroupKeysValue.Add(groupKey);
             else acceptedGroupKeysValue.Remove(groupKey);
         }
 
+        public void MoveNodeIntoGroup(string sourceStableId, string targetStableId, string targetGroupKey)
+        {
+            if (!PsdStableLayerIdUtility.IsPersistable(sourceStableId))
+                throw new ArgumentException("拖动的图层没有稳定 ID。", "sourceStableId");
+            PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
+            Dictionary<string, PsdHierarchyRequestNode> nodes = fullRequest.nodes
+                .Where(node => node != null)
+                .ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            PsdHierarchyRequestNode source;
+            if (!nodes.TryGetValue(sourceStableId, out source))
+                throw new ArgumentException("拖动的图层已不存在。", "sourceStableId");
+            EnsureManualMoveNodeIsUnlocked(source);
+
+            List<PsdHierarchyPlanGroup> groups = working.groups ?? new List<PsdHierarchyPlanGroup>();
+            PsdHierarchyPlanGroup target = FindMoveTargetGroup(groups, targetStableId, targetGroupKey);
+            if (target == null)
+            {
+                PsdHierarchyRequestNode targetNode;
+                if (!nodes.TryGetValue(targetStableId ?? string.Empty, out targetNode))
+                    throw new ArgumentException("放置目标已不存在。", "targetStableId");
+                EnsureManualMoveNodeIsUnlocked(targetNode);
+                target = new PsdHierarchyPlanGroup
+                {
+                    key = CreateManualGroupKey(groups, sourceStableId, targetStableId),
+                    parentKey = string.Empty,
+                    displayName = "手动分组",
+                    evidence = "手动拖动操作。",
+                    confidence = 1d,
+                    memberStableIds = new List<string> { targetStableId }
+                };
+                groups.Add(target);
+            }
+            EnsureManualMoveGroupIsUnlocked(target);
+            if (target.memberStableIds.Contains(sourceStableId)) return;
+
+            PsdHierarchyPlanGroup sourceOwner = groups.FirstOrDefault(group =>
+                group != null && (group.memberStableIds ?? new List<string>()).Contains(sourceStableId));
+            if (sourceOwner != null && sourceOwner != target)
+            {
+                EnsureManualMoveGroupIsUnlocked(sourceOwner);
+                sourceOwner.memberStableIds.RemoveAll(id => string.Equals(id, sourceStableId, StringComparison.Ordinal));
+                if (sourceOwner.memberStableIds.Count == 0)
+                {
+                    if (groups.Any(group => group != null && string.Equals(group.parentKey, sourceOwner.key, StringComparison.Ordinal)))
+                        throw new InvalidOperationException("不能清空仍包含子分组的分组。 ");
+                    groups.Remove(sourceOwner);
+                    acceptedGroupKeysValue.Remove(sourceOwner.key);
+                }
+            }
+            target.memberStableIds.Add(sourceStableId);
+            working.groups = groups;
+            CommitManualHierarchyMove(working);
+        }
+
+        public void CreateGroupForNode(string stableId)
+        {
+            if (!PsdStableLayerIdUtility.IsPersistable(stableId))
+                throw new ArgumentException("拖动的图层没有稳定 ID。", "stableId");
+
+            PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
+            Dictionary<string, PsdHierarchyRequestNode> nodes = fullRequest.nodes
+                .Where(node => node != null)
+                .ToDictionary(node => node.stableId, StringComparer.Ordinal);
+            PsdHierarchyRequestNode node;
+            if (!nodes.TryGetValue(stableId, out node))
+                throw new ArgumentException("拖动的图层已不存在。", "stableId");
+            EnsureManualMoveNodeIsUnlocked(node);
+
+            List<PsdHierarchyPlanGroup> groups = working.groups ?? new List<PsdHierarchyPlanGroup>();
+            if (groups.Any(group => group != null && (group.memberStableIds ?? new List<string>()).Contains(stableId)))
+                throw new InvalidOperationException("该图层已属于一个分组。");
+
+            groups.Add(new PsdHierarchyPlanGroup
+            {
+                key = CreateManualGroupKey(groups, stableId),
+                parentKey = string.Empty,
+                displayName = "手动分组",
+                evidence = "手动创建分组。",
+                confidence = 1d,
+                memberStableIds = new List<string> { stableId }
+            });
+            working.groups = groups;
+            CommitManualHierarchyMove(working);
+        }
+
+        public void MoveGroupIntoGroup(string sourceGroupKey, string targetGroupKey)
+        {
+            PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
+            List<PsdHierarchyPlanGroup> groups = working.groups ?? new List<PsdHierarchyPlanGroup>();
+            PsdHierarchyPlanGroup source = groups.FirstOrDefault(group => group != null && group.key == sourceGroupKey);
+            PsdHierarchyPlanGroup target = groups.FirstOrDefault(group => group != null && group.key == targetGroupKey);
+            if (source == null || target == null)
+                throw new ArgumentException("拖动的分组或放置目标已不存在。 ");
+            if (source == target) throw new InvalidOperationException("分组不能拖放到自身。");
+            EnsureManualMoveGroupIsUnlocked(source);
+            EnsureManualMoveGroupIsUnlocked(target);
+            if (IsGroupDescendant(groups, target.key, source.key))
+                throw new InvalidOperationException("分组不能拖放到其子分组中。 ");
+            source.parentKey = target.key;
+            CommitManualHierarchyMove(working);
+        }
+
+        private void EnsureManualMoveNodeIsUnlocked(PsdHierarchyRequestNode node)
+        {
+            if (node == null || node.isProtectedBoundary || node.hasProjectComponents ||
+                !string.IsNullOrEmpty(node.protectedBoundaryStableId))
+                throw new InvalidOperationException("受保护或由项目托管的图层不能手动移动。 ");
+        }
+
+        private void EnsureManualMoveGroupIsUnlocked(PsdHierarchyPlanGroup group)
+        {
+            if (group == null) throw new ArgumentException("该分组已不存在。 ");
+            if (GetAcceptedSubtreeGroupKeys(proposedPlanValue).Contains(group.key))
+                throw new InvalidOperationException("已接受的分组已锁定，不能移动。 ");
+        }
+
+        private static PsdHierarchyPlanGroup FindMoveTargetGroup(
+            IEnumerable<PsdHierarchyPlanGroup> groups,
+            string targetStableId,
+            string targetGroupKey)
+        {
+            if (!string.IsNullOrEmpty(targetGroupKey))
+                return groups.FirstOrDefault(group => group != null && group.key == targetGroupKey);
+            if (string.IsNullOrEmpty(targetStableId)) return null;
+            return groups.FirstOrDefault(group => group != null &&
+                (group.memberStableIds ?? new List<string>()).Contains(targetStableId));
+        }
+
+        private static bool IsGroupDescendant(
+            IEnumerable<PsdHierarchyPlanGroup> groups,
+            string groupKey,
+            string possibleAncestorKey)
+        {
+            var parents = groups.Where(group => group != null)
+                .ToDictionary(group => group.key, group => group.parentKey ?? string.Empty, StringComparer.Ordinal);
+            string current = groupKey;
+            while (!string.IsNullOrEmpty(current))
+            {
+                if (string.Equals(current, possibleAncestorKey, StringComparison.Ordinal)) return true;
+                if (!parents.TryGetValue(current, out current)) return false;
+            }
+            return false;
+        }
+
+        private static string CreateManualGroupKey(
+            IEnumerable<PsdHierarchyPlanGroup> groups,
+            params string[] memberStableIds)
+        {
+            var used = new HashSet<string>(groups.Where(group => group != null)
+                .Select(group => group.key), StringComparer.Ordinal);
+            string baseKey = "manual_" + PsdStableLayerIdUtility.ComputeFnv1a(
+                string.Join("|", memberStableIds.OrderBy(value => value, StringComparer.Ordinal)));
+            string key = baseKey;
+            for (int suffix = 2; !used.Add(key); suffix++) key = baseKey + "_" + suffix;
+            return key;
+        }
+
+        private void CommitManualHierarchyMove(PsdHierarchyPlan working)
+        {
+            AdoptCurrentIdentity(working, fullRequest);
+            PsdHierarchyPlanValidator.Validate(working, fullRequest);
+            proposedPlanValue = ClonePlan(working);
+            validationErrors.Clear();
+            canApply = pendingMissingStableIds.Count == 0;
+        }
+
         public async Task RefineGroupAsync(string groupKey, CancellationToken cancellationToken)
         {
-            if (acceptedGroupKeysValue.Contains(groupKey)) throw new InvalidOperationException("Accepted groups are locked.");
+            if (acceptedGroupKeysValue.Contains(groupKey)) throw new InvalidOperationException("已接受的分组已锁定。 ");
             PsdHierarchyPlanGroup selected = (proposedPlanValue.groups ?? new List<PsdHierarchyPlanGroup>())
                 .FirstOrDefault(group => group != null && group.key == groupKey);
-            if (selected == null) throw new ArgumentException("Proposed group does not exist.", "groupKey");
+            if (selected == null) throw new ArgumentException("草稿中不存在该分组。", "groupKey");
             await RefineSelectionAsync(selected.memberStableIds, string.Empty, cancellationToken);
         }
 
@@ -98,9 +265,9 @@ namespace PsdLayoutTool2
             CancellationToken cancellationToken)
         {
             if (stableIds == null || stableIds.Count == 0)
-                throw new ArgumentException("At least one stable ID is required.", "stableIds");
+                throw new ArgumentException("至少需要一个稳定 ID。", "stableIds");
             if (instruction != null && instruction.Length > 2000)
-                throw new ArgumentException("The refinement instruction exceeds 2000 characters.", "instruction");
+                throw new ArgumentException("精修说明不能超过 2000 个字符。", "instruction");
 
             PsdHierarchyPlan working = ClonePlan(proposedPlanValue);
             HashSet<string> immutableGroupKeys = GetAcceptedSubtreeGroupKeys(working);
@@ -120,7 +287,7 @@ namespace PsdLayoutTool2
             var scope = new HashSet<string>(
                 stableIds.Where(id => modifiableIds.Contains(id) && !locked.Contains(id)),
                 StringComparer.Ordinal);
-            if (scope.Count == 0) throw new InvalidOperationException("The selected group has no unlocked members to refine.");
+            if (scope.Count == 0) throw new InvalidOperationException("所选分组没有可供 AI 精修的未锁定成员。");
 
             isRunning = true;
             canApply = false;
@@ -142,9 +309,10 @@ namespace PsdLayoutTool2
                     existingGroupKeys = working.groups.Where(group => group != null).Select(group => group.key).OrderBy(key => key, StringComparer.Ordinal).ToList()
                 };
                 PsdHierarchyAiRunResult result = await runner.RunAsync(request, cancellationToken);
-                if (result == null || !result.succeeded || result.plan == null) throw new InvalidOperationException(result != null ? result.error : "Hierarchy planner returned no validated plan.");
+                if (result == null || !result.succeeded || result.plan == null) throw new InvalidOperationException(result != null ? result.error : "层级规划器未返回通过校验的方案。");
                 PsdHierarchyFocusedPlanValidator.ValidatePartial(result.plan, request);
                 MergeScope(working, result.plan, request);
+                AdoptCurrentIdentity(working, fullRequest);
                 PsdHierarchyPlanValidator.Validate(working, fullRequest);
                 proposedPlanValue = ClonePlan(working);
                 canApply = pendingMissingStableIds.Count == 0;
@@ -171,7 +339,7 @@ namespace PsdLayoutTool2
                     .Select(node => node.stableId),
                 StringComparer.Ordinal);
             if (scope.Count == 0)
-                throw new InvalidOperationException("There are no unlocked hierarchy nodes to replan.");
+                throw new InvalidOperationException("没有可重新整理的未锁定层级节点。 ");
 
             isRunning = true;
             canApply = false;
@@ -209,9 +377,10 @@ namespace PsdLayoutTool2
                 if (result == null || !result.succeeded || result.plan == null)
                     throw new InvalidOperationException(result != null
                         ? result.error
-                        : "Hierarchy planner returned no validated plan.");
+                        : "层级规划器未返回通过校验的方案。");
                 PsdHierarchyFocusedPlanValidator.ValidatePartial(result.plan, request);
                 MergeScope(working, result.plan, request);
+                AdoptCurrentIdentity(working, fullRequest);
                 PsdHierarchyPlanValidator.Validate(working, fullRequest);
                 proposedPlanValue = ClonePlan(working);
                 canApply = pendingMissingStableIds.Count == 0;
@@ -276,7 +445,7 @@ namespace PsdLayoutTool2
                     {
                         validationErrors.Add(result != null && !string.IsNullOrWhiteSpace(result.error)
                             ? result.error
-                            : "Hierarchy planner returned no validated plan.");
+                            : "层级规划器未返回通过校验的方案。");
                         proposedPlanValue = ClonePlan(working);
                         return;
                     }
@@ -294,7 +463,7 @@ namespace PsdLayoutTool2
                 proposedPlanValue = ClonePlan(working);
                 if (pendingMissingStableIds.Count > 0)
                 {
-                    validationErrors.Add("Missing PSD IDs are pending explicit cleanup confirmation.");
+                    validationErrors.Add("缺失的 PSD ID 正等待明确确认后才会从草稿中清理。");
                     return;
                 }
                 canApply = true;
@@ -328,7 +497,7 @@ namespace PsdLayoutTool2
                 proposedPlanValue = ClonePlan(candidate);
                 if (pendingMissingStableIds.Count > 0)
                 {
-                    validationErrors.Add("Missing PSD IDs are pending explicit cleanup confirmation.");
+                    validationErrors.Add("缺失的 PSD ID 正等待明确确认后才会从草稿中清理。");
                     return;
                 }
                 canApply = true;
@@ -341,13 +510,42 @@ namespace PsdLayoutTool2
             }
         }
 
+        public void ResetDraft()
+        {
+            if (isRunning)
+                throw new InvalidOperationException("层级预览仍在运行。");
+
+            PsdHierarchyPlan working = ClonePlan(baselinePlan);
+            proposedPlanValue = working;
+            acceptedGroupKeysValue.Clear();
+            validationErrors.Clear();
+            pendingMissingStableIds = new List<string>(reconciliation.pendingMissingStableIds);
+            canApply = false;
+
+            if (pendingMissingStableIds.Count > 0)
+            {
+                validationErrors.Add("缺失的 PSD ID 正等待明确确认后才会从草稿中清理。");
+                return;
+            }
+
+            try
+            {
+                PsdHierarchyPlanValidator.Validate(working, fullRequest);
+                canApply = true;
+            }
+            catch (PsdHierarchyPlanValidationException exception)
+            {
+                validationErrors.Add(exception.Message);
+            }
+        }
+
         public bool TryCreateValidatedApplyPlan(out PsdHierarchyPlan plan, out string error)
         {
             plan = ClonePlan(proposedPlanValue);
             error = string.Empty;
             if (!canApply || isRunning)
             {
-                error = "Hierarchy preview is not ready to apply.";
+                error = "层级预览尚未准备好应用。";
                 plan = null;
                 return false;
             }
@@ -685,7 +883,7 @@ namespace PsdLayoutTool2
             while (!string.IsNullOrEmpty(current) && removedParentByKey.ContainsKey(current))
             {
                 if (!visited.Add(current))
-                    throw new PsdHierarchyPlanValidationException("Removed hierarchy contains a parent cycle.");
+                    throw new PsdHierarchyPlanValidationException("移除后的层级包含父级循环。 ");
                 current = removedParentByKey[current] ?? string.Empty;
             }
             return current;
@@ -886,7 +1084,7 @@ namespace PsdLayoutTool2
         public static void ValidatePartial(PsdHierarchyPlan partial, PsdHierarchyAiRunRequest runRequest)
         {
             if (partial == null || runRequest == null || runRequest.request == null)
-                throw new PsdHierarchyPlanValidationException("Focused plan context is missing.");
+                throw new PsdHierarchyPlanValidationException("局部方案缺少上下文。 ");
 
             PsdHierarchyRequest request = runRequest.request;
             if (partial.schemaVersion != PsdHierarchyPlan.CurrentSchemaVersion ||
@@ -896,7 +1094,7 @@ namespace PsdLayoutTool2
                 !string.Equals(partial.structureFingerprint, request.structureFingerprint, StringComparison.Ordinal) ||
                 !string.Equals(partial.geometryFingerprint, request.geometryFingerprint, StringComparison.Ordinal))
             {
-                throw new PsdHierarchyPlanValidationException("Focused plan identity/fingerprints do not match its request.");
+                throw new PsdHierarchyPlanValidationException("局部方案的身份或指纹与请求不匹配。 ");
             }
 
             var allowedIds = new HashSet<string>(runRequest.modifiableStableIds ?? new List<string>(), StringComparer.Ordinal);
@@ -928,14 +1126,14 @@ namespace PsdLayoutTool2
                                    readonlyNeighborGroupKeys.Count + structuralDependentGroupKeys.Count;
             if (categorizedGroupKeys.Count != categorizedCount ||
                 !categorizedGroupKeys.SetEquals(modifiableGroupKeys))
-                throw new PsdHierarchyPlanValidationException("Focused group ownership metadata is inconsistent.");
+                throw new PsdHierarchyPlanValidationException("局部分组的归属元数据不一致。 ");
             if (immutableGroupKeys.Overlaps(modifiableGroupKeys))
                 throw new PsdHierarchyPlanValidationException(
-                    "Focused group scope cannot make immutable groups modifiable.");
+                    "局部分组范围不能将不可变分组设为可修改。 ");
             if (requiredAncestorGroupKeys.Overlaps(modifiableGroupKeys) ||
                 requiredAncestorGroupKeys.Overlaps(immutableGroupKeys))
                 throw new PsdHierarchyPlanValidationException(
-                    "Focused group scope contains inconsistent required ancestors.");
+                    "局部分组范围包含不一致的必需祖先分组。 ");
             foreach (string groupKey in modifiableGroupKeys)
             {
                 PsdHierarchyPlanGroup baselineGroup;
@@ -944,7 +1142,7 @@ namespace PsdLayoutTool2
                         allowedIds.Contains(id) || contextIds.Contains(id)))
                 {
                     throw new PsdHierarchyPlanValidationException(
-                        "Focused request grants invalid group scope '" + groupKey + "'.");
+                        "局部请求授予了无效的分组范围：'" + groupKey + "'。 ");
                 }
             }
             var partialKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -952,21 +1150,21 @@ namespace PsdLayoutTool2
             foreach (PsdHierarchyPlanGroup group in partial.groups ?? new List<PsdHierarchyPlanGroup>())
             {
                 if (group == null || !partialKeys.Add(group.key))
-                    throw new PsdHierarchyPlanValidationException("Focused plan contains a null or duplicate group key.");
+                    throw new PsdHierarchyPlanValidationException("局部方案包含空分组键或重复分组键。 ");
                 if (immutableGroupKeys.Contains(group.key))
                     throw new PsdHierarchyPlanValidationException(
-                        "Focused plan modified immutable group '" + group.key + "'.");
+                        "局部方案修改了不可变分组：'" + group.key + "'。 ");
                 if (immutableGroupKeys.Contains(group.parentKey ?? string.Empty))
                     throw new PsdHierarchyPlanValidationException(
-                        "Focused plan added or modified a child under immutable group '" + group.parentKey + "'.");
+                        "局部方案在不可变分组下新增或修改了子分组：'" + group.parentKey + "'。 ");
                 if (requiredAncestorGroupKeys.Contains(group.key))
                     throw new PsdHierarchyPlanValidationException(
-                        "Focused plan modified required ancestor group '" + group.key + "'.");
+                        "局部方案修改了必需祖先分组：'" + group.key + "'。 ");
                 if (baselineByKey.ContainsKey(group.key) && !modifiableGroupKeys.Contains(group.key))
-                    throw new PsdHierarchyPlanValidationException("Focused plan modified group '" + group.key + "' outside its scope.");
+                    throw new PsdHierarchyPlanValidationException("局部方案修改了范围外的分组：'" + group.key + "'。 ");
                 if (!baselineByKey.ContainsKey(group.key) && existingGroupKeys.Contains(group.key))
                     throw new PsdHierarchyPlanValidationException(
-                        "Focused plan reused an existing group key outside its scope: '" + group.key + "'.");
+                        "局部方案复用了范围外已有的分组键：'" + group.key + "'。 ");
 
                 PsdHierarchyPlanGroup baselineGroup;
                 if (baselineByKey.TryGetValue(group.key, out baselineGroup))
@@ -981,25 +1179,25 @@ namespace PsdLayoutTool2
                         .Where(id => !allowedIds.Contains(id)).ToList();
                     if (protectsReadonlyState && !readonlyBefore.SequenceEqual(readonlyAfter, StringComparer.Ordinal))
                         throw new PsdHierarchyPlanValidationException(
-                            "Focused plan changed readonly membership/order in group '" + group.key + "'.");
+                            "局部方案修改了只读分组的成员或顺序：'" + group.key + "'。 ");
                     if ((hybrid || readonlyNeighbor) &&
                         !string.Equals(group.parentKey ?? string.Empty, baselineGroup.parentKey ?? string.Empty, StringComparison.Ordinal))
                         throw new PsdHierarchyPlanValidationException(
-                            "Focused plan moved readonly group '" + group.key + "'.");
+                            "局部方案移动了只读分组：'" + group.key + "'。 ");
                     if (protectsReadonlyState &&
                         (!string.Equals(group.displayName ?? string.Empty, baselineGroup.displayName ?? string.Empty, StringComparison.Ordinal) ||
                          !string.Equals(group.evidence ?? string.Empty, baselineGroup.evidence ?? string.Empty, StringComparison.Ordinal) ||
                          group.confidence != baselineGroup.confidence))
                         throw new PsdHierarchyPlanValidationException(
-                            "Focused plan changed readonly group metadata for '" + group.key + "'.");
+                            "局部方案修改了只读分组的元数据：'" + group.key + "'。 ");
                     if (structuralDependent &&
                         !baselineMembers.SequenceEqual(group.memberStableIds ?? new List<string>(), StringComparer.Ordinal))
                         throw new PsdHierarchyPlanValidationException(
-                            "Focused plan changed structural dependent members for '" + group.key + "'.");
+                            "局部方案修改了结构依赖分组的成员：'" + group.key + "'。 ");
                     if (readonlyNeighbor &&
                         !(group.memberStableIds ?? new List<string>()).Any(allowedIds.Contains))
                         throw new PsdHierarchyPlanValidationException(
-                            "Focused plan restated readonly group '" + group.key + "' without adding a modifiable ID.");
+                            "局部方案重述了只读分组但未加入可修改 ID：'" + group.key + "'。 ");
                 }
 
                 foreach (string member in group.memberStableIds ?? new List<string>())
@@ -1008,7 +1206,7 @@ namespace PsdLayoutTool2
                         (baselineGroup.memberStableIds ?? new List<string>()).Contains(member);
                     if ((!allowedIds.Contains(member) && !baselineReadonlyMember) || !contextIds.Contains(member))
                         throw new PsdHierarchyPlanValidationException(
-                            "Focused plan touched ID '" + member + "' outside its scope.");
+                            "局部方案修改了范围外的 ID：'" + member + "'。 ");
                 }
             }
 
@@ -1019,7 +1217,7 @@ namespace PsdLayoutTool2
                     !baselineByKey.ContainsKey(group.parentKey))
                 {
                     throw new PsdHierarchyPlanValidationException(
-                        "Focused group '" + group.key + "' references unknown ancestor '" + group.parentKey + "'.");
+                        "局部分组 '" + group.key + "' 引用了未知祖先分组 '" + group.parentKey + "'。 ");
                 }
             }
 
@@ -1027,7 +1225,7 @@ namespace PsdLayoutTool2
             foreach (PsdHierarchyPlanRename rename in partial.renames ?? new List<PsdHierarchyPlanRename>())
             {
                 if (rename == null || !renamed.Add(rename.stableId) || !allowedIds.Contains(rename.stableId) || !contextIds.Contains(rename.stableId))
-                    throw new PsdHierarchyPlanValidationException("Focused rename touched an ID outside its scope.");
+                    throw new PsdHierarchyPlanValidationException("局部重命名修改了范围外的 ID。 ");
             }
 
             bool hasFocusedDecision = (partial.groups ?? new List<PsdHierarchyPlanGroup>())
@@ -1037,7 +1235,7 @@ namespace PsdLayoutTool2
                                           .Any(rename => rename != null && allowedIds.Contains(rename.stableId));
             if (!hasFocusedDecision && scopeOwnedGroupKeys.Count == 0 && hybridGroupKeys.Count == 0)
                 throw new PsdHierarchyPlanValidationException(
-                    "Focused replan returned no decision for its modifiable IDs.");
+                    "局部重新整理没有返回可修改 ID 的处理结果。 ");
         }
     }
 
@@ -1047,9 +1245,9 @@ namespace PsdLayoutTool2
         public static PsdHierarchyPlan Load(string path)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                throw new FileNotFoundException("Hierarchy plan file was not found.", path);
+                throw new FileNotFoundException("未找到层级方案文件。", path);
             if (new FileInfo(path).Length > PsdHierarchyContractLimits.MaxJsonUtf8Bytes)
-                throw new PsdHierarchyPlanFormatException("Hierarchy plan exceeds the UTF-8 byte limit.");
+                throw new PsdHierarchyPlanFormatException("层级方案超过 UTF-8 字节数限制。 ");
             string json;
             using (var reader = new StreamReader(path, System.Text.Encoding.UTF8, true, 4096))
             {
@@ -1073,6 +1271,9 @@ namespace PsdLayoutTool2
     /// </summary>
     public sealed class PsdHierarchyOrganizerWindow : EditorWindow
     {
+        private const string WindowStylePath =
+            "Assets/UnityPSDLayoutTool2/Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyOrganizerWindow.uss";
+
         private PsdHierarchyOrganizerPreviewModel model;
         private CancellationTokenSource cancellation;
         private Vector2 currentTreeScroll;
@@ -1082,15 +1283,34 @@ namespace PsdLayoutTool2
         private string selectedGroupKey = string.Empty;
         private readonly Dictionary<string, bool> currentTreeFoldouts = new Dictionary<string, bool>(StringComparer.Ordinal);
         private readonly Dictionary<string, bool> proposedTreeFoldouts = new Dictionary<string, bool>(StringComparer.Ordinal);
+        private readonly List<DraftTreeItem> draftItems = new List<DraftTreeItem>();
+        private TreeView draftTree;
+        private VisualElement previewContent;
+        private VisualElement inspectorContent;
+        private VisualElement diagnosticsContent;
+        private Label statusLabel;
+        private Label draftSummaryLabel;
+        private Button applyButton;
+        private Button cancelButton;
+        private Toggle missingCleanupToggle;
+        private DraftTreeItem selectedDraftItem;
+        private DraftTreeItem dragSourceItem;
+        private DraftTreeItem dragTargetItem;
+        private Texture2D compositePreviewTexture;
+        private string sourcePsdPath = string.Empty;
 
         public static PsdHierarchyOrganizerWindow Open(
             PsdHierarchyOrganizerPreviewModel previewModel,
-            Action<PsdHierarchyPlan> applyHandler = null)
+            Action<PsdHierarchyPlan> applyHandler = null,
+            string psdAssetPath = null)
         {
-            var window = GetWindow<PsdHierarchyOrganizerWindow>(true, "PSD Hierarchy Preview", true);
+            var window = GetWindow<PsdHierarchyOrganizerWindow>(true, "PSD 层级整理", true);
             window.ReplaceContext(previewModel, applyHandler);
-            window.minSize = new Vector2(720f, 480f);
+            window.sourcePsdPath = psdAssetPath ?? string.Empty;
+            window.ReleaseCompositePreviewTexture();
+            window.minSize = new Vector2(940f, 560f);
             window.Show();
+            window.RefreshUi();
             return window;
         }
 
@@ -1107,11 +1327,10 @@ namespace PsdLayoutTool2
             model = previewModel ?? throw new ArgumentNullException("previewModel");
             applyHandler = handler;
             confirmMissingCleanup = false;
-            currentTreeScroll = Vector2.zero;
-            proposedTreeScroll = Vector2.zero;
-            selectedGroupKey = string.Empty;
-            currentTreeFoldouts.Clear();
-            proposedTreeFoldouts.Clear();
+            selectedDraftItem = null;
+            dragSourceItem = null;
+            dragTargetItem = null;
+            RefreshUi();
         }
 
         internal void ClearContext()
@@ -1120,6 +1339,8 @@ namespace PsdLayoutTool2
             applyHandler = null;
             model = null;
             confirmMissingCleanup = false;
+            selectedDraftItem = null;
+            ReleaseCompositePreviewTexture();
         }
 
         internal void DispatchApply(PsdHierarchyPlan plan)
@@ -1128,70 +1349,652 @@ namespace PsdLayoutTool2
             if (current != null) current(plan);
         }
 
-        private void OnGUI()
+        public void CreateGUI()
         {
-            if (model == null)
+            rootVisualElement.Clear();
+            StyleSheet styleSheet = AssetDatabase.LoadAssetAtPath<StyleSheet>(WindowStylePath);
+            if (styleSheet != null)
             {
-                EditorGUILayout.HelpBox("No PSD hierarchy preview context is loaded.", MessageType.Info);
+                rootVisualElement.styleSheets.Add(styleSheet);
+            }
+
+            rootVisualElement.AddToClassList("psd-organizer-root");
+            rootVisualElement.Add(BuildHeader());
+            rootVisualElement.Add(BuildDiagnostics());
+            rootVisualElement.Add(BuildColumns());
+            rootVisualElement.Add(BuildFooter());
+            RefreshUi();
+        }
+
+        internal void CreateGUIForTests()
+        {
+            CreateGUI();
+        }
+
+        private VisualElement BuildHeader()
+        {
+            var header = new VisualElement();
+            header.AddToClassList("psd-organizer-header");
+            var identity = new VisualElement();
+            identity.AddToClassList("psd-organizer-identity");
+            identity.Add(new Label("PSD 层级整理") { name = "organizer-title" });
+            statusLabel = new Label { name = "organizer-status" };
+            statusLabel.AddToClassList("psd-organizer-status");
+            identity.Add(statusLabel);
+            header.Add(identity);
+
+            var actions = new VisualElement();
+            actions.AddToClassList("psd-organizer-actions");
+            actions.Add(CreateActionButton("重新分析", StartRefresh));
+            actions.Add(CreateActionButton("重新整理", StartFullReplan));
+            actions.Add(CreateActionButton("导入方案", ImportManualPlan));
+            cancelButton = CreateActionButton("取消", CancelRunningRequest);
+            cancelButton.AddToClassList("psd-organizer-button-muted");
+            actions.Add(cancelButton);
+            header.Add(actions);
+            return header;
+        }
+
+        private VisualElement BuildDiagnostics()
+        {
+            diagnosticsContent = new VisualElement { name = "organizer-diagnostics" };
+            diagnosticsContent.AddToClassList("psd-organizer-diagnostics");
+            return diagnosticsContent;
+        }
+
+        private VisualElement BuildColumns()
+        {
+            var columns = new VisualElement();
+            columns.AddToClassList("psd-organizer-columns");
+            columns.Add(BuildDraftPane());
+            columns.Add(BuildPreviewPane());
+            columns.Add(BuildInspectorPane());
+            return columns;
+        }
+
+        private VisualElement BuildDraftPane()
+        {
+            var pane = CreatePane("草稿层级", "draft-hierarchy-pane");
+            draftTree = new TreeView();
+            draftTree.name = "draft-hierarchy";
+            draftTree.selectionType = SelectionType.Single;
+            draftTree.fixedItemHeight = 24;
+            draftTree.makeItem = MakeDraftTreeRow;
+            draftTree.bindItem = BindDraftTreeRow;
+            draftTree.selectionChanged += OnDraftTreeSelectionChanged;
+            pane.Add(draftTree);
+            return pane;
+        }
+
+        private VisualElement BuildPreviewPane()
+        {
+            var pane = CreatePane("PSD 预览与分析", "psd-preview-pane");
+            previewContent = new VisualElement { name = "psd-preview" };
+            previewContent.AddToClassList("psd-organizer-preview");
+            pane.Add(previewContent);
+            return pane;
+        }
+
+        private VisualElement BuildInspectorPane()
+        {
+            var pane = CreatePane("选中项属性", "selection-inspector-pane");
+            inspectorContent = new ScrollView { name = "selection-inspector" };
+            inspectorContent.AddToClassList("psd-organizer-inspector");
+            pane.Add(inspectorContent);
+            return pane;
+        }
+
+        private VisualElement BuildFooter()
+        {
+            var footer = new VisualElement();
+            footer.AddToClassList("psd-organizer-footer");
+            draftSummaryLabel = new Label { name = "draft-summary" };
+            draftSummaryLabel.AddToClassList("psd-organizer-footer-summary");
+            footer.Add(draftSummaryLabel);
+            Button discard = CreateActionButton("放弃草稿", DiscardDraft);
+            discard.AddToClassList("psd-organizer-button-muted");
+            footer.Add(discard);
+            applyButton = CreateActionButton("应用已校验方案", ApplyValidatedPlan);
+            applyButton.AddToClassList("psd-organizer-button-primary");
+            footer.Add(applyButton);
+            return footer;
+        }
+
+        private static VisualElement CreatePane(string title, string name)
+        {
+            var pane = new VisualElement { name = name };
+            pane.AddToClassList("psd-organizer-pane");
+            var heading = new Label(title);
+            heading.AddToClassList("psd-organizer-pane-heading");
+            pane.Add(heading);
+            return pane;
+        }
+
+        private static Button CreateActionButton(string text, Action action)
+        {
+            var button = new Button(action) { text = text };
+            button.AddToClassList("psd-organizer-button");
+            return button;
+        }
+
+        private void RefreshUi()
+        {
+            if (rootVisualElement == null || rootVisualElement.childCount == 0)
+            {
                 return;
             }
 
-            EditorGUILayout.LabelField("Target Prefab (exact configured path)", EditorStyles.boldLabel);
-            EditorGUILayout.SelectableLabel(model.targetPrefabPath, EditorStyles.textField, GUILayout.Height(20f));
-
-            using (new EditorGUILayout.HorizontalScope())
+            RefreshStatus();
+            RefreshDiagnostics();
+            RefreshDraftTree();
+            RefreshPreview();
+            RefreshInspector();
+            if (applyButton != null)
             {
-                GUI.enabled = !model.isRunning;
-                if (GUILayout.Button("Generate / Retry Preview"))
-                {
-                    StartRefresh();
-                }
-                if (GUILayout.Button("Replan All Unlocked"))
-                {
-                    StartFullReplan();
-                }
-                if (GUILayout.Button("Import Manual Plan"))
-                {
-                    ImportManualPlan();
-                }
-                GUI.enabled = model.isRunning;
-                if (GUILayout.Button("Cancel"))
-                {
-                    CancelRunningRequest();
-                }
-                GUI.enabled = true;
+                applyButton.SetEnabled(model != null && model.canApply && !model.isRunning);
             }
+            if (cancelButton != null)
+            {
+                cancelButton.SetEnabled(model != null && model.isRunning);
+            }
+        }
 
+        private void RefreshStatus()
+        {
+            if (statusLabel == null)
+            {
+                return;
+            }
+            if (model == null)
+            {
+                statusLabel.text = "没有预览上下文";
+                return;
+            }
+            statusLabel.text = model.isRunning ? "AI 正在处理" :
+                model.canApply ? "草稿已校验" : "草稿需要处理";
+        }
+
+        private void RefreshDiagnostics()
+        {
+            if (diagnosticsContent == null)
+            {
+                return;
+            }
+            diagnosticsContent.Clear();
+            if (model == null)
+            {
+                diagnosticsContent.Add(new Label("请从已生成 Prefab 的 PSD 打开此工具。"));
+                return;
+            }
+            diagnosticsContent.Add(new Label("目标 Prefab：" + model.targetPrefabPath));
             if (model.pendingMissingStableIds.Count > 0)
             {
-                confirmMissingCleanup = EditorGUILayout.ToggleLeft(
-                    "Confirm cleanup of missing PSD IDs in the proposed plan only",
-                    confirmMissingCleanup);
+                missingCleanupToggle = new Toggle("确认只在草稿中清理缺失的 PSD ID")
+                {
+                    value = confirmMissingCleanup
+                };
+                missingCleanupToggle.RegisterValueChangedCallback(change => confirmMissingCleanup = change.newValue);
+                diagnosticsContent.Add(missingCleanupToggle);
             }
-
             foreach (string error in model.validationErrors)
             {
-                EditorGUILayout.HelpBox(error, MessageType.Error);
+                var item = new Label(error);
+                item.AddToClassList("psd-organizer-diagnostic-error");
+                diagnosticsContent.Add(item);
+            }
+        }
+
+        private void RefreshDraftTree()
+        {
+            if (draftTree == null)
+            {
+                return;
+            }
+            List<DraftTreeItem> previous = selectedDraftItem == null
+                ? new List<DraftTreeItem>()
+                : new List<DraftTreeItem> { selectedDraftItem };
+            draftItems.Clear();
+            draftItems.AddRange(BuildDraftTree(model));
+            List<TreeViewItemData<DraftTreeItem>> roots = BuildTreeViewRoots(draftItems);
+            draftTree.SetRootItems(roots);
+            draftTree.Rebuild();
+            if (previous.Count == 1)
+            {
+                DraftTreeItem retained = draftItems.FirstOrDefault(item => item.id == previous[0].id);
+                if (retained != null)
+                {
+                    draftTree.SetSelectionById(retained.id);
+                }
+            }
+            if (draftSummaryLabel != null)
+            {
+                int groupCount = model == null ? 0 : (model.proposedPlan.groups ?? new List<PsdHierarchyPlanGroup>()).Count;
+                draftSummaryLabel.text = "草稿：" + groupCount + " 个分组，" + draftItems.Count(item => !item.isGroup) + " 个图层";
+            }
+        }
+
+        private static List<TreeViewItemData<DraftTreeItem>> BuildTreeViewRoots(IEnumerable<DraftTreeItem> items)
+        {
+            Dictionary<int, List<DraftTreeItem>> byParent = (items ?? Enumerable.Empty<DraftTreeItem>())
+                .GroupBy(item => item.parentId)
+                .ToDictionary(group => group.Key, group => group.OrderBy(item => item.sortOrder).ToList());
+            return BuildTreeViewChildren(byParent, 0);
+        }
+
+        private static List<TreeViewItemData<DraftTreeItem>> BuildTreeViewChildren(
+            IReadOnlyDictionary<int, List<DraftTreeItem>> byParent,
+            int parentId)
+        {
+            List<DraftTreeItem> children;
+            if (!byParent.TryGetValue(parentId, out children))
+            {
+                return new List<TreeViewItemData<DraftTreeItem>>();
+            }
+            return children.Select(item => new TreeViewItemData<DraftTreeItem>(
+                item.id,
+                item,
+                BuildTreeViewChildren(byParent, item.id))).ToList();
+        }
+
+        private VisualElement MakeDraftTreeRow()
+        {
+            var row = new VisualElement();
+            row.AddToClassList("psd-organizer-tree-row");
+            row.Add(new Label { name = "kind" });
+            var label = new Label { name = "name" };
+            label.AddToClassList("psd-organizer-tree-name");
+            row.Add(label);
+            var detail = new Label { name = "detail" };
+            detail.AddToClassList("psd-organizer-tree-detail");
+            row.Add(detail);
+            row.RegisterCallback<PointerDownEvent>(OnDraftRowPointerDown);
+            row.RegisterCallback<PointerUpEvent>(OnDraftRowPointerUp);
+            return row;
+        }
+
+        private void BindDraftTreeRow(VisualElement row, int index)
+        {
+            DraftTreeItem item = draftTree.GetItemDataForIndex<DraftTreeItem>(index);
+            row.userData = item;
+            row.Q<Label>("kind").text = item.isGroup ? "组" :
+                string.Equals(item.kind, "Text", StringComparison.Ordinal) ? "文" : "层";
+            row.Q<Label>("name").text = item.displayName;
+            row.Q<Label>("detail").text = item.isGroup ? item.memberCount + " 个图层" : GetNodeKindDisplayName(item.kind);
+            row.EnableInClassList("psd-organizer-tree-row-group", item.isGroup);
+        }
+
+        private void OnDraftRowPointerDown(PointerDownEvent evt)
+        {
+            VisualElement row = evt.currentTarget as VisualElement;
+            dragSourceItem = row == null ? null : row.userData as DraftTreeItem;
+        }
+
+        private void OnDraftRowPointerUp(PointerUpEvent evt)
+        {
+            VisualElement row = evt.currentTarget as VisualElement;
+            dragTargetItem = row == null ? null : row.userData as DraftTreeItem;
+            if (dragSourceItem == null || dragTargetItem == null || dragSourceItem.id == dragTargetItem.id)
+            {
+                dragSourceItem = null;
+                return;
+            }
+            TryMoveDraftItem(dragSourceItem, dragTargetItem);
+            dragSourceItem = null;
+            dragTargetItem = null;
+        }
+
+        private void OnDraftTreeSelectionChanged(IEnumerable<object> selection)
+        {
+            selectedDraftItem = selection == null ? null : selection.OfType<DraftTreeItem>().FirstOrDefault();
+            RefreshInspector();
+            RefreshPreview();
+        }
+
+        private void RefreshPreview()
+        {
+            if (previewContent == null)
+            {
+                return;
+            }
+            previewContent.Clear();
+            if (model == null)
+            {
+                previewContent.Add(new Label("未加载 PSD。"));
+                return;
+            }
+            previewContent.Add(new Label("合成预览"));
+            if (compositePreviewTexture == null && !string.IsNullOrEmpty(sourcePsdPath))
+            {
+                TryBuildCompositePreview();
+            }
+            if (compositePreviewTexture != null)
+            {
+                var image = new Image { image = compositePreviewTexture, scaleMode = ScaleMode.ScaleToFit };
+                image.AddToClassList("psd-organizer-composite-image");
+                previewContent.Add(image);
+            }
+            previewContent.Add(new Label(selectedDraftItem == null
+                ? "选择一个分组或图层以查看其规划归属。"
+                : "当前选中：" + selectedDraftItem.displayName));
+            previewContent.Add(new Label("分组数：" + (model.proposedPlan.groups ?? new List<PsdHierarchyPlanGroup>()).Count));
+            previewContent.Add(new Label("候选 Prefab：" + model.prefabCandidates.Count));
+            var note = new Label("预览在 Unity 编辑器本地生成，不会通过 HTTP 发送。");
+            note.AddToClassList("psd-organizer-muted");
+            previewContent.Add(note);
+        }
+
+        private void TryBuildCompositePreview()
+        {
+            try
+            {
+                compositePreviewTexture = Editor.PsdHierarchyCompositePreviewWriter.BuildTexture(sourcePsdPath);
+            }
+            catch (Exception exception)
+            {
+                ShowDraftDiagnostic("无法生成合成预览：" + exception.Message);
+            }
+        }
+
+        private void ReleaseCompositePreviewTexture()
+        {
+            if (compositePreviewTexture != null)
+            {
+                DestroyImmediate(compositePreviewTexture);
+                compositePreviewTexture = null;
+            }
+        }
+
+        private void RefreshInspector()
+        {
+            if (inspectorContent == null)
+            {
+                return;
+            }
+            inspectorContent.Clear();
+            if (model == null || selectedDraftItem == null)
+            {
+                inspectorContent.Add(new Label("请选择一个分组或图层。"));
+                return;
+            }
+            if (!selectedDraftItem.isGroup)
+            {
+                inspectorContent.Add(new Label("图层"));
+                inspectorContent.Add(new Label(selectedDraftItem.displayName));
+                inspectorContent.Add(new Label("稳定 ID：" + selectedDraftItem.stableId));
+                Button group = CreateActionButton("创建单图层分组", () => TryCreateManualGroup(selectedDraftItem.stableId));
+                inspectorContent.Add(group);
+                inspectorContent.Add(CreateActionButton("在 Prefab 中定位图层", () => SelectPrefabMembers(new[] { selectedDraftItem.stableId })));
+                return;
             }
 
-            GUI.enabled = model.canApply && !model.isRunning;
-            Rect applyButton = new Rect(4f, position.height - 26f, Mathf.Max(0f, position.width - 8f), 22f);
-            float panelTop = 70f + (model.pendingMissingStableIds.Count > 0 ? 20f : 0f) + model.validationErrors.Count * 38f;
-            DrawHierarchyPanes(panelTop, applyButton.yMin - 6f);
-            if (GUI.Button(applyButton, "Apply Validated Plan"))
+            PsdHierarchyPlanGroup groupPlan = FindSelectedGroup();
+            if (groupPlan == null)
             {
-                PsdHierarchyPlan freshPlan;
-                string error;
-                if (model.TryCreateValidatedApplyPlan(out freshPlan, out error))
+                inspectorContent.Add(new Label("所选分组已不在当前草稿中。"));
+                return;
+            }
+            inspectorContent.Add(new Label(groupPlan.displayName));
+            inspectorContent.Add(new Label("置信度：" + groupPlan.confidence.ToString("0.00")));
+            inspectorContent.Add(new Label(groupPlan.evidence ?? string.Empty));
+            inspectorContent.Add(new Label("成员"));
+            foreach (string stableId in groupPlan.memberStableIds ?? new List<string>())
+            {
+                inspectorContent.Add(new Label(FindNodeName(stableId)));
+            }
+            bool accepted = model.acceptedGroupKeys.Contains(groupPlan.key);
+            Button accept = CreateActionButton(accepted ? "已接受" : "接受分组", () => AcceptGroup(groupPlan.key));
+            accept.SetEnabled(!accepted && !model.isRunning);
+            inspectorContent.Add(accept);
+            Button refine = CreateActionButton("使用 AI 精修", () => StartGroupRefinement(groupPlan.key));
+            refine.SetEnabled(!accepted && !model.isRunning);
+            inspectorContent.Add(refine);
+            inspectorContent.Add(CreateActionButton("在 Prefab 中定位分组", () => SelectPrefabMembers(groupPlan.memberStableIds)));
+        }
+
+        internal static IReadOnlyList<DraftTreeItem> BuildDraftTreeForTests(
+            PsdHierarchyOrganizerPreviewModel previewModel)
+        {
+            return BuildDraftTree(previewModel);
+        }
+
+        private static List<DraftTreeItem> BuildDraftTree(PsdHierarchyOrganizerPreviewModel previewModel)
+        {
+            var result = new List<DraftTreeItem>();
+            if (previewModel == null)
+            {
+                return result;
+            }
+
+            PsdHierarchyPlan plan = previewModel.proposedPlan;
+            List<PsdHierarchyPlanGroup> groups = (plan.groups ?? new List<PsdHierarchyPlanGroup>())
+                .Where(group => group != null && !string.IsNullOrEmpty(group.key))
+                .OrderBy(group => group.parentKey ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(group => group.displayName ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(group => group.key, StringComparer.Ordinal)
+                .ToList();
+            var groupIds = new Dictionary<string, int>(StringComparer.Ordinal);
+            var usedIds = new HashSet<int>();
+            foreach (PsdHierarchyPlanGroup group in groups)
+            {
+                int id = CreateTreeItemId("group:" + group.key, usedIds);
+                groupIds.Add(group.key, id);
+            }
+
+            var memberOwner = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (PsdHierarchyPlanGroup group in groups)
+            {
+                foreach (string stableId in group.memberStableIds ?? new List<string>())
                 {
-                    DispatchApply(freshPlan);
-                }
-                else if (!string.IsNullOrEmpty(error))
-                {
-                    Debug.LogError(error);
+                    if (!string.IsNullOrEmpty(stableId) && !memberOwner.ContainsKey(stableId))
+                    {
+                        memberOwner.Add(stableId, group.key);
+                    }
                 }
             }
-            GUI.enabled = true;
+
+            int sortOrder = 0;
+            foreach (PsdHierarchyPlanGroup group in groups)
+            {
+                int parentId = 0;
+                if (!string.IsNullOrEmpty(group.parentKey) && !groupIds.TryGetValue(group.parentKey, out parentId))
+                {
+                    parentId = 0;
+                }
+                result.Add(new DraftTreeItem(
+                    groupIds[group.key],
+                    parentId,
+                    true,
+                    group.displayName ?? group.key,
+                    string.Empty,
+                    group.key,
+                    "Group",
+                    (group.memberStableIds ?? new List<string>()).Count,
+                    sortOrder++));
+            }
+
+            foreach (PsdHierarchyRequestNode node in previewModel.currentTreeNodes
+                         .Where(node => node != null && !string.IsNullOrEmpty(node.stableId))
+                         .OrderBy(node => node.siblingIndex)
+                         .ThenBy(node => node.stableId, StringComparer.Ordinal))
+            {
+                string owner;
+                int parentId = 0;
+                if (memberOwner.TryGetValue(node.stableId, out owner))
+                {
+                    groupIds.TryGetValue(owner, out parentId);
+                }
+                result.Add(new DraftTreeItem(
+                    CreateTreeItemId("layer:" + node.stableId, usedIds),
+                    parentId,
+                    false,
+                    node.originalName ?? node.stableId,
+                    node.stableId,
+                    string.Empty,
+                    node.kind ?? "Layer",
+                    0,
+                    sortOrder++));
+            }
+            return result;
+        }
+
+        private static int CreateTreeItemId(string value, ISet<int> usedIds)
+        {
+            unchecked
+            {
+                int hash = 17;
+                foreach (char character in value ?? string.Empty)
+                {
+                    hash = hash * 31 + character;
+                }
+                hash = Math.Abs(hash == int.MinValue ? int.MaxValue : hash);
+                if (hash == 0)
+                {
+                    hash = 1;
+                }
+                while (!usedIds.Add(hash))
+                {
+                    hash = hash == int.MaxValue ? 1 : hash + 1;
+                }
+                return hash;
+            }
+        }
+
+        private void TryMoveDraftItem(DraftTreeItem source, DraftTreeItem target)
+        {
+            if (model == null)
+            {
+                return;
+            }
+            try
+            {
+                if (!source.isGroup && target.isGroup)
+                {
+                    model.MoveNodeIntoGroup(source.stableId, string.Empty, target.groupKey);
+                }
+                else if (source.isGroup && target.isGroup)
+                {
+                    model.MoveGroupIntoGroup(source.groupKey, target.groupKey);
+                }
+                else if (!source.isGroup && !target.isGroup)
+                {
+                    model.MoveNodeIntoGroup(source.stableId, target.stableId, string.Empty);
+                }
+                else
+                {
+                    ShowDraftDiagnostic("分组只能拖放到另一个分组上。");
+                    return;
+                }
+                selectedDraftItem = source;
+                RefreshUi();
+            }
+            catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
+            {
+                ShowDraftDiagnostic(exception.Message);
+            }
+        }
+
+        internal void MoveDraftLayerForTests(string stableId, string targetGroupKey)
+        {
+            if (model == null)
+            {
+                throw new InvalidOperationException("未加载层级预览模型。");
+            }
+            model.MoveNodeIntoGroup(stableId, string.Empty, targetGroupKey);
+            RefreshUi();
+        }
+
+        private void TryCreateManualGroup(string stableId)
+        {
+            try
+            {
+                model.CreateGroupForNode(stableId);
+                RefreshUi();
+            }
+            catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
+            {
+                ShowDraftDiagnostic(exception.Message);
+            }
+        }
+
+        private void AcceptGroup(string groupKey)
+        {
+            try
+            {
+                model.AcceptGroup(groupKey);
+                RefreshUi();
+            }
+            catch (ArgumentException exception)
+            {
+                ShowDraftDiagnostic(exception.Message);
+            }
+        }
+
+        private void DiscardDraft()
+        {
+            if (model == null || model.isRunning)
+            {
+                return;
+            }
+            model.ResetDraft();
+            selectedDraftItem = null;
+            RefreshUi();
+        }
+
+        private void ApplyValidatedPlan()
+        {
+            if (model == null)
+            {
+                return;
+            }
+            PsdHierarchyPlan plan;
+            string error;
+            if (model.TryCreateValidatedApplyPlan(out plan, out error))
+            {
+                DispatchApply(plan);
+                return;
+            }
+            ShowDraftDiagnostic(error);
+        }
+
+        private PsdHierarchyPlanGroup FindSelectedGroup()
+        {
+            if (model == null || selectedDraftItem == null || !selectedDraftItem.isGroup)
+            {
+                return null;
+            }
+            return (model.proposedPlan.groups ?? new List<PsdHierarchyPlanGroup>()).FirstOrDefault(
+                group => group != null && string.Equals(group.key, selectedDraftItem.groupKey, StringComparison.Ordinal));
+        }
+
+        private string FindNodeName(string stableId)
+        {
+            PsdHierarchyRequestNode node = model.currentTreeNodes.FirstOrDefault(
+                value => value != null && string.Equals(value.stableId, stableId, StringComparison.Ordinal));
+            return node == null ? stableId : node.originalName ?? stableId;
+        }
+
+        private static string GetNodeKindDisplayName(string kind)
+        {
+            switch (kind)
+            {
+                case "Text": return "文字";
+                case "Layer": return "图层";
+                case "Image": return "图片";
+                case "Button": return "按钮";
+                case "Group": return "分组";
+                default: return string.IsNullOrEmpty(kind) ? "图层" : kind;
+            }
+        }
+
+        private void ShowDraftDiagnostic(string message)
+        {
+            if (diagnosticsContent == null || string.IsNullOrEmpty(message))
+            {
+                return;
+            }
+            var label = new Label(message);
+            label.AddToClassList("psd-organizer-diagnostic-error");
+            diagnosticsContent.Add(label);
         }
 
         private async void StartRefresh()
@@ -1210,13 +2013,13 @@ namespace PsdLayoutTool2
             {
                 cancellation?.Dispose();
                 cancellation = null;
-                Repaint();
+                RefreshUi();
             }
         }
 
         private void ImportManualPlan()
         {
-            string path = EditorUtility.OpenFilePanel("Import PSD hierarchy plan", string.Empty, "json");
+            string path = EditorUtility.OpenFilePanel("导入 PSD 层级方案", string.Empty, "json");
             if (string.IsNullOrEmpty(path))
             {
                 return;
@@ -1225,10 +2028,12 @@ namespace PsdLayoutTool2
             {
                 PsdHierarchyPlan plan = PsdHierarchyManualPlanLoader.Load(path);
                 model.ImportManualPlan(Newtonsoft.Json.JsonConvert.SerializeObject(plan));
+                selectedDraftItem = null;
+                RefreshUi();
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                ShowDraftDiagnostic(exception.Message);
             }
         }
 
@@ -1286,7 +2091,7 @@ namespace PsdLayoutTool2
             {
                 cancellation?.Dispose();
                 cancellation = null;
-                Repaint();
+                RefreshUi();
             }
         }
 
@@ -1407,7 +2212,7 @@ namespace PsdLayoutTool2
             {
                 cancellation?.Dispose();
                 cancellation = null;
-                Repaint();
+                RefreshUi();
             }
         }
 
@@ -1513,6 +2318,41 @@ namespace PsdLayoutTool2
             if (state.TryGetValue(key, out value)) return value;
             state[key] = true;
             return true;
+        }
+
+        internal sealed class DraftTreeItem
+        {
+            public DraftTreeItem(
+                int id,
+                int parentId,
+                bool isGroup,
+                string displayName,
+                string stableId,
+                string groupKey,
+                string kind,
+                int memberCount,
+                int sortOrder)
+            {
+                this.id = id;
+                this.parentId = parentId;
+                this.isGroup = isGroup;
+                this.displayName = displayName ?? string.Empty;
+                this.stableId = stableId ?? string.Empty;
+                this.groupKey = groupKey ?? string.Empty;
+                this.kind = kind ?? string.Empty;
+                this.memberCount = memberCount;
+                this.sortOrder = sortOrder;
+            }
+
+            public int id { get; private set; }
+            public int parentId { get; private set; }
+            public bool isGroup { get; private set; }
+            public string displayName { get; private set; }
+            public string stableId { get; private set; }
+            public string groupKey { get; private set; }
+            public string kind { get; private set; }
+            public int memberCount { get; private set; }
+            public int sortOrder { get; private set; }
         }
     }
 }

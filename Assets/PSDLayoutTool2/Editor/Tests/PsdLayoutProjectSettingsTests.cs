@@ -25,6 +25,7 @@ namespace PsdLayoutTool2.Tests
         {
             PsdImporter.TextMeshProFont = null;
             PsdImporter.TextMeshProBaseMaterial = null;
+            PsdImporter.AtlasVersion = PsdImporter.SpriteAtlasVersion.V1;
             AssetDatabase.DeleteAsset(TempFolder);
         }
 
@@ -118,6 +119,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(snapshot.outputMode, Is.EqualTo(PsdImporter.OutputDirectoryMode.PsdDirectory));
             Assert.That(snapshot.outputFolderName, Is.Empty);
             Assert.That(snapshot.prefabMode, Is.EqualTo(PsdImporter.PrefabOutputMode.SiblingToOutputFolder));
+            Assert.That(snapshot.spriteAtlasVersion, Is.EqualTo(PsdImporter.SpriteAtlasVersion.V1));
         }
 
         [Test]
@@ -128,12 +130,14 @@ namespace PsdLayoutTool2.Tests
             data.Set(
                 PsdImporter.OutputDirectoryMode.PsdDirectory,
                 "UI_Activity",
-                PsdImporter.PrefabOutputMode.InsideOutputFolder);
+                PsdImporter.PrefabOutputMode.InsideOutputFolder,
+                PsdImporter.SpriteAtlasVersion.V2);
             PsdLayoutProjectOutputSnapshot snapshot = data.Resolve();
 
             Assert.That(snapshot.outputMode, Is.EqualTo(PsdImporter.OutputDirectoryMode.PsdDirectory));
             Assert.That(snapshot.outputFolderName, Is.EqualTo("UI_Activity"));
             Assert.That(snapshot.prefabMode, Is.EqualTo(PsdImporter.PrefabOutputMode.InsideOutputFolder));
+            Assert.That(snapshot.spriteAtlasVersion, Is.EqualTo(PsdImporter.SpriteAtlasVersion.V2));
         }
 
         [Test]
@@ -142,13 +146,15 @@ namespace PsdLayoutTool2.Tests
             var snapshot = new PsdLayoutProjectOutputSnapshot(
                 PsdImporter.OutputDirectoryMode.PsdDirectory,
                 "UI_Global",
-                PsdImporter.PrefabOutputMode.InsideOutputFolder);
+                PsdImporter.PrefabOutputMode.InsideOutputFolder,
+                PsdImporter.SpriteAtlasVersion.V2);
 
             PsdImporter.ApplyProjectOutputSettings(snapshot);
 
             Assert.That(PsdImporter.OutputMode, Is.EqualTo(PsdImporter.OutputDirectoryMode.PsdDirectory));
             Assert.That(PsdImporter.OutputFolderName, Is.EqualTo("UI_Global"));
             Assert.That(PsdImporter.PrefabMode, Is.EqualTo(PsdImporter.PrefabOutputMode.InsideOutputFolder));
+            Assert.That(PsdImporter.AtlasVersion, Is.EqualTo(PsdImporter.SpriteAtlasVersion.V2));
         }
 
         [Test]

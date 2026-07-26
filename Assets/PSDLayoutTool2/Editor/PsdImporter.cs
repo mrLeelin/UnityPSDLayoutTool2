@@ -73,6 +73,12 @@
             InsideOutputFolder
         }
 
+        public enum SpriteAtlasVersion
+        {
+            V1,
+            V2
+        }
+
         /// <summary>
         /// The current file path to use to save layers as .png files
         /// </summary>
@@ -373,6 +379,7 @@
             OutputMode = OutputDirectoryMode.PsdDirectory;
             OutputFolderName = string.Empty;
             PrefabMode = PrefabOutputMode.SiblingToOutputFolder;
+            AtlasVersion = SpriteAtlasVersion.V1;
             ScaleToTargetCanvas = false;
             PreserveAspectWhenScalingToCanvas = true;
             EnableAutoAnchorByName = true;
@@ -457,6 +464,11 @@
         /// Gets or sets where the prefab is generated.
         /// </summary>
         public static PrefabOutputMode PrefabMode { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Sprite Atlas asset format used for generated atlases.
+        /// </summary>
+        public static SpriteAtlasVersion AtlasVersion { get; set; }
 
         /// <summary>
         /// Resolves the exact generated Prefab selected by explicit import settings.
@@ -563,6 +575,45 @@
         }
 
         /// <summary>
+        /// Explicitly resets an orphaned hierarchy Profile after its recorded
+        /// Prefab and the currently configured output Prefab are both missing.
+        /// The Profile is archived first; the subsequent import is a new
+        /// generation and must be organized again before incremental updates.
+        /// </summary>
+        public static bool TryRecoverMissingHierarchyProfileAndGeneratePrefab(
+            string assetPath,
+            out string archivedProfilePath,
+            out string failureReason)
+        {
+            archivedProfilePath = string.Empty;
+            failureReason = string.Empty;
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                failureReason = "PSD asset path is required.";
+                return false;
+            }
+
+            string normalizedAssetPath = assetPath.Replace('\\', '/');
+            string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+            string prefabPath;
+            if (string.IsNullOrEmpty(sourceGuid) ||
+                !PsdGeneratedPrefabPathResolver.TryResolve(
+                    normalizedAssetPath, OutputMode, OutputFolderName, PrefabMode, out prefabPath))
+            {
+                failureReason = "Cannot resolve the PSD identity or configured Prefab output path.";
+                return false;
+            }
+
+            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
+            if (!PsdPrefabTransactionalSave.TryArchiveProfileForMissingTargetRecovery(
+                    profilePath, prefabPath, out archivedProfilePath, out failureReason))
+                return false;
+
+            GeneratePrefab(normalizedAssetPath);
+            return true;
+        }
+
+        /// <summary>
         /// Revalidates and applies a previewed hierarchy plan through one exact
         /// Prefab import. The process-local handoff is always cleared, including
         /// cancellation and exceptions, so it cannot leak into a later import.
@@ -575,7 +626,7 @@
         {
             if (previewedPlan == null) throw new ArgumentNullException("previewedPlan");
             PsdHierarchyOrganizerInput fresh = PsdHierarchyOrganizerEntry.BuildFromAssets(
-                assetPath, expectedPrefabPath, new CodexCliHierarchyRunner());
+                assetPath, expectedPrefabPath, PsdHierarchyAiRunnerFactory.CreateConfigured());
             if (!string.Equals(fresh.sourcePsdGuid, expectedSourceGuid, StringComparison.Ordinal))
                 throw new InvalidOperationException("The selected PSD identity changed after Preview was opened.");
             if (!string.Equals(fresh.targetPrefabPath, expectedPrefabPath.Replace('\\', '/'), StringComparison.Ordinal))
@@ -701,6 +752,20 @@
                 }
 
                 string outputFullPath = Path.Combine(GetFullProjectPath(), outputRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                string atlasRelativePath;
+                string textureRelativePath;
+                string prefabFolderRelativePath;
+                if (!PsdGeneratedPrefabPathResolver.TryResolveContentFolders(
+                        normalizedAssetPath,
+                        OutputMode,
+                        OutputFolderName,
+                        out atlasRelativePath,
+                        out textureRelativePath,
+                        out prefabFolderRelativePath))
+                {
+                    throw new InvalidOperationException("Cannot resolve generated content folders for PSD asset: " + normalizedAssetPath);
+                }
+
                 string prefabRelativePath = string.Empty;
                 if (CreatePrefab &&
                     !PsdGeneratedPrefabPathResolver.TryResolve(
@@ -714,6 +779,9 @@
                 }
                 PsdLogger.Info("Output relative path: " + outputRelativePath);
                 PsdLogger.Info("Output full path: " + outputFullPath);
+                PsdLogger.Info("Atlas folder: " + atlasRelativePath);
+                PsdLogger.Info("Texture folder: " + textureRelativePath);
+                PsdLogger.Info("Prefab folder: " + prefabFolderRelativePath);
                 if (!string.IsNullOrEmpty(prefabRelativePath))
                 {
                     PsdLogger.Info("Prefab path: " + prefabRelativePath);
@@ -861,8 +929,17 @@
 
                 currentPath = outputFullPath;
                 currentOutputRootDirectory = outputFullPath;
-                PsdLogger.Step("Create output directory: " + currentPath);
+                PsdLogger.Step("Create output directories under: " + currentPath);
                 Directory.CreateDirectory(currentPath);
+                Directory.CreateDirectory(Path.Combine(
+                    GetFullProjectPath(), textureRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                if (CreatePrefab)
+                {
+                    Directory.CreateDirectory(Path.Combine(
+                        GetFullProjectPath(), atlasRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                    Directory.CreateDirectory(Path.Combine(
+                        GetFullProjectPath(), prefabFolderRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                }
 
                 if (effectiveSelection != null)
                 {
@@ -961,6 +1038,24 @@
                 EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "刷新 AssetDatabase...", 0.98f);
                 AssetDatabase.ImportAsset(outputRelativePath, ImportAssetOptions.ForceSynchronousImport);
                 FinalizeRedundantTextureCleanup(prefabRelativePath);
+                if (CreatePrefab)
+                {
+                    string atlasExtension = AtlasVersion == SpriteAtlasVersion.V2
+                        ? ".spriteatlasv2"
+                        : ".spriteatlas";
+                    string atlasAssetName = Path.GetFileNameWithoutExtension(prefabRelativePath) + atlasExtension;
+                    string atlasAssetPath = atlasRelativePath.TrimEnd('/') + "/" + atlasAssetName;
+                    PsdLogger.Step("Create or update SpriteAtlas " + AtlasVersion + ": " + atlasAssetPath);
+                    PsdGeneratedSpriteAtlas.CreateOrUpdate(atlasAssetPath, textureRelativePath, AtlasVersion);
+                    if (AtlasVersion == SpriteAtlasVersion.V2 &&
+                        EditorSettings.spritePackerMode != SpritePackerMode.SpriteAtlasV2 &&
+                        EditorSettings.spritePackerMode != SpritePackerMode.SpriteAtlasV2Build)
+                    {
+                        PsdLogger.Warning(
+                            "SpriteAtlas V2 was created, but Sprite Packer Mode is not Sprite Atlas V2. " +
+                            "Enable it in Project Settings > Editor when atlas packing is required.");
+                    }
+                }
             }
             catch (Exception exception)
             {
@@ -1548,24 +1643,46 @@
                     if (reconciliation != null && !reconciliation.pendingMissingStableIds.Contains(pendingEmission))
                         reconciliation.pendingMissingStableIds.Add(pendingEmission);
 
-                if (reconciliation != null && reconciliation.geometryValidationStableIds.Count > 0)
+                // A plan derived from the persisted Profile must clear the same
+                // membership, protected-boundary and rename-protection rules as
+                // a freshly planned one. Reconcile has already decided staleness
+                // per node, so only the document fingerprint gate is skipped;
+                // without this a stale Profile could rename or reparent a node
+                // that gained project-owned components since it was planned.
+                if (reconciliation != null)
                 {
-                    if (reconciliation.pendingMissingStableIds.Count > 0)
-                        throw new InvalidOperationException(
-                            "Geometry validation cannot reuse a plan while generated nodes are pending; open focused preview.");
-                    try
+                    PsdHierarchyRequest reconciledRequest = PsdHierarchyContextBuilder.Build(
+                        sourceModel,
+                        PsdPrefabIncrementalMerge.BuildProfilePrefabMetadata(prefabPath, working),
+                        sourceGuid);
+                    if (reconciliation.geometryValidationStableIds.Count > 0)
                     {
-                        PsdHierarchyRequest request = PsdHierarchyContextBuilder.Build(
-                            sourceModel,
-                            PsdPrefabIncrementalMerge.BuildProfilePrefabMetadata(prefabPath, working),
-                            sourceGuid);
-                        PsdHierarchyPlanValidator.ValidateGeometryReuse(plan, request);
-                        working.AcceptValidatedGeometry(sourceModel, reconciliation.geometryValidationStableIds);
+                        if (reconciliation.pendingMissingStableIds.Count > 0)
+                            throw new InvalidOperationException(
+                                "Geometry validation cannot reuse a plan while generated nodes are pending; open focused preview.");
+                        try
+                        {
+                            PsdHierarchyPlanValidator.ValidateGeometryReuse(plan, reconciledRequest);
+                            working.AcceptValidatedGeometry(sourceModel, reconciliation.geometryValidationStableIds);
+                        }
+                        catch (PsdHierarchyPlanValidationException exception)
+                        {
+                            throw new InvalidOperationException(
+                                "Geometry-only reuse failed deterministic hierarchy validation; open focused preview.", exception);
+                        }
                     }
-                    catch (PsdHierarchyPlanValidationException exception)
+                    else
                     {
-                        throw new InvalidOperationException(
-                            "Geometry-only reuse failed deterministic hierarchy validation; open focused preview.", exception);
+                        try
+                        {
+                            PsdHierarchyPlanValidator.ValidateReconciledPlan(plan, reconciledRequest);
+                        }
+                        catch (PsdHierarchyPlanValidationException exception)
+                        {
+                            throw new InvalidOperationException(
+                                "The persisted hierarchy Profile no longer passes deterministic validation " +
+                                "against the current PSD and Prefab; open focused preview.", exception);
+                        }
                     }
                 }
 
@@ -2591,6 +2708,16 @@
         }
 
         /// <summary>
+        /// Returns true when a layer should be exported without a generated
+        /// runtime object. Prefab generation intentionally excludes this path:
+        /// its generated PNGs would have no Prefab dependency.
+        /// </summary>
+        private static bool ShouldExportTextureOnly(LayerImportInfo info)
+        {
+            return !CreatePrefab && ShouldLayerEmitTextureFile(info);
+        }
+
+        /// <summary>
         /// Returns true if a button child should export a texture file.
         /// </summary>
         /// <param name="childInfo">Button child metadata.</param>
@@ -2668,16 +2795,6 @@
             }
 
             foreach (Layer child in buttonLayer.Children)
-        /// <summary>
-        /// Returns true when a layer should be exported without a generated
-        /// runtime object. Prefab generation intentionally excludes this path:
-        /// its generated PNGs would have no Prefab dependency.
-        /// </summary>
-        private static bool ShouldExportTextureOnly(LayerImportInfo info)
-        {
-            return !CreatePrefab && ShouldLayerEmitTextureFile(info);
-        }
-
             {
                 if (IsButtonChildHandledByRuntime(GetLayerInfo(child)))
                 {
@@ -3780,6 +3897,15 @@
         /// <param name="layer">Layer to export.</param>
         private static void ExportLayerTexturesOnly(Layer layer)
         {
+            // A Prefab import owns only the sprites referenced by the generated
+            // hierarchy, Button states, or animation. This traversal exists for
+            // texture-only and scene-layout imports, so it must not create
+            // orphaned PNGs during Prefab generation.
+            if (CreatePrefab)
+            {
+                return;
+            }
+
             LayerImportInfo info = GetLayerInfo(layer);
             if (info == null)
             {
@@ -3858,15 +3984,6 @@
                     }
 
                     PsdNineSliceNameRule nineSliceRule;
-            // A Prefab import owns only the sprites referenced by the generated
-            // hierarchy, Button states, or animation. This traversal exists for
-            // texture-only and scene-layout imports, so it must not create
-            // orphaned PNGs during Prefab generation.
-            if (CreatePrefab)
-            {
-                return;
-            }
-
                     if (TryGetNineSliceConversionRule(layer, out nineSliceRule))
                     {
                         byte[] originalPng = png;
@@ -4808,6 +4925,7 @@
             OutputMode = settings.outputMode;
             OutputFolderName = settings.outputFolderName;
             PrefabMode = settings.prefabMode;
+            AtlasVersion = settings.spriteAtlasVersion;
         }
 
         private static void LogProjectFontSettingsWarnings(PsdLayoutProjectFontSnapshot settings)

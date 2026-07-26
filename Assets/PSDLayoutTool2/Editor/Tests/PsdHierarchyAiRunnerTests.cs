@@ -47,12 +47,100 @@ namespace PsdLayoutTool2.Tests
             CollectionAssert.Contains(adapter.Invocation.arguments, "--sandbox");
             CollectionAssert.Contains(adapter.Invocation.arguments, "read-only");
             CollectionAssert.Contains(adapter.Invocation.arguments, "--ephemeral");
-            CollectionAssert.Contains(adapter.Invocation.arguments, "--ignore-user-config",
-                "The self-contained hierarchy planner must not start unrelated user MCP/plugin processes.");
+            CollectionAssert.DoesNotContain(adapter.Invocation.arguments, "--ignore-user-config",
+                "The hierarchy planner must retain the user's configured model provider and authentication route.");
+            CollectionAssert.Contains(adapter.Invocation.arguments, "--ignore-rules");
+            CollectionAssert.Contains(adapter.Invocation.arguments, "--disable");
+            CollectionAssert.Contains(adapter.Invocation.arguments, "plugins");
+            CollectionAssert.Contains(adapter.Invocation.arguments, "hooks");
             CollectionAssert.Contains(adapter.Invocation.arguments, "--output-schema");
             CollectionAssert.Contains(adapter.Invocation.arguments, "-o");
             Assert.That(adapter.Invocation.arguments, Has.None.Contains("Assets"));
             Assert.That(adapter.Invocation.useShellExecute, Is.False);
+            Assert.That(adapter.Invocation.childEnvironment, Is.Empty);
+            Assert.That(adapter.Invocation.arguments, Has.None.EqualTo("--model"));
+        }
+
+        [Test]
+        public async Task CustomCodexConnectionUsesChildEnvironmentOnly()
+        {
+            const string endpoint = "https://codex.example.com/v1";
+            const string key = "codex-test-secret";
+            var adapter = new RecordingProcessAdapter(invocation =>
+            {
+                File.WriteAllText(invocation.OutputPath, PlanJson(Request("101")));
+                return Completed(0);
+            });
+            var runner = new CodexCliHierarchyRunner(
+                adapter, () => "codex-test", tempRoot,
+                new PsdHierarchyAiConnectionSnapshot(PsdHierarchyAiConnectionMode.Custom, endpoint),
+                new FakeSecretStore(PsdHierarchyAiProvider.Codex, key), "project-a");
+
+            PsdHierarchyAiRunResult result = await runner.RunAsync(
+                RunRequest(Request("101")), CancellationToken.None);
+
+            Assert.That(result.succeeded, Is.True, result.error);
+            Assert.That(adapter.Invocation.childEnvironment["OPENAI_BASE_URL"], Is.EqualTo(endpoint));
+            Assert.That(adapter.Invocation.childEnvironment["OPENAI_API_KEY"], Is.EqualTo(key));
+            Assert.That(string.Join(" ", adapter.Invocation.arguments), Does.Not.Contain(endpoint));
+            Assert.That(string.Join(" ", adapter.Invocation.arguments), Does.Not.Contain(key));
+            Assert.That(adapter.Invocation.arguments, Has.None.EqualTo("--model"));
+        }
+
+        [Test]
+        public async Task MissingCustomCodexSecretFailsBeforeProcessLaunch()
+        {
+            var adapter = new RecordingProcessAdapter(invocation => Completed(0));
+            var runner = new CodexCliHierarchyRunner(
+                adapter, () => "codex-test", tempRoot,
+                new PsdHierarchyAiConnectionSnapshot(PsdHierarchyAiConnectionMode.Custom, "https://codex.example.com/v1"),
+                new FakeSecretStore(PsdHierarchyAiProvider.Codex, string.Empty), "project-a");
+
+            PsdHierarchyAiRunResult result = await runner.RunAsync(
+                RunRequest(Request("101")), CancellationToken.None);
+
+            Assert.That(result.succeeded, Is.False);
+            Assert.That(result.error, Does.Contain("credential").IgnoreCase);
+            Assert.That(adapter.Invocation, Is.Null);
+        }
+
+        [Test]
+        public async Task CustomCredentialIsRedactedFromThrownExceptionAndDiagnosticIsBounded()
+        {
+            const string key = "codex-thrown-secret";
+            var adapter = new RecordingProcessAdapter(invocation =>
+                throw new InvalidOperationException(
+                    "Authorization: Bearer " + key + " https://example.test/v1?api_key=query-secret " +
+                    new string('x', 6000)));
+            var runner = new CodexCliHierarchyRunner(
+                adapter, () => "codex-test", tempRoot,
+                new PsdHierarchyAiConnectionSnapshot(PsdHierarchyAiConnectionMode.Custom, "https://codex.example.com/v1"),
+                new FakeSecretStore(PsdHierarchyAiProvider.Codex, key), "project-a");
+
+            PsdHierarchyAiRunResult result = await runner.RunAsync(
+                RunRequest(Request("101")), CancellationToken.None);
+
+            Assert.That(result.succeeded, Is.False);
+            Assert.That(result.error, Does.Not.Contain(key));
+            Assert.That(result.error, Does.Not.Contain("query-secret"));
+            Assert.That(result.error.Length, Is.LessThanOrEqualTo(4096));
+        }
+
+        [Test]
+        public async Task UnsafeCustomCodexUrlFailsBeforeProcessLaunch()
+        {
+            var adapter = new RecordingProcessAdapter(invocation => Completed(0));
+            var runner = new CodexCliHierarchyRunner(
+                adapter, () => "codex-test", tempRoot,
+                new PsdHierarchyAiConnectionSnapshot(PsdHierarchyAiConnectionMode.Custom, "http://remote.example.com/v1"),
+                new FakeSecretStore(PsdHierarchyAiProvider.Codex, "unused-secret"), "project-a");
+
+            PsdHierarchyAiRunResult result = await runner.RunAsync(
+                RunRequest(Request("101")), CancellationToken.None);
+
+            Assert.That(result.succeeded, Is.False);
+            Assert.That(result.error, Does.Contain("HTTPS"));
+            Assert.That(adapter.Invocation, Is.Null);
         }
 
         [Test]
@@ -135,6 +223,26 @@ namespace PsdLayoutTool2.Tests
             Assert.That(result.succeeded, Is.False);
             Assert.That(result.error, Does.Contain("authentication failed"));
             Assert.That(result.offlinePackageAvailable, Is.True);
+        }
+
+        [Test]
+        public void ConfiguredMcpServerNamesAreDiscoveredForPerServerDisableOverrides()
+        {
+            Directory.CreateDirectory(tempRoot);
+            string configPath = Path.Combine(tempRoot, "config.toml");
+            File.WriteAllText(configPath,
+                "model_provider = \"custom\"\n" +
+                "[mcp_servers.figma]\nurl = \"https://example.invalid\"\n" +
+                "[mcp_servers.\"node-repl\"]\ncommand = \"node\"\n" +
+                "[model_providers.custom]\nname = \"Custom\"\n");
+            System.Reflection.MethodInfo resolver = typeof(CodexCliHierarchyRunner).GetMethod(
+                "ResolveConfiguredMcpServerNames",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            Assert.That(resolver, Is.Not.Null);
+
+            var names = (IEnumerable<string>)resolver.Invoke(null, new object[] { configPath });
+
+            CollectionAssert.AreEquivalent(new[] { "figma", "node-repl" }, names);
         }
 
         [Test]
@@ -419,6 +527,26 @@ namespace PsdLayoutTool2.Tests
             CollectionAssert.AreEquivalent(new[] { "101", "103" }, fake.Requests.Single().modifiableStableIds);
             Assert.That(fake.Requests.Single().modifiableStableIds, Does.Not.Contain("102"));
             Assert.That(fake.Requests.Single().instruction, Is.EqualTo("这两个任务属于同一个列表项"));
+        }
+
+        [Test]
+        public async Task RefineSelectionRepairsLegacyBaselineIdentityBeforeValidation()
+        {
+            PsdHierarchyRequest request = Request("101");
+            PsdHierarchyPlan baseline = Baseline(request);
+            baseline.contentFingerprint = string.Empty;
+            var fake = new FakeRunner
+            {
+                ResultFactory = run => Success(PlanFor(run.request, "101"))
+            };
+            var model = new PsdHierarchyOrganizerPreviewModel(
+                "Assets/UI/Target.prefab", request, baseline,
+                new PsdHierarchyReconciliationResult(), fake);
+
+            await model.RefineSelectionAsync(new[] { "101" }, string.Empty, CancellationToken.None);
+
+            Assert.That(model.canApply, Is.True, string.Join(";", model.validationErrors));
+            Assert.That(model.proposedPlan.contentFingerprint, Is.EqualTo(request.contentFingerprint));
         }
 
         [Test]
@@ -1151,6 +1279,26 @@ namespace PsdLayoutTool2.Tests
             Assert.That(startInfo.StandardInputEncoding.CodePage, Is.EqualTo(Encoding.UTF8.CodePage));
         }
 
+        [Test]
+        public void ProcessAdapterCopiesInvocationEnvironmentToChildStartInfo()
+        {
+            var invocation = new PsdHierarchyProcessInvocation
+            {
+                executable = "codex",
+                workingDirectory = tempRoot,
+                childEnvironment = new Dictionary<string, string>
+                {
+                    { "OPENAI_BASE_URL", "https://codex.example.com/v1" },
+                    { "OPENAI_API_KEY", "child-only" }
+                }
+            };
+
+            ProcessStartInfo startInfo = SystemHierarchyProcessAdapter.CreateStartInfo(invocation);
+
+            Assert.That(startInfo.EnvironmentVariables["OPENAI_BASE_URL"], Is.EqualTo("https://codex.example.com/v1"));
+            Assert.That(startInfo.EnvironmentVariables["OPENAI_API_KEY"], Is.EqualTo("child-only"));
+        }
+
         private CodexCliHierarchyRunner Runner(IHierarchyProcessAdapter adapter)
         {
             return new CodexCliHierarchyRunner(adapter, () => "codex-test", tempRoot);
@@ -1348,6 +1496,33 @@ namespace PsdLayoutTool2.Tests
                 Invocation = invocation;
                 return run(invocation, timeout, cancellationToken);
             }
+        }
+
+        private sealed class FakeSecretStore : IPsdAiSecretStore
+        {
+            private readonly PsdHierarchyAiProvider provider;
+            private readonly string key;
+
+            internal FakeSecretStore(PsdHierarchyAiProvider provider, string key)
+            {
+                this.provider = provider;
+                this.key = key;
+            }
+
+            public bool HasSavedCredential(string projectIdentity, PsdHierarchyAiProvider requestedProvider)
+            {
+                return requestedProvider == provider && !string.IsNullOrEmpty(key);
+            }
+
+            public bool TryRead(string projectIdentity, PsdHierarchyAiProvider requestedProvider, out string value)
+            {
+                value = requestedProvider == provider ? key : string.Empty;
+                return !string.IsNullOrEmpty(value);
+            }
+
+            public void Save(string projectIdentity, PsdHierarchyAiProvider requestedProvider, string value) { }
+
+            public void Clear(string projectIdentity, PsdHierarchyAiProvider requestedProvider) { }
         }
     }
 }

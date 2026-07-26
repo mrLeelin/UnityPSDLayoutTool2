@@ -307,22 +307,12 @@ namespace PsdLayoutTool2
                 .ToArray();
             if (positionMatches.Length == 1) return positionMatches[0];
 
-            // Some exported PSD layers are intentionally identical containers.
-            // When both trees contain the same number of same-name/component
-            // nodes, their stable traversal ordinal is the remaining identity.
-            // A count mismatch remains ambiguous and must not be guessed.
-            RectTransform[] candidateShapeMatches = candidateRoot.GetComponentsInChildren<RectTransform>(true)
-                .Where(value => value != candidateRoot && IsComponentShapeEqual(candidate, value))
-                .ToArray();
-            RectTransform[] existingShapeMatches = existingRoot.GetComponentsInChildren<RectTransform>(true)
-                .Where(value => value != existingRoot && !HasUnexpectedProjectComponents(value, candidate))
-                .Where(value => IsComponentShapeEqual(candidate, value))
-                .ToArray();
-            if (candidateShapeMatches.Length > 1 && candidateShapeMatches.Length == existingShapeMatches.Length)
-            {
-                int ordinal = Array.IndexOf(candidateShapeMatches, candidate);
-                if (ordinal >= 0) return existingShapeMatches[ordinal];
-            }
+            // Traversal ordinal is deliberately NOT used as a last resort here.
+            // Pairing two trees by enumeration order assumes both sides expose
+            // the same nodes, which is false as soon as one existing object owns
+            // a project component and is filtered out: every later index would
+            // then bind an identity to an unrelated object.  Reaching this point
+            // means identity is genuinely unknown, so the merge stays fail-closed.
             if (visualMatches.Length > 1)
                 throw new PsdPrefabIncrementalMergeException(
                     BuildAmbiguousAdoptionMessage(candidate, visualMatches));
@@ -340,13 +330,17 @@ namespace PsdLayoutTool2
             if (shapeMatches.Length == 1) return shapeMatches[0];
             throw new PsdPrefabIncrementalMergeException(shapeMatches.Length > 1
                 ? BuildAmbiguousAdoptionMessage(candidate, shapeMatches)
-                : "First adoption has no unique full hierarchy match for '" + candidate.name + "'.");
+                : "First adoption has no unique full hierarchy match for '" + candidate.name +
+                  "'. The existing Prefab has no object that can be identified as this PSD layer. " +
+                  "Regenerate the Prefab from this PSD before running AI 整理, or remove the stale object manually.");
         }
 
         private static string BuildAmbiguousAdoptionMessage(RectTransform candidate, IEnumerable<RectTransform> matches)
         {
             return "First adoption is ambiguous: multiple same-name/resource objects match '" + candidate.name +
-                   "'. candidatePos=" + candidate.anchoredPosition3D + ", candidateSize=" + candidate.sizeDelta +
+                   "'. Identity cannot be guessed from traversal order, so no object was adopted. " +
+                   "Give the duplicated PSD layers distinct names, or regenerate the Prefab from this PSD. " +
+                   "candidatePos=" + candidate.anchoredPosition3D + ", candidateSize=" + candidate.sizeDelta +
                    ", matches=" + string.Join(";", matches.Select(value => value.anchoredPosition3D + "/" + value.sizeDelta));
         }
 

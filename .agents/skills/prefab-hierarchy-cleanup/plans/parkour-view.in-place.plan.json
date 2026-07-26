@@ -1,0 +1,611 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/跑酷 新ui-导出版本.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/跑酷 新ui-导出版本.prefab"
+  },
+  "prefabName": "ParkourView",
+  "wrappers": [
+    {
+      "id": "mission_background",
+      "parent": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1",
+      "name": "[MissionBackground]",
+      "siblingIndex": 0
+    },
+    {
+      "id": "content_cards",
+      "parent": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1",
+      "name": "[ContentCards]",
+      "siblingIndex": 1
+    },
+    {
+      "id": "content_card_1",
+      "parent": "@content_cards",
+      "name": "[ContentCard_1]",
+      "siblingIndex": 0
+    },
+    {
+      "id": "content_card_2",
+      "parent": "@content_cards",
+      "name": "[ContentCard_2]",
+      "siblingIndex": 1
+    },
+    {
+      "id": "content_card_3",
+      "parent": "@content_cards",
+      "name": "[ContentCard_3]",
+      "siblingIndex": 2
+    },
+    {
+      "id": "content_card_2_reward",
+      "parent": "@content_card_2",
+      "name": "[Reward]",
+      "siblingIndex": 2
+    },
+    {
+      "id": "action_buttons",
+      "parent": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1",
+      "name": "[ActionButtons]",
+      "siblingIndex": 2
+    },
+    {
+      "id": "bottom_section",
+      "parent": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban",
+      "name": "[BottomSection]",
+      "siblingIndex": 2
+    },
+    {
+      "id": "mini_map",
+      "parent": "@bottom_section",
+      "name": "[MiniMap]",
+      "siblingIndex": 0
+    },
+    {
+      "id": "avatars",
+      "parent": "@mini_map",
+      "name": "[Avatars]",
+      "siblingIndex": 1
+    },
+    {
+      "id": "map_item_1",
+      "parent": "@avatars",
+      "name": "[Item_1]",
+      "siblingIndex": 1
+    },
+    {
+      "id": "map_item_2",
+      "parent": "@avatars",
+      "name": "[Item_2]",
+      "siblingIndex": 2
+    },
+    {
+      "id": "map_item_3",
+      "parent": "@avatars",
+      "name": "[Item_3]",
+      "siblingIndex": 3
+    },
+    {
+      "id": "map_item_4",
+      "parent": "@avatars",
+      "name": "[Item_4]",
+      "siblingIndex": 4
+    },
+    {
+      "id": "primary_action",
+      "parent": "@bottom_section",
+      "name": "[PrimaryAction]",
+      "siblingIndex": 1
+    },
+    {
+      "id": "progress_section",
+      "parent": "@bottom_section",
+      "name": "[ProgressSection]",
+      "siblingIndex": 2
+    },
+    {
+      "id": "navigation",
+      "parent": "@bottom_section",
+      "name": "[Navigation]",
+      "siblingIndex": 3
+    }
+  ],
+  "moves": [
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/ui_diban_1",
+      "destination": "@mission_background",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/ui_diban_2",
+      "destination": "@mission_background",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/图层 93",
+      "destination": "@mission_background",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/dibankuan_3",
+      "destination": "@content_card_1",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/I discovered some ancient ruins, feelinglike  I'm getting close 拷贝 7",
+      "destination": "@content_card_1",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban_2",
+      "destination": "@content_card_1",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/dibankuan_2",
+      "destination": "@content_card_2",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/I discovered some ancient ruins, feelinglike  I'm getting close",
+      "destination": "@content_card_2",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/+1000",
+      "destination": "@content_card_2_reward",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbi",
+      "destination": "@content_card_2_reward",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/dibankuan_1",
+      "destination": "@content_card_3",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/I discovered some ancient ruins, feelinglike  I'm getting close 拷贝 6",
+      "destination": "@content_card_3",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban_3",
+      "destination": "@content_card_3",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/ui_anniu_1",
+      "destination": "@action_buttons",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1/ui_anniu_2",
+      "destination": "@action_buttons",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_diban ditu",
+      "destination": "@mini_map",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/diban_2",
+      "destination": "@map_item_1",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_mianb_ditu_1",
+      "destination": "@map_item_1",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui _tubiao _1",
+      "destination": "@map_item_1",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/diban_1",
+      "destination": "@map_item_2",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_mianb_ditu_1_3",
+      "destination": "@map_item_2",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_tubiao_2",
+      "destination": "@map_item_2",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/diban_3",
+      "destination": "@map_item_3",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_mianb_ditu_1_2",
+      "destination": "@map_item_3",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_tubiao_3",
+      "destination": "@map_item_3",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/diban_4",
+      "destination": "@map_item_4",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_mianb_ditu_1_4",
+      "destination": "@map_item_4",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_tubiao_4",
+      "destination": "@map_item_4",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_zhedang",
+      "destination": "@avatars",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_mianb_ditu_5_2",
+      "destination": "@avatars",
+      "siblingIndex": 5
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_mianb_ditu_5",
+      "destination": "@avatars",
+      "siblingIndex": 6
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_anniu  拷贝",
+      "destination": "@primary_action",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_anniu  拷贝 2",
+      "destination": "@primary_action",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_anniu  拷贝 3",
+      "destination": "@primary_action",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_anniu_yingying",
+      "destination": "@primary_action",
+      "siblingIndex": 3
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ui_anniu",
+      "destination": "@primary_action",
+      "siblingIndex": 4
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/GO",
+      "destination": "@primary_action",
+      "siblingIndex": 5
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/jindutiao_1",
+      "destination": "@progress_section",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/jindutiao_2",
+      "destination": "@progress_section",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/110_130",
+      "destination": "@progress_section",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/57_09_59",
+      "destination": "@navigation",
+      "siblingIndex": 0
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/friend",
+      "destination": "@navigation",
+      "siblingIndex": 1
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/task",
+      "destination": "@navigation",
+      "siblingIndex": 2
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/build",
+      "destination": "@navigation",
+      "siblingIndex": 3
+    },
+    {
+      "source": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/card",
+      "destination": "@navigation",
+      "siblingIndex": 4
+    }
+  ],
+  "renames": [
+    {
+      "target": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban",
+      "name": "[Screen]"
+    },
+    {
+      "target": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/ditu",
+      "name": "[Background]"
+    },
+    {
+      "target": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban/组 1",
+      "name": "[MissionSection]"
+    },
+    {
+      "target": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban_2",
+      "name": "[Reward]"
+    },
+    {
+      "target": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/ui_jinbidiban_3",
+      "name": "[Reward]"
+    }
+  ],
+  "textureRenames": [
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/diban_1_416.png",
+      "toName": "ParkourView_MapSectorBackground_03",
+      "expectedGuid": "2ded95828f5b1b24eb41dd096b2f80a5"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/diban_2_417.png",
+      "toName": "ParkourView_MapSectorBackground_04",
+      "expectedGuid": "288af0ac9f854b04eb86e1738dcb76f0"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/diban_3_414.png",
+      "toName": "ParkourView_MapSectorBackground_02",
+      "expectedGuid": "d591cd61b3670af41bd0d4b52ffa8f84"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/diban_4_413.png",
+      "toName": "ParkourView_MapSectorBackground_01",
+      "expectedGuid": "d1cd066d20275224aaa3783ed97c7929"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/dibankuan_1_297.png",
+      "toName": "ParkourView_MissionCardFrame_03",
+      "expectedGuid": "e0bc0d39e40ccb54595022ea1b109bf5"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/dibankuan_2_473.png",
+      "toName": "ParkourView_MissionCardFrame_02",
+      "expectedGuid": "002d5b1e81cde7440ac2bb5ad9ad0abb"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/dibankuan_3_474.png",
+      "toName": "ParkourView_MissionCardFrame_01",
+      "expectedGuid": "0453242f5878abd49aac64e1b01e2ce9"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ditu_132.png",
+      "toName": "ParkourView_WorldMapBackground",
+      "expectedGuid": "65cb93af3a3589c4c99678e0cbc60963"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/jindutiao_1_346.png",
+      "toName": "ParkourView_ProgressTrack",
+      "expectedGuid": "048752f16cea4224a882a70e262ae7b7"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/jindutiao_2_312.png",
+      "toName": "ParkourView_ProgressFill",
+      "expectedGuid": "d48208133b94e4d44af54d53fb3c95cf"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui _tubiao _1_137.png",
+      "toName": "ParkourView_MapMarkerIcon_01",
+      "expectedGuid": "e69d9da3f7c476546a8d328afd5522f9"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_anniu  拷贝_476.png",
+      "toName": "ParkourView_GoButtonBase",
+      "expectedGuid": "531101a6181fddc44b4ff35dda388ab7"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_anniu  拷贝 2_477.png",
+      "toName": "ParkourView_GoButtonHighlight",
+      "expectedGuid": "7d532ff8c262c72468e1949aec8a5795"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_anniu  拷贝 3_478.png",
+      "toName": "ParkourView_GoButtonFrame",
+      "expectedGuid": "c8749e09d99e83d4cbbfbba39f1b23d9"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_anniu_1_406.png",
+      "toName": "ParkourView_MissionActionButton_01",
+      "expectedGuid": "fbf7c8e6ce11a444a92940a122312e73"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_anniu_2_408.png",
+      "toName": "ParkourView_MissionActionButton_02",
+      "expectedGuid": "57ddb4244760e344c9b31d4b643cde62"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_anniu_42.png",
+      "toName": "ParkourView_GoButtonFace",
+      "expectedGuid": "a226e9a679e8c0242bebd38d6eededee"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_anniu_yingying_41.png",
+      "toName": "ParkourView_GoButtonShadow",
+      "expectedGuid": "3245b8160b6670748ba70dd755506430"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_diban ditu_333.png",
+      "toName": "ParkourView_MiniMapBackground",
+      "expectedGuid": "1ab7fabd082c85f4cbcfdba410a83fb1"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_diban_1_296.png",
+      "toName": "ParkourView_MissionSectionBackground",
+      "expectedGuid": "beb3114633d5686449f27afa6e2798f9"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_diban_2_313.png",
+      "toName": "ParkourView_MissionSectionDivider",
+      "expectedGuid": "70e0240537511424bb3ac3e45d69a014"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_jinbi_397.png",
+      "toName": "ParkourView_CoinIcon",
+      "expectedGuid": "bfaa465a8a950c943a80c6a54f7c3989"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_mianb_ditu_1_2_338.png",
+      "toName": "ParkourView_MapMarkerBackground_03",
+      "expectedGuid": "0844f34ffee2ae3408eb7328f635b276"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_mianb_ditu_1_3_339.png",
+      "toName": "ParkourView_MapMarkerBackground_02",
+      "expectedGuid": "fb1a3c9d06dfc6c458d10c122b81ba65"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_mianb_ditu_1_337.png",
+      "toName": "ParkourView_MapMarkerBackground_01",
+      "expectedGuid": "33b0322512de7d941bdd37b2dbbbe991"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_mianb_ditu_1_4_336.png",
+      "toName": "ParkourView_MapMarkerBackground_04",
+      "expectedGuid": "3fcb61cabf6cc544cbdcd8a2c2a9a380"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_mianb_ditu_5_2_97.png",
+      "toName": "ParkourView_AvatarDecorationRight",
+      "expectedGuid": "3848928d402c83d4eb60f86f5748a8c2"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_mianb_ditu_5_98.png",
+      "toName": "ParkourView_AvatarDecorationLeft",
+      "expectedGuid": "dedf191c6facf994e9ef311947dba838"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_tubiao_2_112.png",
+      "toName": "ParkourView_MapMarkerIcon_02",
+      "expectedGuid": "63bb40633c0315e4a9ca1c8825909d49"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_tubiao_3_104.png",
+      "toName": "ParkourView_MapMarkerIcon_03",
+      "expectedGuid": "4d763c6383aa1624ba13e90f9364c6d3"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_tubiao_4_122.png",
+      "toName": "ParkourView_MapMarkerIcon_04",
+      "expectedGuid": "ec18f960c0614354cbda57b4f989601a"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ui_zhedang_479.png",
+      "toName": "ParkourView_AvatarOverlayMask",
+      "expectedGuid": "68383f0e557da1344b0cbe224a1284a4"
+    },
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/图层 93_471.png",
+      "toName": "ParkourView_MissionSectionDecoration",
+      "expectedGuid": "4dfc2f168a8194a4abfd44161edce394"
+    }
+  ],
+  "spriteAtlasRenames": [
+    {
+      "from": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Atlas/跑酷 新ui-导出版本.spriteatlas",
+      "toName": "ParkourView",
+      "expectedGuid": "68c292eff6365bd4da2455b1b928a8d0"
+    }
+  ],
+  "verify": {
+    "nodes": 71,
+    "components": 170,
+    "missingComponents": 0,
+    "images": 35,
+    "prefixedTextures": 33,
+    "texturePathPrefix": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ParkourView_",
+    "requireAllImageTexturesPrefixed": true,
+    "hierarchy": [
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[MissionSection]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[MissionSection]/[ContentCards]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_2]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_3]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]",
+        "childCount": 4
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[MiniMap]",
+        "childCount": 2
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[MiniMap]/[Avatars]",
+        "childCount": 7
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[MiniMap]/[Avatars]/[Item_1]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[MiniMap]/[Avatars]/[Item_2]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[MiniMap]/[Avatars]/[Item_3]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[MiniMap]/[Avatars]/[Item_4]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[PrimaryAction]",
+        "childCount": 6
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[ProgressSection]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/跑酷 新ui-导出版本/[Screen]/[BottomSection]/[Navigation]",
+        "childCount": 5
+      }
+    ]
+  }
+}

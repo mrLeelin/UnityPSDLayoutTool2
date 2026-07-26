@@ -80,6 +80,15 @@ namespace PsdLayoutTool2
     {
         public string stableId;
         public string name;
+
+        // The PSD layer name that was visible when this rename was decided.
+        // Added without changing the schema version: an empty value means the
+        // record predates rename-drift tracking and is deliberately not
+        // checked, rather than being guessed from the current document.
+        // Reconcile compares this against the live layer name so that renaming
+        // a layer in Photoshop invalidates a decision that was made about the
+        // old name instead of silently reapplying it.
+        public string sourceName;
     }
 
     public sealed class PsdHierarchyReconciliationResult
@@ -182,16 +191,41 @@ namespace PsdLayoutTool2
                 profile.groups.Add(group);
             }
 
+            // Renames are recorded together with the PSD layer name they were
+            // decided against. The plan that produced them was validated
+            // against this very document, so the current name is the correct
+            // baseline; an explicitly supplied value still wins so that a
+            // reloaded Profile keeps its original baseline instead of silently
+            // re-baselining itself against a renamed layer.
+            Dictionary<string, string> currentNames = (document.nodes ?? new List<PsdPrefabNodeModel>())
+                .Where(node => node != null && PsdStableLayerIdUtility.IsPersistable(node.stableId))
+                .GroupBy(node => node.stableId, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First().name ?? string.Empty, StringComparer.Ordinal);
             profile.renames = (sourceRenames ?? Enumerable.Empty<PsdHierarchyProfileRename>())
                 .Where(rename => rename != null && PsdStableLayerIdUtility.IsPersistable(rename.stableId))
                 .GroupBy(rename => rename.stableId, StringComparer.Ordinal)
                 .Select(group => new PsdHierarchyProfileRename
                 {
                     stableId = group.Key,
-                    name = group.First().name ?? string.Empty
+                    name = group.First().name ?? string.Empty,
+                    sourceName = ResolveRenameSourceName(group.First().sourceName, group.Key, currentNames)
                 })
                 .ToList();
             return profile;
+        }
+
+        private static string ResolveRenameSourceName(
+            string explicitSourceName,
+            string stableId,
+            Dictionary<string, string> currentNames)
+        {
+            if (!string.IsNullOrEmpty(explicitSourceName))
+            {
+                return explicitSourceName;
+            }
+
+            string current;
+            return currentNames.TryGetValue(stableId, out current) ? current : string.Empty;
         }
 
         public bool IsStale(string psdGuid, string fingerprint)
@@ -312,6 +346,34 @@ namespace PsdLayoutTool2
                 // accepted plan until the later planner/validator task commits them;
                 // otherwise merely opening Preview twice could hide invalidation.
                 old.contentFingerprint = content;
+            }
+
+            // A rename decision is about a specific PSD layer name. Neither the
+            // structure nor the geometry fingerprint covers the name, so
+            // renaming a layer in Photoshop would otherwise leave the old
+            // decision looking perfectly fresh and reapply a name the user has
+            // just moved away from. Legacy records carry no baseline; the old
+            // name is genuinely unknown, so the current one is adopted once
+            // rather than inventing a drift that cannot be proven.
+            foreach (PsdHierarchyProfileRename rename in renames)
+            {
+                PsdPrefabNodeModel node;
+                if (!current.TryGetValue(rename.stableId, out node))
+                {
+                    continue;
+                }
+
+                string currentName = node.name ?? string.Empty;
+                if (string.IsNullOrEmpty(rename.sourceName))
+                {
+                    rename.sourceName = currentName;
+                    continue;
+                }
+
+                if (!string.Equals(currentName, rename.sourceName, StringComparison.Ordinal))
+                {
+                    AddUnique(result.focusedInvalidatedScopeStableIds, rename.stableId);
+                }
             }
 
             List<string> missing = previous.Keys.Where(id => !current.ContainsKey(id)).OrderBy(id => id, StringComparer.Ordinal).ToList();

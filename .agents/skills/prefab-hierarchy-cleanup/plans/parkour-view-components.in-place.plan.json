@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/跑酷 新ui-导出版本.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/跑酷 新ui-导出版本.prefab"
+  },
+  "prefabName": "ParkourView",
+  "wrappers": [],
+  "moves": [],
+  "renames": [],
+  "tightBounds": [],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentExtractions": [
+    {
+      "id": "content_card",
+      "template": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]",
+      "assetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/Components/ContentCard.prefab",
+      "instances": [
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]",
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_2]",
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_3]"
+      ]
+    },
+    {
+      "id": "map_marker",
+      "template": "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_1]",
+      "assetPath": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Prefab/Components/MapMarker.prefab",
+      "instances": [
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_1]",
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_2]",
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_3]",
+        "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_4]"
+      ]
+    }
+  ],
+  "verify": {
+    "nodes": 72,
+    "components": 171,
+    "objectReferences": 111,
+    "missingComponents": 0,
+    "images": 35,
+    "prefixedTextures": 33,
+    "texturePathPrefix": "Assets/PSDLayoutTool2/TestData/跑酷 新ui-导出版本/Texture/ParkourView_",
+    "requireAllImageTexturesPrefixed": true,
+    "requireEnglishNames": false,
+    "hierarchy": [
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]",
+        "childCount": 3
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]",
+        "childCount": 7
+      }
+    ],
+    "directChildren": [
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_1]",
+        "children": ["CardFrame", "DescriptionText", "[Reward]"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_2]",
+        "children": ["CardFrame", "DescriptionText", "[Reward]"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[MissionSection]/[ContentCards]/[ContentCard_3]",
+        "children": ["CardFrame", "DescriptionText", "[Reward]"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_1]",
+        "children": ["MarkerBackground", "MarkerIcon", "MarkerLabel"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_2]",
+        "children": ["MarkerBackground", "MarkerIcon", "MarkerLabel"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_3]",
+        "children": ["MarkerBackground", "MarkerIcon", "MarkerLabel"]
+      },
+      {
+        "path": "跑酷 新ui-导出版本/[Root]/[Screen]/[BottomSection]/[MiniMap]/[MapMarkers]/[MapMarker_4]",
+        "children": ["MarkerBackground", "MarkerIcon", "MarkerLabel"]
+      }
+    ]
+  }
+}

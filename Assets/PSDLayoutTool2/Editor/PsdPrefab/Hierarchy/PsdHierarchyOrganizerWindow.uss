@@ -1,0 +1,192 @@
+.psd-organizer-root {
+    flex-grow: 1;
+    background-color: #202428;
+    color: #d8dde3;
+    font-size: 12px;
+}
+
+.psd-organizer-header,
+.psd-organizer-footer,
+.psd-organizer-actions,
+.psd-organizer-identity,
+.psd-organizer-tree-row {
+    flex-direction: row;
+    align-items: center;
+}
+
+.psd-organizer-header {
+    min-height: 38px;
+    justify-content: space-between;
+    padding-left: 10px;
+    padding-right: 8px;
+    background-color: #292e33;
+    border-bottom-width: 1px;
+    border-bottom-color: #3c444d;
+}
+
+.psd-organizer-identity {
+    gap: 8px;
+}
+
+#organizer-title {
+    color: #f0f4f7;
+    unity-font-style: bold;
+    font-size: 13px;
+}
+
+.psd-organizer-status {
+    color: #87c5a0;
+    background-color: #263c30;
+    border-radius: 3px;
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+.psd-organizer-actions {
+    gap: 4px;
+}
+
+.psd-organizer-button {
+    min-width: 58px;
+    height: 24px;
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 8px;
+    padding-right: 8px;
+    color: #d8dde3;
+    background-color: #3a4650;
+    border-color: #53626e;
+    border-radius: 3px;
+}
+
+.psd-organizer-button:hover {
+    background-color: #49606f;
+}
+
+.psd-organizer-button:disabled {
+    opacity: 0.45;
+}
+
+.psd-organizer-button-muted {
+    background-color: #30363b;
+}
+
+.psd-organizer-button-primary {
+    color: #ffffff;
+    background-color: #2572a5;
+    border-color: #3d90c6;
+    min-width: 142px;
+}
+
+.psd-organizer-button-primary:hover {
+    background-color: #3187bf;
+}
+
+.psd-organizer-diagnostics {
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    background-color: #252a2f;
+    color: #b9c3cc;
+}
+
+.psd-organizer-diagnostic-error {
+    color: #ffb4a8;
+    background-color: #4b2a2a;
+    margin-top: 3px;
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 3px;
+    padding-bottom: 3px;
+    border-radius: 3px;
+}
+
+.psd-organizer-columns {
+    flex-grow: 1;
+    flex-direction: row;
+    gap: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+
+.psd-organizer-pane {
+    flex-grow: 1;
+    min-width: 190px;
+    background-color: #292e33;
+    border-width: 1px;
+    border-color: #3c444d;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+#psd-preview-pane {
+    min-width: 270px;
+}
+
+.psd-organizer-pane-heading {
+    height: 28px;
+    padding-left: 9px;
+    padding-top: 7px;
+    color: #c9d4dd;
+    unity-font-style: bold;
+    background-color: #31383f;
+    border-bottom-width: 1px;
+    border-bottom-color: #414b55;
+}
+
+#draft-hierarchy,
+.psd-organizer-preview,
+.psd-organizer-inspector {
+    flex-grow: 1;
+}
+
+.psd-organizer-preview,
+.psd-organizer-inspector {
+    padding-left: 9px;
+    padding-right: 9px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+}
+
+.psd-organizer-tree-row {
+    flex-grow: 1;
+    padding-right: 8px;
+    gap: 6px;
+}
+
+.psd-organizer-tree-name {
+    flex-grow: 1;
+    color: #dde6ed;
+}
+
+.psd-organizer-tree-detail,
+.psd-organizer-muted {
+    color: #8f9da8;
+    font-size: 11px;
+}
+
+.psd-organizer-tree-row-group .psd-organizer-tree-name {
+    color: #9ed2ee;
+    unity-font-style: bold;
+}
+
+.psd-organizer-footer {
+    min-height: 38px;
+    justify-content: flex-end;
+    gap: 6px;
+    padding-left: 9px;
+    padding-right: 8px;
+    background-color: #292e33;
+    border-top-width: 1px;
+    border-top-color: #3c444d;
+}
+
+.psd-organizer-footer-summary {
+    flex-grow: 1;
+    color: #9eabb5;
+}

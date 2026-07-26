@@ -230,6 +230,49 @@
 
                     if (GUILayout.Button(
                             new GUIContent(
+                                Localize("目标预制体丢失：归档层级配置后重新生成", "Target Prefab Missing: Archive Profile and Regenerate"),
+                                Localize(
+                                    "仅当层级配置记录的预制体和当前输出预制体都丢失时可用。旧 Profile 会移到 OrphanedHierarchyProfiles 备份，重新生成后需要再次整理层级。",
+                                    "Available only when both the Profile target and configured output Prefab are missing. The old Profile is moved to OrphanedHierarchyProfiles before regeneration; organize the new Prefab again afterward.")),
+                            GUILayout.Height(24)))
+                    {
+                        if (EditorUtility.DisplayDialog(
+                                "PSDLayoutTool2",
+                                Localize(
+                                    "这会归档失效的层级 Profile，并以全新 Prefab 重新生成。旧 Profile 的本地 ID 不能用于新 Prefab；完成后需要再次整理层级。是否继续？",
+                                    "This archives the orphaned hierarchy Profile and regenerates a new Prefab. The old Profile local IDs cannot be reused; organize the new Prefab again afterward. Continue?"),
+                                Localize("归档并重新生成", "Archive and Regenerate"),
+                                Localize("取消", "Cancel")))
+                        {
+                            try
+                            {
+                                string archivedProfilePath;
+                                string failureReason;
+                                if (!PsdImporter.TryRecoverMissingHierarchyProfileAndGeneratePrefab(
+                                        assetPath, out archivedProfilePath, out failureReason))
+                                {
+                                    EditorUtility.DisplayDialog("PSDLayoutTool2", failureReason, Localize("确定", "OK"));
+                                }
+                                else
+                                {
+                                    EditorUtility.DisplayDialog(
+                                        "PSDLayoutTool2",
+                                        Localize(
+                                            "已归档失效 Profile：\n" + archivedProfilePath + "\n\n已开始重新生成 Prefab。完成后请重新整理层级。",
+                                            "Archived orphaned Profile:\n" + archivedProfilePath + "\n\nPrefab regeneration has started. Organize the hierarchy again when it completes."),
+                                        Localize("确定", "OK"));
+                                }
+                            }
+                            catch (Exception exception)
+                            {
+                                Debug.LogException(exception);
+                                EditorUtility.DisplayDialog("PSDLayoutTool2", exception.Message, Localize("确定", "OK"));
+                            }
+                        }
+                    }
+
+                    if (GUILayout.Button(
+                            new GUIContent(
                                 Localize("打开全局配置", "Open Global Settings"),
                                 Localize(
                                     "选择项目中的 PSDLayoutProjectSettings 配置资产。输出规则、字体、材质和公共资源前缀都在该资产的 Inspector 中编辑。",
@@ -258,12 +301,12 @@
                         if (GUILayout.Button(
                                 new GUIContent(
                                     PsdHierarchyOrganizerEntry.PreviewButtonLabel,
-                                    "在浏览器中打开完整 PSD 画布。应用前只生成整理预览，不会修改 Prefab、Profile 或材质。"),
+                                    "在 Unity 原生窗口中整理 PSD 层级。应用前只生成整理草案，不会修改 Prefab、Profile 或材质。"),
                                 GUILayout.Height(24)))
                         {
                             try
                             {
-                                PsdHierarchyOrganizerEntry.OpenWeb(assetPath);
+                                PsdHierarchyOrganizerEntry.Open(assetPath);
                             }
                             catch (Exception exception)
                             {

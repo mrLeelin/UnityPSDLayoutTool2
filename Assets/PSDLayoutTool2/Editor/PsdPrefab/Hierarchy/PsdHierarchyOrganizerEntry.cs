@@ -43,7 +43,7 @@ namespace PsdLayoutTool2
     /// </summary>
     public static class PsdHierarchyOrganizerEntry
     {
-        public const string PreviewButtonLabel = "AI 整理";
+        public const string PreviewButtonLabel = "AI 层级整理";
 
         public static bool TryResolveAvailability(
             string psdAssetPath,
@@ -91,7 +91,7 @@ namespace PsdLayoutTool2
         {
             if (document == null) throw new ArgumentNullException("document");
             if (runner == null) throw new ArgumentNullException("runner");
-            if (string.IsNullOrEmpty(sourcePsdGuid)) throw new ArgumentException("Source PSD GUID is required.", "sourcePsdGuid");
+            if (string.IsNullOrEmpty(sourcePsdGuid)) throw new ArgumentException("必须提供源 PSD GUID。", "sourcePsdGuid");
 
             PsdHierarchyProfile working = persistedProfile != null
                 ? UnityEngine.Object.Instantiate(persistedProfile)
@@ -104,7 +104,7 @@ namespace PsdLayoutTool2
                 }
                 else if (!string.Equals(working.sourcePsdGuid, sourcePsdGuid, StringComparison.Ordinal))
                 {
-                    throw new InvalidOperationException("Hierarchy Profile belongs to a different PSD.");
+                    throw new InvalidOperationException("层级 Profile 属于其他 PSD。");
                 }
 
                 PsdHierarchyReconciliationResult reconciliation = working.Reconcile(document);
@@ -141,11 +141,11 @@ namespace PsdLayoutTool2
                     out explanation))
                 throw new InvalidOperationException(explanation);
             if (!string.Equals(NormalizePath(expectedTargetPrefabPath), NormalizePath(resolvedTarget), StringComparison.Ordinal))
-                throw new InvalidOperationException("Configured target Prefab changed after the hierarchy preview was opened.");
+                throw new InvalidOperationException("打开层级预览后，配置的目标 Prefab 已发生变化。");
 
             string sourceGuid = AssetDatabase.AssetPathToGUID(sourcePsdPath);
             if (string.IsNullOrEmpty(sourceGuid))
-                throw new InvalidOperationException("The selected PSD has no AssetDatabase GUID: " + sourcePsdPath);
+                throw new InvalidOperationException("所选 PSD 没有 AssetDatabase GUID：" + sourcePsdPath);
             string fullSourcePath = Path.GetFullPath(Path.Combine(
                 Application.dataPath, "..", sourcePsdPath.Replace('/', Path.DirectorySeparatorChar)));
             PsdPrefabDocumentModel document = PsdPrefabModelBuilder.Build(new PsdFile(fullSourcePath));
@@ -175,35 +175,12 @@ namespace PsdLayoutTool2
                 throw new InvalidOperationException(explanation);
 
             PsdHierarchyOrganizerInput input = BuildFromAssets(
-                sourcePsdPath, targetPath, new CodexCliHierarchyRunner());
+                sourcePsdPath, targetPath, PsdHierarchyAiRunnerFactory.CreateConfigured());
             return PsdHierarchyOrganizerWindow.Open(
                 input.previewModel,
                 plan => PsdImporter.GeneratePrefabWithHierarchyPlan(
-                    input.sourcePsdPath, input.sourcePsdGuid, input.targetPrefabPath, plan));
-        }
-
-        public static void OpenWeb(string sourcePsdPath)
-        {
-            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
-            string targetPath;
-            string explanation;
-            if (!TryResolveAvailability(
-                    sourcePsdPath,
-                    PsdImporter.OutputMode,
-                    PsdImporter.OutputFolderName,
-                    PsdImporter.PrefabMode,
-                    PsdImporter.UseUnityUI,
-                    path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
-                    out targetPath,
-                    out explanation))
-                throw new InvalidOperationException(explanation);
-
-            PsdHierarchyOrganizerInput input = BuildFromAssets(
-                sourcePsdPath, targetPath, new CodexCliHierarchyRunner());
-            PsdHierarchyWebWorkbench.Open(
-                input,
-                plan => PsdImporter.GeneratePrefabWithHierarchyPlan(
-                    input.sourcePsdPath, input.sourcePsdGuid, input.targetPrefabPath, plan));
+                    input.sourcePsdPath, input.sourcePsdGuid, input.targetPrefabPath, plan),
+                input.sourcePsdPath);
         }
 
         private static PsdHierarchyPlan CreatePlan(PsdHierarchyProfile profile, string sourceGuid)
@@ -226,7 +203,7 @@ namespace PsdLayoutTool2
                     parentKey = group.parentKey,
                     displayName = group.displayName,
                     memberStableIds = new List<string>(group.stableLayerIds ?? new List<string>()),
-                    evidence = "Persisted validated hierarchy Profile",
+                    evidence = "已保存且通过校验的层级 Profile",
                     confidence = 1d
                 });
             }
@@ -237,7 +214,7 @@ namespace PsdLayoutTool2
                 {
                     stableId = rename.stableId,
                     name = rename.name,
-                    evidence = "Persisted validated hierarchy Profile",
+                    evidence = "已保存且通过校验的层级 Profile",
                     confidence = 1d
                 });
             }
@@ -265,7 +242,7 @@ namespace PsdLayoutTool2
         public static void Enqueue(string psdGuid, string psdPath, string prefabPath, PsdHierarchyPlan validatedPlan)
         {
             if (validatedPlan == null) throw new ArgumentNullException("validatedPlan");
-            if (plan != null) throw new InvalidOperationException("A hierarchy Apply operation is already pending.");
+            if (plan != null) throw new InvalidOperationException("已有一个层级应用操作正在等待处理。");
             sourceGuid = psdGuid ?? string.Empty;
             sourcePath = Normalize(psdPath);
             targetPath = Normalize(prefabPath);

@@ -11,16 +11,21 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void NativeLayerRenameAndContentChangeReusePersistedPlan()
         {
-            PsdPrefabDocumentModel original = Document(Node("101", "Old", 0, new Rect(0, 0, 10, 10), "pixels-a"));
-            PsdHierarchyProfile profile = Profile(original, "101");
+            // "102" carries no rename decision, so renaming it in Photoshop is
+            // pure content drift and must not disturb the persisted grouping.
+            PsdPrefabDocumentModel original = Document(
+                Node("101", "Anchor", 0, new Rect(0, 0, 10, 10), "pixels-a"),
+                Node("102", "Old", 1, new Rect(0, 0, 10, 10), "pixels-a"));
+            PsdHierarchyProfile profile = Profile(original, "101", "102");
             byte[] originalPlan = profile.groups[0].GetPlanBytes();
 
-            PsdHierarchyReconciliationResult result = profile.Reconcile(
-                Document(Node("101", "Renamed", 0, new Rect(0, 0, 10, 10), "pixels-b")));
+            PsdHierarchyReconciliationResult result = profile.Reconcile(Document(
+                Node("101", "Anchor", 0, new Rect(0, 0, 10, 10), "pixels-a"),
+                Node("102", "Renamed", 1, new Rect(0, 0, 10, 10), "pixels-b")));
 
             Assert.That(result.requiresReplan, Is.False);
-            Assert.That(result.contentOnlyStableIds, Is.EqualTo(new[] { "101" }));
-            Assert.That(profile.groups[0].stableLayerIds, Is.EqualTo(new[] { "101" }));
+            Assert.That(result.contentOnlyStableIds, Is.EqualTo(new[] { "102" }));
+            Assert.That(profile.groups[0].stableLayerIds, Is.EqualTo(new[] { "101", "102" }));
             Assert.That(profile.groups[0].GetPlanBytes(), Is.EqualTo(originalPlan));
         }
 
@@ -406,16 +411,20 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void ContentOnlyReconcileAdvancesAcceptedSourceFingerprint()
         {
-            PsdPrefabDocumentModel original = Document(Node("101", "A", 0, Rect.zero, "pixels-a"));
+            PsdPrefabDocumentModel original = Document(
+                Node("101", "A", 0, Rect.zero, "pixels-a"),
+                Node("102", "B", 1, Rect.zero, "pixels-a"));
             original.sourceFingerprint = PsdHierarchyFingerprints.Document(original);
-            PsdHierarchyProfile profile = Profile(original, "101");
-            PsdPrefabDocumentModel changed = Document(Node("101", "Renamed", 0, Rect.zero, "pixels-b"));
+            PsdHierarchyProfile profile = Profile(original, "101", "102");
+            PsdPrefabDocumentModel changed = Document(
+                Node("101", "A", 0, Rect.zero, "pixels-a"),
+                Node("102", "Renamed", 1, Rect.zero, "pixels-b"));
             changed.sourceFingerprint = PsdHierarchyFingerprints.Document(changed);
 
             PsdHierarchyReconciliationResult first = profile.Reconcile(changed);
             PsdHierarchyReconciliationResult repeated = profile.Reconcile(changed);
 
-            Assert.That(first.contentOnlyStableIds, Is.EqualTo(new[] { "101" }));
+            Assert.That(first.contentOnlyStableIds, Is.EqualTo(new[] { "102" }));
             Assert.That(profile.sourceFingerprint, Is.EqualTo(changed.sourceFingerprint));
             Assert.That(profile.IsStale("guid-123", changed.sourceFingerprint), Is.False);
             Assert.That(repeated.contentOnlyStableIds, Is.Empty);

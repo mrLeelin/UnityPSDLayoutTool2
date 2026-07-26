@@ -62,6 +62,65 @@ namespace PsdLayoutTool2
             return profile;
         }
 
+        /// <summary>
+        /// Moves an orphaned Profile out of the active GUID-keyed location so a
+        /// user-confirmed full regeneration can establish a new baseline. This
+        /// never runs as part of ordinary import because it deliberately drops
+        /// the old Prefab's local-ID mapping from the active workflow.
+        /// </summary>
+        public static bool TryArchiveProfileForMissingTargetRecovery(
+            string profilePath,
+            string configuredPrefabPath,
+            out string archivedProfilePath,
+            out string failureReason)
+        {
+            archivedProfilePath = string.Empty;
+            failureReason = string.Empty;
+            PsdHierarchyProfile profile = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
+            if (profile == null)
+            {
+                failureReason = "No hierarchy Profile exists for this PSD.";
+                return false;
+            }
+
+            string recordedPrefabPath = NormalizeAssetPath(profile.targetPrefabPath);
+            string normalizedConfiguredPath = NormalizeAssetPath(configuredPrefabPath);
+            if (string.IsNullOrEmpty(recordedPrefabPath) || string.IsNullOrEmpty(normalizedConfiguredPath))
+            {
+                failureReason = "The hierarchy Profile or configured Prefab path is empty.";
+                return false;
+            }
+
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(recordedPrefabPath) != null ||
+                AssetDatabase.LoadAssetAtPath<GameObject>(normalizedConfiguredPath) != null)
+            {
+                failureReason = "The hierarchy Profile still has a loadable Prefab target and cannot be reset.";
+                return false;
+            }
+
+            const string settingsFolder = "Assets/PSDLayoutTool2Settings";
+            const string archiveFolder = settingsFolder + "/OrphanedHierarchyProfiles";
+            if (!AssetDatabase.IsValidFolder(settingsFolder))
+                AssetDatabase.CreateFolder("Assets", "PSDLayoutTool2Settings");
+            if (!AssetDatabase.IsValidFolder(archiveFolder))
+                AssetDatabase.CreateFolder(settingsFolder, "OrphanedHierarchyProfiles");
+
+            string archiveFileName = Path.GetFileNameWithoutExtension(profilePath) +
+                ".orphaned-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff") + ".asset";
+            archivedProfilePath = AssetDatabase.GenerateUniqueAssetPath(archiveFolder + "/" + archiveFileName);
+            string moveError = AssetDatabase.MoveAsset(profilePath, archivedProfilePath);
+            if (!string.IsNullOrEmpty(moveError))
+            {
+                failureReason = "Could not archive the orphaned hierarchy Profile: " + moveError;
+                archivedProfilePath = string.Empty;
+                return false;
+            }
+
+            AssetDatabase.ImportAsset(archivedProfilePath,
+                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            return true;
+        }
+
         public static void Save(
             string prefabPath,
             GameObject loadedContents,
@@ -321,6 +380,7 @@ namespace PsdLayoutTool2
             {
                 Append(value, rename.stableId);
                 Append(value, rename.name);
+                Append(value, rename.sourceName);
             }
             return value.ToString();
         }

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Prefab Hierarchy Cleanup"
+  short_description: "Organize existing Unity Prefabs safely"
+  default_prompt: "Use $prefab-hierarchy-cleanup to inspect this Prefab, propose a complete semantic hierarchy, and wait for my confirmation before applying it."
+
+policy:
+  allow_implicit_invocation: false

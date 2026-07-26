@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/UI/RewardPanel.prefab",
+  "output": {
+    "mode": "copy",
+    "assetPath": "Assets/UI/RewardPanel.cleaned.prefab"
+  },
+  "prefabName": "RewardPanelView",
+  "wrappers": [
+    {
+      "id": "content",
+      "parent": "RewardPanel/Root",
+      "name": "[Content]",
+      "siblingIndex": 0
+    }
+  ],
+  "moves": [
+    {
+      "source": "RewardPanel/Root/Title",
+      "destination": "@content",
+      "siblingIndex": 0
+    }
+  ],
+  "renames": [
+    {
+      "target": "RewardPanel/Root",
+      "name": "[Screen]"
+    }
+  ],
+  "textureRenames": [
+    {
+      "from": "Assets/UI/RewardPanel/Texture/old_background.png",
+      "toName": "RewardPanelView_Background",
+      "expectedGuid": "00000000000000000000000000000000"
+    }
+  ],
+  "spriteAtlasRenames": [
+    {
+      "from": "Assets/UI/RewardPanel/Atlas/old.spriteatlas",
+      "toName": "RewardPanelView",
+      "expectedGuid": "00000000000000000000000000000000"
+    }
+  ],
+  "verify": {
+    "nodes": 12,
+    "components": 30,
+    "objectReferences": 18,
+    "missingComponents": 0,
+    "images": 4,
+    "prefixedTextures": 4,
+    "texturePathPrefix": "Assets/UI/RewardPanel/Texture/RewardPanelView_",
+    "requireAllImageTexturesPrefixed": true,
+    "hierarchy": [
+      {
+        "path": "RewardPanel/[Screen]",
+        "childCount": 1
+      },
+      {
+        "path": "RewardPanel/[Screen]/[Content]",
+        "childCount": 2
+      }
+    ]
+  }
+}

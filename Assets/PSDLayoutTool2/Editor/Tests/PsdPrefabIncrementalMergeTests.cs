@@ -742,6 +742,58 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ExplicitRecoveryArchivesProfileOnlyWhenBothRecordedAndCurrentTargetsAreMissing()
+        {
+            PsdHierarchyProfile profile = Profile();
+            profile.targetPrefabPath = SameNamePath;
+            profile.targetPrefabGuid = "missing-guid";
+            AssetDatabase.CreateAsset(profile, ProfilePath);
+
+            string archivePath;
+            string failureReason;
+            bool recovered = PsdPrefabTransactionalSave.TryArchiveProfileForMissingTargetRecovery(
+                ProfilePath, TargetPath, out archivePath, out failureReason);
+
+            try
+            {
+                Assert.That(recovered, Is.True, failureReason);
+                Assert.That(archivePath, Does.StartWith("Assets/PSDLayoutTool2Settings/OrphanedHierarchyProfiles/"));
+                Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath), Is.Null);
+                PsdHierarchyProfile archived = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(archivePath);
+                Assert.That(archived, Is.Not.Null);
+                Assert.That(archived.targetPrefabPath, Is.EqualTo(SameNamePath));
+                Assert.That(archived.targetPrefabGuid, Is.EqualTo("missing-guid"));
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(archivePath))
+                    AssetDatabase.DeleteAsset(archivePath);
+            }
+        }
+
+        [Test]
+        public void ExplicitRecoveryKeepsProfileWhenARecordedOrConfiguredTargetStillExists()
+        {
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+            PsdHierarchyProfile profile = Profile();
+            profile.targetPrefabPath = TargetPath;
+            profile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+            AssetDatabase.CreateAsset(profile, ProfilePath);
+
+            string archivePath;
+            string failureReason;
+            bool recovered = PsdPrefabTransactionalSave.TryArchiveProfileForMissingTargetRecovery(
+                ProfilePath, SameNamePath, out archivePath, out failureReason);
+
+            Assert.That(recovered, Is.False);
+            Assert.That(archivePath, Is.Empty);
+            Assert.That(failureReason, Does.Contain("loadable Prefab target"));
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath), Is.Not.Null);
+        }
+
+        [Test]
         public void BoundProfileRejectsNonUiModeBeforePrefabOrProfileBytesCanChange()
         {
             const string settingsFolder = "Assets/PSDLayoutTool2Settings";

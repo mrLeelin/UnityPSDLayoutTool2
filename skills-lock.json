@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "unity-ui-toolkit-design-system": {
+      "source": "aradotso/design-skills",
+      "sourceType": "github",
+      "skillPath": "skills/unity-ui-toolkit-design-system/SKILL.md",
+      "computedHash": "dc9e76198e7315c8e14066fed4da9676bb98e2a8dcadd80f8e9809c1f01398aa"
+    }
+  }
+}
