@@ -288,7 +288,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 1;
+        private const int CurrentSettingsVersion = 2;
 
         [SerializeField]
         private int settingsVersion;
@@ -304,15 +304,8 @@ namespace PsdLayoutTool2
         private PsdLayoutProjectOutputSettings outputSettings = new PsdLayoutProjectOutputSettings();
 
         [SerializeField]
-        private PsdHierarchyAiProvider aiProvider = PsdHierarchyAiProvider.Codex;
-
-        [SerializeField]
-        private PsdHierarchyAiConnectionSettings codexAiConnection =
-            new PsdHierarchyAiConnectionSettings();
-
-        [SerializeField]
-        private PsdHierarchyAiConnectionSettings claudeAiConnection =
-            new PsdHierarchyAiConnectionSettings();
+        private PsdHierarchyExternalAiSettings externalAiSettings =
+            new PsdHierarchyExternalAiSettings();
 
         internal static PsdLayoutProjectSettings instance => PsdLayoutProjectSettingsAsset.GetOrCreate();
 
@@ -343,108 +336,29 @@ namespace PsdLayoutTool2
             return outputSettings.Resolve();
         }
 
-        internal PsdHierarchyAiSettingsSnapshot ResolveAiSettings()
+        internal PsdHierarchyExternalAiSettingsSnapshot ResolveExternalAiSettings()
         {
             EnsureData();
-            return new PsdHierarchyAiSettingsSnapshot(
-                aiProvider,
-                codexAiConnection.Resolve(),
-                claudeAiConnection.Resolve());
+            return externalAiSettings.Resolve();
         }
 
-        internal void SetAiProvider(PsdHierarchyAiProvider provider)
+        internal void SetExternalAiSettings(
+            PsdHierarchyAiTerminal terminal,
+            string terminalExecutablePath,
+            string aiCommand,
+            string aiArguments,
+            string skillPath)
         {
             EnsureData();
-            switch (provider)
-            {
-                case PsdHierarchyAiProvider.Codex:
-                case PsdHierarchyAiProvider.Claude:
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(
-                        nameof(provider),
-                        provider,
-                        "Unsupported hierarchy AI provider.");
-            }
-
-            if (aiProvider == provider)
-            {
-                return;
-            }
-
-            aiProvider = provider;
-            SaveAsset();
-        }
-
-        internal void SetAiConnectionMode(
-            PsdHierarchyAiProvider provider,
-            PsdHierarchyAiConnectionMode mode)
-        {
-            EnsureData();
-            if (GetAiConnection(provider).SetMode(mode))
+            if (externalAiSettings.Set(
+                    terminal,
+                    terminalExecutablePath,
+                    aiCommand,
+                    aiArguments,
+                    skillPath))
             {
                 SaveAsset();
             }
-        }
-
-        internal void SetAiBaseUrl(PsdHierarchyAiProvider provider, string baseUrl)
-        {
-            EnsureData();
-            PsdHierarchyAiConnectionSettings connection = GetAiConnection(provider);
-            string normalizedBaseUrl = (baseUrl ?? string.Empty).Trim();
-            if (!string.IsNullOrEmpty(normalizedBaseUrl) &&
-                !PsdHierarchyAiConnectionSettings.TryValidateBaseUrl(normalizedBaseUrl, out string error))
-            {
-                throw new ArgumentException(error, nameof(baseUrl));
-            }
-
-            if (connection.SetBaseUrl(normalizedBaseUrl))
-            {
-                SaveAsset();
-            }
-        }
-
-        internal bool HasSavedAiKey(
-            PsdHierarchyAiProvider provider,
-            IPsdAiSecretStore secretStore,
-            string projectIdentity)
-        {
-            if (secretStore == null)
-            {
-                throw new ArgumentNullException(nameof(secretStore));
-            }
-
-            ValidateAiProvider(provider);
-            return secretStore.HasSavedCredential(projectIdentity, provider);
-        }
-
-        internal void SaveAiKey(
-            PsdHierarchyAiProvider provider,
-            string key,
-            IPsdAiSecretStore secretStore,
-            string projectIdentity)
-        {
-            if (secretStore == null)
-            {
-                throw new ArgumentNullException(nameof(secretStore));
-            }
-
-            ValidateAiProvider(provider);
-            secretStore.Save(projectIdentity, provider, key);
-        }
-
-        internal void ClearAiKey(
-            PsdHierarchyAiProvider provider,
-            IPsdAiSecretStore secretStore,
-            string projectIdentity)
-        {
-            if (secretStore == null)
-            {
-                throw new ArgumentNullException(nameof(secretStore));
-            }
-
-            ValidateAiProvider(provider);
-            secretStore.Clear(projectIdentity, provider);
         }
 
         internal void SetOutputSettings(
@@ -511,37 +425,6 @@ namespace PsdLayoutTool2
             AssetDatabase.SaveAssets();
         }
 
-        private PsdHierarchyAiConnectionSettings GetAiConnection(PsdHierarchyAiProvider provider)
-        {
-            switch (provider)
-            {
-                case PsdHierarchyAiProvider.Codex:
-                    return codexAiConnection;
-                case PsdHierarchyAiProvider.Claude:
-                    return claudeAiConnection;
-                default:
-                    throw new ArgumentOutOfRangeException(
-                        nameof(provider),
-                        provider,
-                        "Unsupported hierarchy AI provider.");
-            }
-        }
-
-        private static void ValidateAiProvider(PsdHierarchyAiProvider provider)
-        {
-            switch (provider)
-            {
-                case PsdHierarchyAiProvider.Codex:
-                case PsdHierarchyAiProvider.Claude:
-                    return;
-                default:
-                    throw new ArgumentOutOfRangeException(
-                        nameof(provider),
-                        provider,
-                        "Unsupported hierarchy AI provider.");
-            }
-        }
-
         private void EnsureData()
         {
             bool changed = false;
@@ -569,15 +452,9 @@ namespace PsdLayoutTool2
                 changed = true;
             }
 
-            if (codexAiConnection == null)
+            if (externalAiSettings == null)
             {
-                codexAiConnection = new PsdHierarchyAiConnectionSettings();
-                changed = true;
-            }
-
-            if (claudeAiConnection == null)
-            {
-                claudeAiConnection = new PsdHierarchyAiConnectionSettings();
+                externalAiSettings = new PsdHierarchyExternalAiSettings();
                 changed = true;
             }
 

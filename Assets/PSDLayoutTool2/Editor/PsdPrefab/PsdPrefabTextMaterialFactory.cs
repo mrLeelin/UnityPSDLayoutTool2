@@ -304,7 +304,21 @@ namespace PsdLayoutTool2
 
         internal static bool IsCompatibleWithFont(Material material, TMP_FontAsset font)
         {
-            return material != null && font != null && font.atlasTexture != null && material.mainTexture == font.atlasTexture;
+            if (material == null || font == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                Texture atlas = font.atlasTexture;
+                return atlas != null && material.mainTexture == atlas;
+            }
+            catch (NullReferenceException)
+            {
+                // A newly created TMP font can have no initialized atlas yet.
+                return false;
+            }
         }
 
         private static void SetMaterialFloat(Material material, string property, float value)

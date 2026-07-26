@@ -259,42 +259,30 @@
                         PsdLayoutProjectSettingsAsset.OpenInInspector();
                     }
 
-                    // This action is intentionally adjacent to the primary Prefab action. Opening
-                    // Preview only reads the PSD, exact configured Prefab and optional Profile;
-                    // applying remains a separate explicit action inside the preview window.
                     string hierarchyTargetPath;
                     string hierarchyUnavailableReason;
-                    bool hierarchyPreviewAvailable = PsdHierarchyOrganizerEntry.TryResolveAvailability(
+                    bool hierarchyOrganizerAvailable = PsdHierarchyOrganizerEntry.TryResolvePrefabAvailability(
                         assetPath,
                         PsdImporter.OutputMode,
                         PsdImporter.OutputFolderName,
                         PsdImporter.PrefabMode,
-                        PsdImporter.UseUnityUI,
                         path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
                         out hierarchyTargetPath,
                         out hierarchyUnavailableReason);
-                    using (new EditorGUI.DisabledScope(!hierarchyPreviewAvailable))
+                    if (hierarchyOrganizerAvailable)
                     {
                         if (GUILayout.Button(
                                 new GUIContent(
-                                    PsdHierarchyOrganizerEntry.PreviewButtonLabel,
-                                    "在 Unity 原生窗口中整理 PSD 层级。应用前只生成整理草案，不会修改 Prefab、Profile 或材质。"),
+                                    PsdHierarchyOrganizerEntry.AiButtonLabel,
+                                    "在全局配置指定的终端中启动 AI，并把整理技能与当前生成的 Prefab 发送给 AI。"),
                                 GUILayout.Height(24)))
                         {
-                            try
+                            string launchError;
+                            if (!PsdHierarchyOrganizerEntry.TryLaunch(assetPath, out launchError))
                             {
-                                PsdHierarchyOrganizerEntry.Open(assetPath);
-                            }
-                            catch (Exception exception)
-                            {
-                                Debug.LogException(exception);
-                                EditorUtility.DisplayDialog("PSDLayoutTool2", exception.Message, "确定");
+                                EditorUtility.DisplayDialog("PSDLayoutTool2", launchError, "确定");
                             }
                         }
-                    }
-                    if (!hierarchyPreviewAvailable)
-                    {
-                        EditorGUILayout.HelpBox(hierarchyUnavailableReason, MessageType.Info);
                     }
 
                     EditorGUI.BeginChangeCheck();
