@@ -2668,6 +2668,16 @@
             }
 
             foreach (Layer child in buttonLayer.Children)
+        /// <summary>
+        /// Returns true when a layer should be exported without a generated
+        /// runtime object. Prefab generation intentionally excludes this path:
+        /// its generated PNGs would have no Prefab dependency.
+        /// </summary>
+        private static bool ShouldExportTextureOnly(LayerImportInfo info)
+        {
+            return !CreatePrefab && ShouldLayerEmitTextureFile(info);
+        }
+
             {
                 if (IsButtonChildHandledByRuntime(GetLayerInfo(child)))
                 {
@@ -3717,7 +3727,7 @@
             }
 
             bool createRuntimeObject = (LayoutInScene || CreatePrefab) && info.EffectiveVisible;
-            bool exportTextureOnly = ShouldLayerEmitTextureFile(info);
+            bool exportTextureOnly = ShouldExportTextureOnly(info);
             PsdLogger.Info(
                 "Art layer decision: createRuntimeObject=" + createRuntimeObject +
                 ", exportTextureOnly=" + exportTextureOnly +
@@ -3848,6 +3858,15 @@
                     }
 
                     PsdNineSliceNameRule nineSliceRule;
+            // A Prefab import owns only the sprites referenced by the generated
+            // hierarchy, Button states, or animation. This traversal exists for
+            // texture-only and scene-layout imports, so it must not create
+            // orphaned PNGs during Prefab generation.
+            if (CreatePrefab)
+            {
+                return;
+            }
+
                     if (TryGetNineSliceConversionRule(layer, out nineSliceRule))
                     {
                         byte[] originalPng = png;

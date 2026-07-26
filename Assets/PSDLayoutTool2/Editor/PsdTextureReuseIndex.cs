@@ -41,7 +41,14 @@ namespace PsdLayoutTool2
             for (int i = 0; i < sameNameCandidates.Count; i++)
             {
                 candidate = sameNameCandidates[i];
-                if (string.Equals(candidate.BorderContract, borderContract, StringComparison.Ordinal))
+                if (string.Equals(candidate.BorderContract, borderContract, StringComparison.Ordinal) &&
+                    PsdTextureVisualMatcher.AreEquivalent(
+                        candidate.Width,
+                        candidate.Height,
+                        candidate.Pixels,
+                        width,
+                        height,
+                        pixels))
                 {
                     existingPath = candidate.Path;
                     return true;

@@ -67,7 +67,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void SameNameDifferentArtworkReusesBySemanticName()
+        public void SameNameDifferentArtworkDoesNotReuse()
         {
             var index = new PsdTextureReuseIndex();
             Color32[] first = CreateSolidPixels(16, 16, new Color32(220, 160, 40, 255));
@@ -75,8 +75,8 @@ namespace PsdLayoutTool2.Tests
             index.Add("same_name", "first-hash", "ordinary", 16, 16, first, "first.png");
 
             string existingPath;
-            Assert.That(index.TryFind("same_name", "second-hash", "ordinary", 16, 16, second, out existingPath), Is.True);
-            Assert.That(existingPath, Is.EqualTo("first.png"));
+            Assert.That(index.TryFind("same_name", "second-hash", "ordinary", 16, 16, second, out existingPath), Is.False);
+            Assert.That(existingPath, Is.Empty);
         }
 
         private static Color32[] CreateSolidPixels(int width, int height, Color32 color)
