@@ -43,6 +43,10 @@ def csharp(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
+def csharp_string_array(values: list[str]) -> str:
+    return "new string[] { " + ", ".join(csharp(value) for value in values) + " }"
+
+
 def final_asset_path(source: str, new_name: str) -> str:
     source_path = PurePosixPath(source)
     return str(source_path.with_name(new_name + source_path.suffix))
@@ -79,16 +83,18 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     atlas_renames = require_list(raw.get("spriteAtlasRenames", []), "spriteAtlasRenames")
     component_extractions = require_list(raw.get("componentExtractions", []), "componentExtractions")
     state_component_extractions = require_list(raw.get("stateComponentExtractions", []), "stateComponentExtractions")
+    variant_component_extractions = require_list(raw.get("variantComponentExtractions", []), "variantComponentExtractions")
     verify = raw.get("verify", {})
     if not isinstance(verify, dict):
         fail("verify must be an object")
 
     if (texture_renames or atlas_renames) and not VIEW_RE.match(prefab_name):
         fail("prefabName must be PascalCase and end with View when renaming private assets")
-    if (component_extractions or state_component_extractions) and (wrappers or moves or renames or tight_bounds):
+    if (component_extractions or state_component_extractions or variant_component_extractions) and (wrappers or moves or renames or tight_bounds):
         fail("component extraction must run as a standalone plan after hierarchy cleanup")
-    if component_extractions and state_component_extractions:
-        fail("componentExtractions and stateComponentExtractions must run in separate plans")
+    extraction_modes = sum(bool(entries) for entries in (component_extractions, state_component_extractions, variant_component_extractions))
+    if extraction_modes > 1:
+        fail("componentExtractions, stateComponentExtractions, and variantComponentExtractions must run in separate plans")
 
     wrapper_ids: set[str] = set()
     for index, wrapper in enumerate(wrappers):
@@ -229,6 +235,86 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         if default_state not in state_ids:
             fail(f"stateComponentExtractions[{index}].defaultState must match a states[].id")
 
+    for index, extraction in enumerate(variant_component_extractions):
+        label = f"variantComponentExtractions[{index}]"
+        extraction_id = require_string(extraction.get("id"), f"{label}.id")
+        if not re.match(r"^[a-z][a-z0-9_]*$", extraction_id):
+            fail(f"{label}.id must be lower snake_case")
+        if extraction_id in extraction_ids:
+            fail(f"duplicate component extraction id: {extraction_id}")
+        extraction_ids.add(extraction_id)
+        template = require_string(extraction.get("template"), f"{label}.template")
+        template_parent = template.rsplit("/", 1)[0] if "/" in template else ""
+        if not template_parent:
+            fail(f"{label}.template must not be the Prefab root")
+        component_asset_path = asset_path(extraction.get("assetPath"), f"{label}.assetPath")
+        if not component_asset_path.endswith(".prefab"):
+            fail(f"{label}.assetPath must end with .prefab")
+        if component_asset_path in extraction_asset_paths:
+            fail(f"duplicate component extraction assetPath: {component_asset_path}")
+        if component_asset_path in {prefab_path, output_path}:
+            fail(f"{label}.assetPath must not replace the target Prefab")
+        extraction_asset_paths.add(component_asset_path)
+        common_name = require_string(extraction.get("commonName", "[Common]"), f"{label}.commonName")
+        states_name = require_string(extraction.get("statesName", "[States]"), f"{label}.statesName")
+        if common_name != "[Common]" or states_name != "[States]":
+            fail(f"{label} must use [Common] and [States] containers")
+        states = require_list(extraction.get("states"), f"{label}.states")
+        if len(states) < 2:
+            fail(f"{label}.states must contain at least two visual states")
+        state_ids: set[str] = set()
+        state_sources: set[str] = set()
+        for state_index, state in enumerate(states):
+            state_label = f"{label}.states[{state_index}]"
+            state_id = require_string(state.get("id"), f"{state_label}.id")
+            if not re.match(r"^[a-z][a-z0-9_]*$", state_id):
+                fail(f"{state_label}.id must be lower snake_case")
+            if state_id in state_ids:
+                fail(f"duplicate state id: {state_id}")
+            state_ids.add(state_id)
+            source = require_string(state.get("source"), f"{state_label}.source")
+            if source.rsplit("/", 1)[0] != template_parent:
+                fail(f"{state_label}.source must be a sibling of template")
+            if source in state_sources:
+                fail(f"duplicate state source: {source}")
+            for existing_path in extraction_instance_paths:
+                if source == existing_path or source.startswith(existing_path + "/") or existing_path.startswith(source + "/"):
+                    fail(f"variant state source overlaps another component extraction: {source} and {existing_path}")
+            state_sources.add(source)
+            extraction_instance_paths.add(source)
+            name = require_string(state.get("name"), f"{state_label}.name")
+            if not (name.startswith("[") and name.endswith("]")):
+                fail(f"{state_label}.name must be a bracketed structural state name")
+        if template not in state_sources:
+            fail(f"{label}.template must also appear in states[].source")
+        default_state = require_string(extraction.get("defaultState"), f"{label}.defaultState")
+        if default_state not in state_ids:
+            fail(f"{label}.defaultState must match a states[].id")
+        instances = require_list(extraction.get("instances"), f"{label}.instances")
+        if len(instances) < 2:
+            fail(f"{label}.instances must contain at least two list instances")
+        instance_sources: set[str] = set()
+        instance_names: set[str] = set()
+        for instance_index, instance in enumerate(instances):
+            instance_label = f"{label}.instances[{instance_index}]"
+            source = require_string(instance.get("source"), f"{instance_label}.source")
+            if source not in state_sources:
+                fail(f"{instance_label}.source must match one of the state sources")
+            if source in instance_sources:
+                fail(f"duplicate variant component instance source: {source}")
+            instance_sources.add(source)
+            name = require_string(instance.get("name"), f"{instance_label}.name")
+            if not (name.startswith("[") and name.endswith("]")):
+                fail(f"{instance_label}.name must be a bracketed semantic item name")
+            if name in instance_names:
+                fail(f"duplicate variant component instance name: {name}")
+            instance_names.add(name)
+            state_id = require_string(instance.get("state"), f"{instance_label}.state")
+            if state_id not in state_ids:
+                fail(f"{instance_label}.state must match a states[].id")
+        if instance_sources != state_sources:
+            fail(f"{label}.instances must replace every approved state source exactly once")
+
     asset_targets: set[str] = set()
     for label, entries in (("textureRenames", texture_renames), ("spriteAtlasRenames", atlas_renames)):
         for index, rename in enumerate(entries):
@@ -264,12 +350,25 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         require_string(target.get("path"), f"verify.tightBounds[{index}].path")
     if "requireEnglishNames" in verify and not isinstance(verify["requireEnglishNames"], bool):
         fail("verify.requireEnglishNames must be a boolean")
+    forbidden_name_patterns = verify.get("forbiddenObjectNamePatterns", [])
+    if not isinstance(forbidden_name_patterns, list) or not all(isinstance(pattern, str) and pattern for pattern in forbidden_name_patterns):
+        fail("verify.forbiddenObjectNamePatterns must be a string list")
+    allowed_missing_image_prefixes = verify.get("allowedMissingImagePathPrefixes", [])
+    if not isinstance(allowed_missing_image_prefixes, list) or not all(isinstance(prefix, str) and prefix for prefix in allowed_missing_image_prefixes):
+        fail("verify.allowedMissingImagePathPrefixes must be a string list")
+    if "requireAllPrivateTextureAssetsPrefixed" in verify and not isinstance(verify["requireAllPrivateTextureAssetsPrefixed"], bool):
+        fail("verify.requireAllPrivateTextureAssetsPrefixed must be a boolean")
 
     for key in ("nodes", "components", "objectReferences", "missingComponents", "images", "prefixedTextures"):
         if key in verify and (not isinstance(verify[key], int) or verify[key] < 0):
             fail(f"verify.{key} must be a non-negative integer")
     if verify.get("requireAllImageTexturesPrefixed") and not isinstance(verify.get("texturePathPrefix"), str):
         fail("verify.texturePathPrefix is required when all image textures must be prefixed")
+    if verify.get("requireAllPrivateTextureAssetsPrefixed"):
+        if not isinstance(verify.get("privateTextureDirectory"), str) or not verify["privateTextureDirectory"].startswith("Assets/"):
+            fail("verify.privateTextureDirectory is required when all private Texture assets must be prefixed")
+        if not isinstance(verify.get("texturePathPrefix"), str) or not verify["texturePathPrefix"]:
+            fail("verify.texturePathPrefix is required when all private Texture assets must be prefixed")
 
     return {
         "prefab_path": prefab_path,
@@ -284,6 +383,7 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         "atlas_renames": atlas_renames,
         "component_extractions": component_extractions,
         "state_component_extractions": state_component_extractions,
+        "variant_component_extractions": variant_component_extractions,
         "verify": verify,
     }
 
@@ -296,6 +396,8 @@ def value_or_default(values: dict[str, Any], key: str, default: int = -1) -> int
 def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
     verify = plan["verify"]
     require_english_names = bool(verify.get("requireEnglishNames", False))
+    forbidden_name_patterns = ", ".join(csharp(pattern) for pattern in verify.get("forbiddenObjectNamePatterns", []))
+    allowed_missing_image_prefixes = ", ".join(csharp(prefix) for prefix in verify.get("allowedMissingImagePathPrefixes", []))
     lines = [
         "var reopened = PrefabUtility.LoadPrefabContents(outputPath);",
         "try",
@@ -311,7 +413,9 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
         "    {",
         "        if (image.sprite == null || image.sprite.texture == null)",
         "        {",
-        "            throw new InvalidOperationException(\"Image has a missing Sprite: \" + image.transform.name);",
+        "            var imagePath = TransformPath(image.transform);",
+        "            if (!IsAllowedMissingImage(imagePath, allowedMissingImagePathPrefixes)) throw new InvalidOperationException(\"Image has a missing Sprite: \" + imagePath);",
+        "            continue;",
         "        }",
         "        var texturePath = AssetDatabase.GetAssetPath(image.sprite.texture);",
         "        if (requireAllImageTexturesPrefixed && !texturePath.StartsWith(texturePathPrefix, StringComparison.Ordinal))",
@@ -335,6 +439,13 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
             [
                 "    CollectInvalidNames(reopened.transform, invalidNames);",
                 "    if (invalidNames.Count > 0) throw new InvalidOperationException(\"Non-English semantic object names: \" + string.Join(\", \", invalidNames.ToArray()));",
+            ]
+        )
+    if forbidden_name_patterns:
+        lines.extend(
+            [
+                "    CollectForbiddenNames(reopened.transform, forbiddenObjectNamePatterns, invalidNames);",
+                "    if (invalidNames.Count > 0) throw new InvalidOperationException(\"Forbidden object names: \" + string.Join(\", \", invalidNames.ToArray()));",
             ]
         )
     for index, item in enumerate(verify.get("hierarchy", [])):
@@ -389,10 +500,36 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
             ]
         )
 
+    for extraction in plan["variant_component_extractions"]:
+        state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
+        lines.extend(
+            [
+                f"    var variantComponentAsset_{extraction['id']} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])});",
+                f"    if (variantComponentAsset_{extraction['id']} == null) throw new InvalidOperationException(\"Extracted variant component Prefab did not load: \" + {csharp(extraction['assetPath'])});",
+                f"    var variantCommon_{extraction['id']} = variantComponentAsset_{extraction['id']}.transform.Find(\"[Common]\");",
+                f"    var variantStates_{extraction['id']} = variantComponentAsset_{extraction['id']}.transform.Find(\"[States]\");",
+                f"    if (variantCommon_{extraction['id']} == null || variantStates_{extraction['id']} == null) throw new InvalidOperationException(\"Variant component must contain [Common] and [States]: \" + variantComponentAsset_{extraction['id']}.name);",
+                f"    AssertDirectChildren(variantStates_{extraction['id']}, new[] {{ {state_names} }}, {csharp(extraction['assetPath'] + '/[States]')});",
+            ]
+        )
+        for instance_index, instance in enumerate(extraction["instances"]):
+            instance_path = instance["source"].rsplit("/", 1)[0] + "/" + instance["name"]
+            expected_state = next(state for state in extraction["states"] if state["id"] == instance["state"])
+            lines.extend(
+                [
+                    f"    var variantInstance_{extraction['id']}_{instance_index} = FindByPath(reopened, {csharp(instance_path)});",
+                    f"    AssertNestedPrefabInstance(variantInstance_{extraction['id']}_{instance_index}, {csharp(extraction['assetPath'])});",
+                    f"    AssertVariantState(variantInstance_{extraction['id']}_{instance_index}.transform, {csharp(expected_state['name'])}, {csharp(instance_path)});",
+                ]
+            )
+
     for rename in plan["texture_renames"] + plan["atlas_renames"]:
         final_path = final_asset_path(rename["from"], rename["toName"])
         lines.append(f"    AssertGuid({csharp(final_path)}, {csharp(rename['expectedGuid'])});")
         lines.append(f"    if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(final_path)}) == null) throw new InvalidOperationException(\"Renamed asset did not load: \" + {csharp(final_path)});")
+
+    if verify.get("requireAllPrivateTextureAssetsPrefixed", False):
+        lines.append("    AssertPrivateTextureAssetNames(privateTextureDirectory, texturePathPrefix);")
 
     lines.extend(
         [
@@ -411,6 +548,9 @@ def render(plan: dict[str, Any], mode: str) -> str:
     verify = plan["verify"]
     prefix = verify.get("texturePathPrefix", "")
     require_prefix = bool(verify.get("requireAllImageTexturesPrefixed", False))
+    private_texture_directory = verify.get("privateTextureDirectory", "")
+    forbidden_name_patterns = csharp_string_array(verify.get("forbiddenObjectNamePatterns", []))
+    allowed_missing_image_prefixes = csharp_string_array(verify.get("allowedMissingImagePathPrefixes", []))
     lines = [
         "using System;",
         "using System.Collections.Generic;",
@@ -424,6 +564,9 @@ def render(plan: dict[str, Any], mode: str) -> str:
         f"var outputPath = {csharp(plan['output_path'])};",
         f"var texturePathPrefix = {csharp(prefix)};",
         f"var requireAllImageTexturesPrefixed = {'true' if require_prefix else 'false'};",
+        f"var privateTextureDirectory = {csharp(private_texture_directory)};",
+        f"var forbiddenObjectNamePatterns = {forbidden_name_patterns};",
+        f"var allowedMissingImagePathPrefixes = {allowed_missing_image_prefixes};",
         f"var expectedNodes = {value_or_default(verify, 'nodes')};",
         f"var expectedComponents = {value_or_default(verify, 'components')};",
         f"var expectedObjectReferences = {value_or_default(verify, 'objectReferences')};",
@@ -438,16 +581,42 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    var index = parts.Length > 0 && parts[0] == current.name ? 1 : 0;",
         "    for (; index < parts.Length; index++)",
         "    {",
+        "        var segment = parts[index]; var occurrence = 0; var marker = segment.LastIndexOf('#');",
+        "        if (marker > 0 && marker < segment.Length - 1 && int.TryParse(segment.Substring(marker + 1), out occurrence) && occurrence >= 0) segment = segment.Substring(0, marker); else occurrence = 0;",
         "        Transform next = null;",
+        "        var matched = 0;",
         "        for (var childIndex = 0; childIndex < current.childCount; childIndex++)",
         "        {",
         "            var child = current.GetChild(childIndex);",
-        "            if (child.name == parts[index]) { next = child; break; }",
+        "            if (child.name == segment && matched++ == occurrence) { next = child; break; }",
         "        }",
         "        if (next == null) throw new InvalidOperationException(\"Path was not found: \" + path);",
         "        current = next;",
         "    }",
         "    return current.gameObject;",
+        "}",
+        "",
+        "string TransformPath(Transform node)",
+        "{",
+        "    var names = new List<string>(); for (var current = node; current != null; current = current.parent) names.Add(current.name); names.Reverse(); return string.Join(\"/\", names.ToArray());",
+        "}",
+        "",
+        "bool IsAllowedMissingImage(string path, string[] allowedPrefixes)",
+        "{",
+        "    foreach (var prefix in allowedPrefixes) if (path.StartsWith(prefix, StringComparison.Ordinal)) return true; return false;",
+        "}",
+        "",
+        "void CollectForbiddenNames(Transform node, string[] patterns, List<string> invalidNames)",
+        "{",
+        "    foreach (var pattern in patterns) if (System.Text.RegularExpressions.Regex.IsMatch(node.name, pattern)) { invalidNames.Add(TransformPath(node)); break; }",
+        "    for (var index = 0; index < node.childCount; index++) CollectForbiddenNames(node.GetChild(index), patterns, invalidNames);",
+        "}",
+        "",
+        "void AssertPrivateTextureAssetNames(string directory, string requiredPrefix)",
+        "{",
+        "    var guids = AssetDatabase.FindAssets(\"t:Texture2D\", new[] { directory });",
+        "    var requiredFileNamePrefix = Path.GetFileName(requiredPrefix);",
+        "    foreach (var guid in guids) { var path = AssetDatabase.GUIDToAssetPath(guid); var fileName = Path.GetFileNameWithoutExtension(path); if (!fileName.StartsWith(requiredFileNamePrefix, StringComparison.Ordinal)) throw new InvalidOperationException(\"Private Texture name must start with \" + requiredFileNamePrefix + \": \" + path); }",
         "}",
         "",
         "GameObject CreateWrapper(Transform parent, string name, int siblingIndex)",
@@ -635,6 +804,13 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    }",
         "}",
         "",
+        "void CopyStateRootData(Transform source, Transform destination)",
+        "{",
+        "    var sourceRect = source as RectTransform; var destinationRect = destination as RectTransform;",
+        "    if (sourceRect == null || destinationRect == null) throw new InvalidOperationException(\"State roots must use RectTransform\");",
+        "    destinationRect.anchorMin = sourceRect.anchorMin; destinationRect.anchorMax = sourceRect.anchorMax; destinationRect.pivot = sourceRect.pivot; destinationRect.anchoredPosition3D = Vector3.zero; destinationRect.sizeDelta = sourceRect.sizeDelta; destinationRect.localScale = sourceRect.localScale; destinationRect.localRotation = sourceRect.localRotation;",
+        "}",
+        "",
         "void RemapObjectReferences(Component component, Dictionary<Object, Object> objectMap)",
         "{",
         "    var serialized = new SerializedObject(component); var property = serialized.GetIterator(); var enterChildren = true; var changed = false;",
@@ -711,6 +887,13 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    if (activeCount != 1 || !defaultState.gameObject.activeSelf) throw new InvalidOperationException(\"State component must have exactly one active default state: \" + label);",
         "}",
         "",
+        "void AssertVariantState(Transform instance, string expectedStateName, string label)",
+        "{",
+        "    var common = instance.Find(\"[Common]\"); var states = instance.Find(\"[States]\");",
+        "    if (common == null || states == null) throw new InvalidOperationException(\"Variant component must contain [Common] and [States]: \" + label);",
+        "    AssertExclusiveActiveState(states, expectedStateName, label);",
+        "}",
+        "",
         "GameObject CreateStateComponentPrefab(Transform template, Transform[] sources, string[] stateNames, int defaultStateIndex, string assetPath)",
         "{",
         "    if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null) throw new InvalidOperationException(\"State component Prefab target already exists: \" + assetPath);",
@@ -746,6 +929,41 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    return instance;",
         "}",
         "",
+        "GameObject CreateVariantComponentPrefab(Transform template, Transform[] sources, string[] stateNames, int defaultStateIndex, string assetPath)",
+        "{",
+        "    if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null) throw new InvalidOperationException(\"Variant component Prefab target already exists: \" + assetPath);",
+        "    if (sources == null || stateNames == null || sources.Length != stateNames.Length || defaultStateIndex < 0 || defaultStateIndex >= sources.Length) throw new InvalidOperationException(\"Invalid variant component extraction contract\");",
+        "    var parent = template.parent; if (parent == null) throw new InvalidOperationException(\"Cannot extract variants from the Prefab root\");",
+        "    for (var index = 0; index < sources.Length; index++) if (sources[index].parent != parent) throw new InvalidOperationException(\"Variant sources must be direct siblings: \" + sources[index].name);",
+        "    EnsureAssetFolder(assetPath);",
+        "    var builder = new GameObject(Path.GetFileNameWithoutExtension(assetPath), typeof(RectTransform));",
+        "    builder.transform.SetParent(parent, false); builder.transform.SetSiblingIndex(template.GetSiblingIndex()); builder.layer = template.gameObject.layer; builder.tag = template.gameObject.tag; CopyTransformData(template, builder.transform);",
+        "    var common = new GameObject(\"[Common]\", typeof(RectTransform)); common.transform.SetParent(builder.transform, false); var commonRect = common.GetComponent<RectTransform>(); commonRect.anchorMin = new Vector2(0.5f, 0.5f); commonRect.anchorMax = new Vector2(0.5f, 0.5f); commonRect.pivot = new Vector2(0.5f, 0.5f); commonRect.anchoredPosition3D = Vector3.zero; commonRect.sizeDelta = Vector2.zero; commonRect.localScale = Vector3.one; commonRect.localRotation = Quaternion.identity;",
+        "    var statesContainer = new GameObject(\"[States]\", typeof(RectTransform)); statesContainer.transform.SetParent(builder.transform, false); var statesRect = statesContainer.GetComponent<RectTransform>(); statesRect.anchorMin = new Vector2(0.5f, 0.5f); statesRect.anchorMax = new Vector2(0.5f, 0.5f); statesRect.pivot = new Vector2(0.5f, 0.5f); statesRect.anchoredPosition3D = Vector3.zero; statesRect.sizeDelta = Vector2.zero; statesRect.localScale = Vector3.one; statesRect.localRotation = Quaternion.identity;",
+        "    try",
+        "    {",
+        "        for (var index = 0; index < sources.Length; index++) { var clone = Object.Instantiate(sources[index].gameObject, parent); clone.name = stateNames[index]; clone.transform.SetParent(statesContainer.transform, false); CopyStateRootData(template, clone.transform); clone.SetActive(index == defaultStateIndex); }",
+        "        AssertDirectChildren(builder.transform, new[] { \"[Common]\", \"[States]\" }, builder.name); AssertDirectChildren(statesContainer.transform, stateNames, builder.name + \"/[States]\"); AssertExclusiveActiveState(statesContainer.transform, stateNames[defaultStateIndex], builder.name);",
+        "        var componentAsset = PrefabUtility.SaveAsPrefabAsset(builder, assetPath); if (componentAsset == null) throw new InvalidOperationException(\"Failed to save variant component Prefab: \" + assetPath); return componentAsset;",
+        "    }",
+        "    finally { Object.DestroyImmediate(builder); }",
+        "}",
+        "",
+        "GameObject ReplaceVariantSourceWithComponent(Transform source, string instanceName, string activeStateName, GameObject componentAsset)",
+        "{",
+        "    var parent = source.parent; if (parent == null) throw new InvalidOperationException(\"Cannot replace the Prefab root with a variant component instance\"); var siblingIndex = source.GetSiblingIndex();",
+        "    var beforeCorners = new List<Vector3[]>(); CaptureHierarchyCorners(source, beforeCorners);",
+        "    var instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject; if (instance == null) throw new InvalidOperationException(\"Failed to instantiate variant component Prefab: \" + componentAsset.name);",
+        "    var destination = instance.transform; destination.SetParent(parent, false); destination.SetSiblingIndex(siblingIndex); destination.name = instanceName; destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag; CopyTransformData(source, destination); destination.gameObject.SetActive(source.gameObject.activeSelf);",
+        "    var states = destination.Find(\"[States]\"); if (states == null) throw new InvalidOperationException(\"Variant component has no [States] container: \" + destination.name); for (var index = 0; index < states.childCount; index++) states.GetChild(index).gameObject.SetActive(states.GetChild(index).name == activeStateName); AssertVariantState(destination, activeStateName, destination.name);",
+        "    Object.DestroyImmediate(source.gameObject); AssertHierarchyCorners(states.GetChild(FindStateIndex(states, activeStateName)), beforeCorners, destination.name); return instance;",
+        "}",
+        "",
+        "int FindStateIndex(Transform states, string name)",
+        "{",
+        "    for (var index = 0; index < states.childCount; index++) if (states.GetChild(index).name == name) return index; throw new InvalidOperationException(\"Variant state not found: \" + name);",
+        "}",
+        "",
         "void AssertNestedPrefabInstance(GameObject instance, string assetPath)",
         "{",
         "    if (!PrefabUtility.IsAnyPrefabInstanceRoot(instance)) throw new InvalidOperationException(\"Expected nested Prefab instance: \" + instance.name);",
@@ -761,8 +979,14 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "",
         "void CollectInvalidNames(Transform node, List<string> invalidNames)",
         "{",
-        "    if (!System.Text.RegularExpressions.Regex.IsMatch(node.name, @\"^[A-Za-z0-9_\\[\\]]+$\")) invalidNames.Add(node.name);",
+        "    if (IsNonSemanticObjectName(node.name)) invalidNames.Add(TransformPath(node));",
         "    for (var index = 0; index < node.childCount; index++) CollectInvalidNames(node.GetChild(index), invalidNames);",
+        "}",
+        "",
+        "bool IsNonSemanticObjectName(string name)",
+        "{",
+        "    if (!System.Text.RegularExpressions.Regex.IsMatch(name, @\"^[A-Za-z0-9_\\[\\]]+$\")) return true;",
+        "    return System.Text.RegularExpressions.Regex.IsMatch(name, @\"^(?:\\d+(?:_\\d+)?|\\d+(?:\\.\\d+)?[kKmM]|\\d+[A-Za-z]\\d+[A-Za-z]|[+_-]+|img_v\\d.*|(?:ui|daily)_[A-Za-z0-9_]+)$\");",
         "}",
         "",
     ]
@@ -793,6 +1017,8 @@ def render(plan: dict[str, Any], mode: str) -> str:
         lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
     for extraction in plan["state_component_extractions"]:
         lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"State component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+    for extraction in plan["variant_component_extractions"]:
+        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Variant component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
 
     lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
     lines.extend(
@@ -828,6 +1054,21 @@ def render(plan: dict[str, Any], mode: str) -> str:
             lines.append(f"    var {source_var} = FindByPath(root, {csharp(state['source'])}).transform;")
             source_vars.append(source_var)
         state_extraction_vars.append((template_var, source_vars))
+    variant_extraction_vars: list[tuple[str, list[str], list[str]]] = []
+    for extraction_index, extraction in enumerate(plan["variant_component_extractions"]):
+        template_var = f"variantTemplate{extraction_index}"
+        lines.append(f"    var {template_var} = FindByPath(root, {csharp(extraction['template'])}).transform;")
+        source_vars: list[str] = []
+        for state_index, state in enumerate(extraction["states"]):
+            source_var = f"variantSource{extraction_index}_{state_index}"
+            lines.append(f"    var {source_var} = FindByPath(root, {csharp(state['source'])}).transform;")
+            source_vars.append(source_var)
+        instance_vars: list[str] = []
+        for instance_index, instance in enumerate(extraction["instances"]):
+            instance_var = f"variantInstance{extraction_index}_{instance_index}"
+            lines.append(f"    var {instance_var} = FindByPath(root, {csharp(instance['source'])}).transform;")
+            instance_vars.append(instance_var)
+        variant_extraction_vars.append((template_var, source_vars, instance_vars))
     wrapper_vars: dict[str, str] = {}
     for index, wrapper in enumerate(plan["wrappers"]):
         variable = f"wrapper{index}"
@@ -852,6 +1093,9 @@ def render(plan: dict[str, Any], mode: str) -> str:
     for _, source_vars in state_extraction_vars:
         for source_var in source_vars:
             lines.append(f"    ExcludeHierarchy({source_var}, excludedCornerNodes);")
+    for _, _, instance_vars in variant_extraction_vars:
+        for instance_var in instance_vars:
+            lines.append(f"    ExcludeHierarchy({instance_var}, excludedCornerNodes);")
     lines.append("    CaptureWorldCorners(root.transform, beforeCorners, excludedCornerNodes);")
 
     for index, move in enumerate(plan["moves"]):
@@ -900,6 +1144,23 @@ def render(plan: dict[str, Any], mode: str) -> str:
         component_asset_var = f"stateComponentAsset{extraction_index}"
         lines.append(f"    var {component_asset_var} = CreateStateComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
         lines.append(f"    ReplaceStateSourcesWithComponent({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {component_asset_var});")
+    for extraction_index, extraction in enumerate(plan["variant_component_extractions"]):
+        template_var, source_vars, instance_vars = variant_extraction_vars[extraction_index]
+        default_state_index = next(index for index, state in enumerate(extraction["states"]) if state["id"] == extraction["defaultState"])
+        state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
+        source_array = ", ".join(source_vars)
+        for source_var in source_vars:
+            lines.extend(
+                [
+                    f"    AssertNoNestedPrefabRoots({source_var});",
+                    f"    AssertNoExternalReferences(root.transform, {source_var});",
+                ]
+            )
+        component_asset_var = f"variantComponentAsset{extraction_index}"
+        lines.append(f"    var {component_asset_var} = CreateVariantComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
+        state_names_by_id = {state["id"]: state["name"] for state in extraction["states"]}
+        for instance, instance_var in zip(extraction["instances"], instance_vars):
+            lines.append(f"    ReplaceVariantSourceWithComponent({instance_var}, {csharp(instance['name'])}, {csharp(state_names_by_id[instance['state']])}, {component_asset_var});")
 
     lines.extend(
         [

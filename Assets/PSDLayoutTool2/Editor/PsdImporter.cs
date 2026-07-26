@@ -614,6 +614,26 @@
         }
 
         /// <summary>
+        /// Checks whether the active Profile for a PSD is an orphan whose
+        /// recorded target and configured output Prefab are both absent.
+        /// </summary>
+        public static bool IsMissingHierarchyProfileRecoveryEligible(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+
+            string normalizedAssetPath = assetPath.Replace('\\', '/');
+            string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+            string prefabPath;
+            if (string.IsNullOrEmpty(sourceGuid) ||
+                !PsdGeneratedPrefabPathResolver.TryResolve(
+                    normalizedAssetPath, OutputMode, OutputFolderName, PrefabMode, out prefabPath))
+                return false;
+
+            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
+            return PsdPrefabTransactionalSave.IsMissingTargetRecoveryEligible(profilePath, prefabPath);
+        }
+
+        /// <summary>
         /// Revalidates and applies a previewed hierarchy plan through one exact
         /// Prefab import. The process-local handoff is always cleared, including
         /// cancellation and exceptions, so it cannot leak into a later import.

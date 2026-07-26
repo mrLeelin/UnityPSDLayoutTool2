@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/UI/SevenDayTaskView.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/UI/SevenDayTaskView.prefab"
+  },
+  "prefabName": "SevenDayTaskView",
+  "wrappers": [],
+  "moves": [],
+  "renames": [],
+  "tightBounds": [],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentExtractions": [],
+  "stateComponentExtractions": [],
+  "variantComponentExtractions": [
+    {
+      "id": "task_item",
+      "template": "SevenDayTaskView/[TaskList]/[Task_01]",
+      "assetPath": "Assets/UI/Prefab/Common/SevenDayTaskItem.prefab",
+      "commonName": "[Common]",
+      "statesName": "[States]",
+      "defaultState": "in_progress",
+      "states": [
+        {
+          "id": "in_progress",
+          "source": "SevenDayTaskView/[TaskList]/[Task_01]",
+          "name": "[State_InProgress]"
+        },
+        {
+          "id": "available",
+          "source": "SevenDayTaskView/[TaskList]/[Task_02]",
+          "name": "[State_Available]"
+        },
+        {
+          "id": "locked",
+          "source": "SevenDayTaskView/[TaskList]/[Task_03]",
+          "name": "[State_Locked]"
+        }
+      ],
+      "instances": [
+        {
+          "source": "SevenDayTaskView/[TaskList]/[Task_01]",
+          "name": "[TaskItem_01]",
+          "state": "in_progress"
+        },
+        {
+          "source": "SevenDayTaskView/[TaskList]/[Task_02]",
+          "name": "[TaskItem_02]",
+          "state": "available"
+        },
+        {
+          "source": "SevenDayTaskView/[TaskList]/[Task_03]",
+          "name": "[TaskItem_03]",
+          "state": "locked"
+        }
+      ]
+    }
+  ],
+  "verify": {
+    "directChildren": [
+      {
+        "path": "SevenDayTaskView/[TaskList]",
+        "children": ["[TaskItem_01]", "[TaskItem_02]", "[TaskItem_03]"]
+      }
+    ]
+  }
+}

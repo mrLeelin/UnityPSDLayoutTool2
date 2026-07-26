@@ -794,6 +794,23 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void MissingTargetRecoveryEligibilityRequiresBothRecordedAndConfiguredTargetsToBeAbsent()
+        {
+            PsdHierarchyProfile profile = Profile();
+            profile.targetPrefabPath = SameNamePath;
+            profile.targetPrefabGuid = "missing-guid";
+            AssetDatabase.CreateAsset(profile, ProfilePath);
+
+            Assert.That(PsdPrefabTransactionalSave.IsMissingTargetRecoveryEligible(ProfilePath, TargetPath), Is.True);
+
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+
+            Assert.That(PsdPrefabTransactionalSave.IsMissingTargetRecoveryEligible(ProfilePath, TargetPath), Is.False);
+        }
+
+        [Test]
         public void BoundProfileRejectsNonUiModeBeforePrefabOrProfileBytesCanChange()
         {
             const string settingsFolder = "Assets/PSDLayoutTool2Settings";

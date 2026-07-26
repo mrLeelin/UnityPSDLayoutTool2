@@ -225,7 +225,7 @@
                     // at the bottom of this custom inspector unreachable.
                     if (GUILayout.Button(Localize("生成预制体", "Generate Prefab"), GUILayout.Height(26)))
                     {
-                        PsdImporter.GeneratePrefab(assetPath);
+                        GeneratePrefabWithMissingProfileRecovery(assetPath);
                     }
 
                     if (GUILayout.Button(
@@ -244,30 +244,7 @@
                                 Localize("归档并重新生成", "Archive and Regenerate"),
                                 Localize("取消", "Cancel")))
                         {
-                            try
-                            {
-                                string archivedProfilePath;
-                                string failureReason;
-                                if (!PsdImporter.TryRecoverMissingHierarchyProfileAndGeneratePrefab(
-                                        assetPath, out archivedProfilePath, out failureReason))
-                                {
-                                    EditorUtility.DisplayDialog("PSDLayoutTool2", failureReason, Localize("确定", "OK"));
-                                }
-                                else
-                                {
-                                    EditorUtility.DisplayDialog(
-                                        "PSDLayoutTool2",
-                                        Localize(
-                                            "已归档失效 Profile：\n" + archivedProfilePath + "\n\n已开始重新生成 Prefab。完成后请重新整理层级。",
-                                            "Archived orphaned Profile:\n" + archivedProfilePath + "\n\nPrefab regeneration has started. Organize the hierarchy again when it completes."),
-                                        Localize("确定", "OK"));
-                                }
-                            }
-                            catch (Exception exception)
-                            {
-                                Debug.LogException(exception);
-                                EditorUtility.DisplayDialog("PSDLayoutTool2", exception.Message, Localize("确定", "OK"));
-                            }
+                            RecoverMissingProfileAndGeneratePrefab(assetPath);
                         }
                     }
 
@@ -453,7 +430,7 @@
 
                     if (GUILayout.Button(Localize("生成预制体", "Generate Prefab")))
                     {
-                        PsdImporter.GeneratePrefab(assetPath);
+                        GeneratePrefabWithMissingProfileRecovery(assetPath);
                     }
 
                     GUILayout.Space(3);
@@ -487,6 +464,58 @@
         /// <param name="chinese">Chinese text.</param>
         /// <param name="english">English text.</param>
         /// <returns>Localized text.</returns>
+        private static void GeneratePrefabWithMissingProfileRecovery(string assetPath)
+        {
+            if (!PsdImporter.IsMissingHierarchyProfileRecoveryEligible(assetPath))
+            {
+                PsdImporter.GeneratePrefab(assetPath);
+                return;
+            }
+
+            ConfirmAndRecoverMissingProfile(assetPath);
+        }
+
+        private static void ConfirmAndRecoverMissingProfile(string assetPath)
+        {
+            if (!EditorUtility.DisplayDialog(
+                    "PSDLayoutTool2",
+                    Localize(
+                        "这会归档失效的层级 Profile，并以全新 Prefab 重新生成。旧 Profile 的本地 ID 不能用于新 Prefab；完成后需要再次整理层级。是否继续？",
+                        "This archives the orphaned hierarchy Profile and regenerates a new Prefab. The old Profile local IDs cannot be reused; organize the new Prefab again afterward. Continue?"),
+                    Localize("归档并重新生成", "Archive and Regenerate"),
+                    Localize("取消", "Cancel")))
+                return;
+
+            RecoverMissingProfileAndGeneratePrefab(assetPath);
+        }
+
+        private static void RecoverMissingProfileAndGeneratePrefab(string assetPath)
+        {
+            try
+            {
+                string archivedProfilePath;
+                string failureReason;
+                if (!PsdImporter.TryRecoverMissingHierarchyProfileAndGeneratePrefab(
+                        assetPath, out archivedProfilePath, out failureReason))
+                {
+                    EditorUtility.DisplayDialog("PSDLayoutTool2", failureReason, Localize("确定", "OK"));
+                    return;
+                }
+
+                EditorUtility.DisplayDialog(
+                    "PSDLayoutTool2",
+                    Localize(
+                        "已归档失效 Profile：\n" + archivedProfilePath + "\n\n已开始重新生成 Prefab。完成后请重新整理层级。",
+                        "Archived orphaned Profile:\n" + archivedProfilePath + "\n\nPrefab regeneration has started. Organize the hierarchy again when it completes."),
+                    Localize("确定", "OK"));
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                EditorUtility.DisplayDialog("PSDLayoutTool2", exception.Message, Localize("确定", "OK"));
+            }
+        }
+
         private static string Localize(string chinese, string english)
         {
             return CurrentLanguage == InspectorLanguage.English ? english : chinese;

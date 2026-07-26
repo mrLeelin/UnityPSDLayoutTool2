@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab"
+  },
+  "prefabName": "SevenDayTaskView",
+  "wrappers": [],
+  "moves": [],
+  "renames": [],
+  "tightBounds": [],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentExtractions": [],
+  "stateComponentExtractions": [],
+  "variantComponentExtractions": [
+    {
+      "id": "task_item",
+      "template": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_01_InProgress]",
+      "assetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/Common/SevenDayTaskItem.prefab",
+      "commonName": "[Common]",
+      "statesName": "[States]",
+      "states": [
+        {
+          "id": "in_progress",
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_01_InProgress]",
+          "name": "[State_InProgress]"
+        },
+        {
+          "id": "claimable",
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_02_Claimable]",
+          "name": "[State_Claimable]"
+        },
+        {
+          "id": "available",
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_03_Available]",
+          "name": "[State_Available]"
+        },
+        {
+          "id": "locked",
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_04_Locked]",
+          "name": "[State_Locked]"
+        },
+        {
+          "id": "locked_overlay",
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_05_Locked]",
+          "name": "[State_LockedOverlay]"
+        }
+      ],
+      "defaultState": "in_progress",
+      "instances": [
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_01_InProgress]",
+          "name": "[TaskItem_01]",
+          "state": "in_progress"
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_02_Claimable]",
+          "name": "[TaskItem_02]",
+          "state": "claimable"
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_03_Available]",
+          "name": "[TaskItem_03]",
+          "state": "available"
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_04_Locked]",
+          "name": "[TaskItem_04]",
+          "state": "locked"
+        },
+        {
+          "source": "SevenDayTaskView/AnimatorRoot/[TaskList]/[Task_05_Locked]",
+          "name": "[TaskItem_05]",
+          "state": "locked_overlay"
+        }
+      ]
+    }
+  ],
+  "verify": {
+    "missingComponents": 0,
+    "requireEnglishNames": true,
+    "forbiddenObjectNamePatterns": [
+      "^(?:\\d+|\\+|img_v3_|ui_daily_|daily_)",
+      "^\\d+(?:_\\d+)?$",
+      "^\\d+(?:\\.\\d+)?[kKmM]$",
+      "^\\d+[A-Za-z]\\d+[A-Za-z]$",
+      "^day(?:_\\d+)?$"
+    ],
+    "allowedMissingImagePathPrefixes": [
+      "SevenDayTaskView/AnimatorRoot/Down_1/"
+    ],
+    "texturePathPrefix": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/SevenDayTaskView_",
+    "privateTextureDirectory": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture",
+    "requireAllPrivateTextureAssetsPrefixed": true,
+    "hierarchy": [
+      {
+        "path": "SevenDayTaskView/AnimatorRoot/[TaskList]",
+        "childCount": 5
+      }
+    ],
+    "directChildren": [
+      {
+        "path": "SevenDayTaskView/AnimatorRoot/[TaskList]",
+        "children": [
+          "[TaskItem_05]",
+          "[TaskItem_04]",
+          "[TaskItem_03]",
+          "[TaskItem_02]",
+          "[TaskItem_01]"
+        ]
+      }
+    ],
+    "tightBounds": []
+  }
+}

@@ -63,6 +63,24 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
+        /// Reports whether the Profile can only be recovered by archiving it and
+        /// creating a new Prefab baseline. This is a read-only preflight; the
+        /// archive operation repeats the check before moving any asset.
+        /// </summary>
+        public static bool IsMissingTargetRecoveryEligible(string profilePath, string configuredPrefabPath)
+        {
+            PsdHierarchyProfile profile = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
+            if (profile == null) return false;
+
+            string recordedPrefabPath = NormalizeAssetPath(profile.targetPrefabPath);
+            string normalizedConfiguredPath = NormalizeAssetPath(configuredPrefabPath);
+            return !string.IsNullOrEmpty(recordedPrefabPath) &&
+                   !string.IsNullOrEmpty(normalizedConfiguredPath) &&
+                   AssetDatabase.LoadAssetAtPath<GameObject>(recordedPrefabPath) == null &&
+                   AssetDatabase.LoadAssetAtPath<GameObject>(normalizedConfiguredPath) == null;
+        }
+
+        /// <summary>
         /// Moves an orphaned Profile out of the active GUID-keyed location so a
         /// user-confirmed full regeneration can establish a new baseline. This
         /// never runs as part of ordinary import because it deliberately drops

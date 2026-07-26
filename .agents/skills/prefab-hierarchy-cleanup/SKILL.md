@@ -1,6 +1,6 @@
 ---
 name: prefab-hierarchy-cleanup
-description: Safely organize an existing Unity Prefab into a complete semantic hierarchy while preserving its visual result and serialized behavior. Use only when explicitly invoked as $prefab-hierarchy-cleanup to inspect, plan, review, and optionally apply cleanup to a Unity .prefab; especially when the existing hierarchy is flat, PSD-generated, or hard to maintain. Also use for an explicitly approved in-place cleanup that semantically renames the Prefab's private Texture and SpriteAtlas assets to PrefabName_SemanticName, or extracts verified repeated UI units into a shared nested component Prefab while preserving instance overrides. Do not use for Figma cleanup, PSD import, Figma-to-Prefab generation, or runtime UI redesign.
+description: Safely organize an existing Unity Prefab into a complete semantic hierarchy while preserving its visual result and serialized behavior. Use only when explicitly invoked as $prefab-hierarchy-cleanup to inspect, plan, review, and optionally apply cleanup to a Unity .prefab; especially when the existing hierarchy is flat, PSD-generated, or hard to maintain. Also use for an explicitly approved in-place cleanup that replaces PSD/export node names with semantic English names, renames every proven-private Texture and SpriteAtlas asset to PrefabName_SemanticName, extracts verified repeated UI units into a shared nested component Prefab, or turns repeated list rows with different visual states into one Prefab/Common stateful component with per-instance active-state overrides. Do not use for Figma cleanup, PSD import, Figma-to-Prefab generation, or runtime UI redesign.
 ---
 
 # Prefab Hierarchy Cleanup
@@ -12,7 +12,7 @@ Organize existing Unity Prefabs by transferring the *discipline* of Figma hierar
 Use the bundled scripts for every execution. Do not write one-off `.tmp` C# payloads for a cleanup operation.
 
 1. Inspect first through `scripts/snapshot_prefab_hierarchy.ps1`; it is read-only and emits the complete tree, RectTransform state, UI components, Sprite/Texture paths, TMP state, nested Prefab boundaries, and counts.
-2. For component extraction, pass the snapshot `Result` text to `scripts/find_prefab_component_candidates.py`. It identifies repeated sibling units with the same recursive component signature and reports only advisory candidates.
+2. For component extraction, pass the snapshot `Result` text to `scripts/find_prefab_component_candidates.py`. It separately reports repeated sibling instances and strongly overlapping sibling state candidates; both reports are advisory.
 3. Create a JSON plan from [references/plan-format.md](references/plan-format.md). Start from [examples/sample-plan.json](examples/sample-plan.json).
 4. Validate and execute through `scripts/run_prefab_hierarchy_cleanup.ps1`.
 5. Use `-ApplyConfirmed` only after the user has reviewed and explicitly confirmed the complete tree, output mode, `PrefabName`, and every Texture/Atlas rename.
@@ -60,13 +60,16 @@ finally { $OutputEncoding = $priorOutputEncoding }
 - Start read-only. Inspect the complete hierarchy, components, RectTransforms, active state, asset references, and nested Prefab instances before proposing changes.
 - Infer semantic groups from geometry, component/type patterns, visible hierarchy, repeated structures, and existing names. Names are a hint, never sole membership evidence.
 - Produce one complete final-tree proposal before applying. Include nested repeated units such as `[Item_*]`, cards, progress segments, map markers, tabs, or rows; do not stop at coarse region wrappers.
-- Assign every moved source node exactly once. Rename every exported object to a concise English semantic name; retain brackets only for structural groups such as `[ContentCard_1]`. Never delete, duplicate, merge, replace components, or change bindings merely to make the tree look cleaner.
+- Assign every moved source node exactly once. Rename every exported object to a concise English semantic name; retain brackets only for structural groups such as `[ContentCard_1]`. A text value (`20`, `+`, `150k`, `login 1 day`), PSD token (`daily_*`, `ui_*`), UUID-like export name, punctuation-only name, or duplicate ambiguous sibling name is not semantic. Name the role, such as `RewardActivityAmount`, `RewardPlusLabel`, `MissionIcon`, or `MissionDescription`. With `verify.requireEnglishNames`, the runner rejects those baseline invalid forms even when a plan omits custom patterns. Never delete, duplicate, merge, replace components, or change bindings merely to make the tree look cleaner.
 - Treat ambiguous membership, a likely serialized binding, nested Prefab boundary, or unfamiliar custom component as a blocker. State the ambiguity and leave that portion unchanged rather than guessing.
 - Require explicit user confirmation of the reviewed plan before writing. A request to inspect or organize does not authorize an immediate asset mutation.
 - For a `PrefabName_SemanticName` rename, infer an English PascalCase `PrefabName` from the UI's actual function, require it to end in `View`, and ask the user to confirm it before mutation.
-- Rename only Texture and SpriteAtlas assets that are proven private to the named Prefab. Use `AssetDatabase.RenameAsset`; never use file-system moves or create replacement `.meta` files.
+- Rename only Texture and SpriteAtlas assets that are proven private to the named Prefab. When a private Texture directory is in scope, list and rename every Texture in it to `PrefabName_SemanticName`; do not leave a partial prefix migration. Use `AssetDatabase.RenameAsset`; never use file-system moves or create replacement `.meta` files.
 - Extract a shared component Prefab only from an explicitly reviewed `componentExtractions` plan. Require at least two structurally matching units, no nested Prefab boundary inside a source unit, and no external serialized reference to that unit. Do not extract merely because items look similar.
 - Treat the candidate scanner as a discovery aid, not a safety proof. Its result must still pass the Unity-side nested-boundary, external-reference, and structural-signature checks during apply.
+- Treat visually overlapping alternatives as states, not repeated instances. A `stateComponentExtractions` plan replaces all approved sibling state sources with one nested component containing a `[States]` container. It requires an explicit semantic state mapping and a single default state; never infer those names from layer order alone.
+- Treat simultaneously visible list rows that share one logical component but display different visual states as a `variantComponentExtractions` family. Create exactly one shared Prefab under `Prefab/Common/`; its root must contain direct `[Common]` and `[States]` children. Replace every approved source row with an instance of that same Prefab, preserve the row's list position and instance name, and activate exactly the mapped state in each instance. `[Common]` may be empty only when no element can be proven common to every state without changing the rendering.
+- State extraction creates hierarchy and the initial active branch only. It does not create or attach a runtime state-switching script, Animator, or binding; use the project's established presentation owner to switch the branches later.
 
 ## Workflow
 
@@ -96,6 +99,8 @@ Use these evidence rules:
 - Use generic structural names only when the role is supported by evidence: `[Background]`, `[Header]`, `[Content]`, `[ListRoot]`, `[ScrollView]`, `[Viewport]`, `[TabBar]`, `[ProgressSection]`, `[Navigation]`, `[BottomHUD]`.
 - Preserve the existing relative sibling order inside every inferred group unless visual/order evidence supports a different order.
 - Identify a component family only when repeated units have the same recursive component/child signature and their differences are legitimate instance data such as Sprite, text, color, visibility, or RectTransform values. Treat a non-matching signature, nested Prefab, or an external reference as a blocker.
+- Identify a state family only when sibling roots occupy the same visual slot and are mutually exclusive. Their internal signatures may differ. Do not turn vertically or horizontally spaced list entries into states merely because their names share a prefix.
+- Identify a variant component family when two or more visible list rows occupy different list slots but are the same logical item in different visual states. Do not collapse those rows into a single list instance. Instead, make each row an instance of one stateful component and keep its own selected state.
 - Include inactive and hidden nodes in analysis. Do not remove them because they are currently invisible.
 - Do not introduce `ScrollView > Viewport > Content` based only on a vertical layout; require an existing `ScrollRect` or clear project-specific structural evidence.
 - Do not cross a nested Prefab instance boundary or alter source Prefab structure without separately identifying the owning asset and obtaining explicit approval for that asset.
@@ -108,6 +113,7 @@ Before review, validate the plan locally:
 - every structural wrapper has a centered `RectTransform` whose bounds exactly enclose its direct child `RectTransform` bounds; do not use full-stretch containers for a semantic group;
 - every repeated unit has an explicit direct-child membership contract in `verify.directChildren`; validate names and sibling order after saving rather than relying on a child count alone;
 - every proposed component family has an explicit template, output asset path, and complete instance list; it runs in a separate plan after hierarchy cleanup so source paths and external-reference checks remain unambiguous;
+- every variant component family has a complete semantic state map, one output `Prefab/Common` asset, every source row exactly once, an explicit per-instance state, and direct `[Common]` + `[States]` verification;
 - every proposed wrapper has at least two evidence-backed members, unless it is a single semantic region required to contain a verified set of child groups;
 - ambiguous nodes remain in place and are reported.
 
@@ -118,6 +124,8 @@ Present a compact, complete proposed tree. Identify:
 - target Prefab and whether output will be a copy or in-place;
 - new wrappers and each member path;
 - each component family: template instance, all member instances, shared nested Prefab path, and the instance-level properties expected to vary;
+- each state family: all source paths, semantic state IDs/names, selected default state, output nested Prefab path, and the existing owner expected to toggle branches at runtime;
+- each variant component family: its source rows, all semantic state IDs/names, output path under `Prefab/Common`, per-row instance name/state mapping, and whether `[Common]` is intentionally empty;
 - every scanner candidate that was rejected, when a similar-looking unit was left unextracted;
 - unchanged/ambiguous nodes and why they were left untouched;
 - expected invariants and verification checks.
@@ -135,6 +143,8 @@ After confirmation, run `scripts/run_prefab_hierarchy_cleanup.ps1 -ApplyConfirme
 - Load with `PrefabUtility.LoadPrefabContents`.
 - Create only the approved wrapper `GameObject`s, transfer the approved transforms under them, preserve sibling order, then tighten each wrapper to its direct-child bounds while preserving every existing child's world corners.
 - For a standalone `componentExtractions` plan, save a named shared component Prefab from the approved template, replace every approved source unit with a nested instance, and copy every source value into the instance as an override. The operation rejects a structural mismatch, nested source Prefab, external reference, or existing output asset.
+- For a standalone `stateComponentExtractions` plan, clone the approved sibling state roots under one `[States]` container, activate only the reviewed default state, replace all state roots with one nested instance, and reject nested Prefabs, external references, non-sibling sources, or existing output assets.
+- For a standalone `variantComponentExtractions` plan, create one shared component with direct `[Common]` and `[States]` children, clone each approved visual state under `[States]`, then replace every source list row with a nested instance of that component and activate the reviewed state for that row. It rejects nested source Prefabs, external references, overlapping source paths, incomplete instance coverage, or an existing output asset.
 - Save the copied output with `PrefabUtility.SaveAsPrefabAsset`, or save the original only with explicit in-place authorization.
 - Unload Prefab contents in a `finally` path.
 
@@ -154,6 +164,9 @@ Reopen the saved Prefab and compare it with the before snapshot. Report evidence
 - all object names are English semantic names; no PSD/export, Chinese, or punctuation-heavy source names remain;
 - preserved active states, component counts/types, object references, Sprite/TMP/font/material assignments, and nested Prefab boundaries;
 - each extracted unit is a nested Prefab instance sourced from the approved shared component asset, with every affected RectTransform world corner preserved within `0.01`;
+- each state component is a nested Prefab instance with one direct `[States]` container, all approved state branch names in order, exactly one active default branch, and every state branch's world corners preserved within `0.01`;
+- each variant component is a nested instance of the one reviewed `Prefab/Common` asset, has direct `[Common]` and `[States]` containers, contains every approved state branch in order, and has exactly its mapped branch active;
+- all private Texture files in scope use the exact `PrefabName_` filename prefix, and `verify.forbiddenObjectNamePatterns` rejects residual PSD/export or text-value node names;
 - `Missing Component = 0`;
 - visual comparison in Prefab Stage when available.
 
@@ -166,6 +179,7 @@ If any invariant fails, preserve the original, do not describe the cleanup as co
 - Do not access Figma, use Figma MCP, or treat Figma node/component semantics as Unity data.
 - Do not generate a Prefab from a PSD or Figma design.
 - Do not infer or attach runtime scripts, serialized bindings, Animator transitions, interaction semantics, or asset replacements.
+- Do not infer state semantics, default state, or a runtime state-switching mechanism from visual overlap alone.
 - Do not make a coarse tree appear complete through cosmetic names alone.
 
 ## Invocation Examples
