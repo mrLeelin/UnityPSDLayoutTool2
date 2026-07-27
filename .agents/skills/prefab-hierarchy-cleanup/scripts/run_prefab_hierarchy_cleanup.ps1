@@ -34,6 +34,22 @@ if (-not (Test-Path -LiteralPath $PlanPath)) {
     throw "PlanPath does not exist: $PlanPath"
 }
 
+try {
+    $rawPlan = Get-Content -LiteralPath $PlanPath -Raw | ConvertFrom-Json
+}
+catch {
+    throw "PlanPath does not contain valid JSON: $($_.Exception.Message)"
+}
+
+$prefabAssetPath = ([string]$rawPlan.prefabAssetPath).Trim().Replace('\', '/')
+$outputMode = ([string]$rawPlan.output.mode).Trim()
+$outputAssetPath = ([string]$rawPlan.output.assetPath).Trim().Replace('\', '/')
+if ([string]::IsNullOrWhiteSpace($prefabAssetPath) -or
+    $outputMode -ne 'in_place' -or
+    -not [string]::Equals($outputAssetPath, $prefabAssetPath, [System.StringComparison]::Ordinal)) {
+    throw "This cleanup only supports in-place output: output.mode must be 'in_place' and output.assetPath must exactly equal prefabAssetPath. Copy and .cleaned.prefab outputs are not allowed."
+}
+
 $skillRoot = Split-Path -Parent $PSScriptRoot
 $renderer = Join-Path $PSScriptRoot "render_prefab_cleanup.py"
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "prefab-hierarchy-cleanup"

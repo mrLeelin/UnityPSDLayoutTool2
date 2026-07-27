@@ -7,8 +7,8 @@ namespace PsdLayoutTool2
     using UnityEngine;
 
     /// <summary>
-    /// Resolves the exact generated Prefab for a PSD and launches the configured
-    /// external AI organizer only when that Prefab exists.
+    /// Resolves the exact generated Prefab for a PSD and opens the in-editor
+    /// AI chat only when that Prefab exists.
     /// </summary>
     public static class PsdHierarchyOrganizerEntry
     {
@@ -52,7 +52,7 @@ namespace PsdLayoutTool2
             return false;
         }
 
-        public static bool TryLaunch(string sourcePsdAssetPath, out string error)
+        public static bool TryOpenChat(string sourcePsdAssetPath, out string error)
         {
             PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
             string targetPrefabPath;
@@ -70,10 +70,9 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            return PsdHierarchyExternalAiLauncher.TryLaunch(
+            return PsdHierarchyChatWindow.TryOpen(
                 sourcePsdAssetPath,
                 targetPrefabPath,
-                PsdLayoutProjectSettings.instance.ResolveExternalAiSettings(),
                 out error);
         }
 

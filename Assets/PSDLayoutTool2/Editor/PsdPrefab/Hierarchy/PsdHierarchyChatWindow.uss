@@ -1,0 +1,201 @@
+.psd-hierarchy-chat {
+    flex-grow: 1;
+    padding: 12px;
+    background-color: rgb(31, 34, 39);
+}
+
+.psd-hierarchy-chat-header {
+    padding: 12px;
+    margin-bottom: 10px;
+    background-color: rgb(42, 47, 54);
+    border-left-width: 3px;
+    border-left-color: rgb(93, 158, 229);
+    border-top-width: 1px;
+    border-right-width: 1px;
+    border-bottom-width: 1px;
+    border-top-color: rgb(66, 73, 82);
+    border-right-color: rgb(66, 73, 82);
+    border-bottom-color: rgb(66, 73, 82);
+}
+
+.psd-hierarchy-chat-title-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.psd-hierarchy-chat-title {
+    color: rgb(244, 246, 249);
+    font-size: 15px;
+    unity-font-style: bold;
+}
+
+.psd-hierarchy-chat-target-caption {
+    margin-top: 10px;
+    color: rgb(150, 161, 174);
+    font-size: 10px;
+}
+
+.psd-hierarchy-chat-target {
+    margin-top: 2px;
+    color: rgb(207, 214, 223);
+    font-size: 11px;
+    white-space: normal;
+}
+
+.psd-hierarchy-chat-agent-info {
+    margin-top: 8px;
+    color: rgb(190, 216, 242);
+    font-size: 11px;
+    white-space: normal;
+}
+
+.psd-hierarchy-chat-resource-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 9px;
+}
+
+.psd-hierarchy-chat-resource-button {
+    height: 24px;
+    margin-right: 6px;
+    margin-bottom: 2px;
+    padding-left: 8px;
+    padding-right: 8px;
+    color: rgb(196, 220, 242);
+    background-color: rgb(48, 78, 106);
+    border-width: 1px;
+    border-color: rgb(77, 119, 153);
+    font-size: 10px;
+}
+
+.psd-hierarchy-chat-resource-button:hover {
+    background-color: rgb(57, 94, 126);
+    border-color: rgb(112, 165, 207);
+}
+
+.psd-hierarchy-chat-resource-button:disabled {
+    color: rgb(135, 145, 156);
+    background-color: rgb(54, 58, 64);
+    border-color: rgb(73, 78, 86);
+}
+
+.psd-hierarchy-chat-open-cli {
+    align-self: flex-start;
+    height: 24px;
+    margin-top: 7px;
+    padding-left: 8px;
+    padding-right: 8px;
+    color: rgb(201, 232, 214);
+    background-color: rgb(48, 88, 66);
+    border-width: 1px;
+    border-color: rgb(76, 132, 98);
+    font-size: 10px;
+}
+
+.psd-hierarchy-chat-open-cli:hover {
+    background-color: rgb(59, 106, 79);
+    border-color: rgb(108, 168, 128);
+}
+
+.psd-hierarchy-chat-open-cli:disabled {
+    color: rgb(135, 145, 156);
+    background-color: rgb(54, 58, 64);
+    border-color: rgb(73, 78, 86);
+}
+
+.psd-hierarchy-chat-messages {
+    flex-grow: 1;
+    min-height: 300px;
+    padding: 8px;
+    background-color: rgb(25, 28, 32);
+    border-width: 1px;
+    border-color: rgb(57, 63, 70);
+}
+
+.psd-hierarchy-chat-message {
+    margin-bottom: 8px;
+    padding: 9px 10px;
+    border-left-width: 3px;
+    border-left-color: rgb(104, 113, 124);
+    background-color: rgb(45, 50, 57);
+}
+
+.psd-hierarchy-chat-message-user {
+    border-left-color: rgb(93, 158, 229);
+    background-color: rgb(42, 53, 67);
+}
+
+.psd-hierarchy-chat-message-assistant {
+    border-left-color: rgb(89, 181, 135);
+    background-color: rgb(42, 55, 49);
+}
+
+.psd-hierarchy-chat-message-system {
+    border-left-color: rgb(217, 170, 77);
+    background-color: rgb(59, 53, 42);
+}
+
+.psd-hierarchy-chat-thinking {
+    margin-bottom: 8px;
+    padding: 9px 10px;
+    border-left-width: 3px;
+    border-left-color: rgb(89, 181, 135);
+    background-color: rgb(38, 57, 49);
+}
+
+.psd-hierarchy-chat-thinking-content {
+    margin-top: 5px;
+    color: rgb(185, 226, 202);
+    font-size: 12px;
+    white-space: normal;
+}
+
+.psd-hierarchy-chat-message-role {
+    color: rgb(170, 181, 194);
+    font-size: 10px;
+    unity-font-style: bold;
+}
+
+.psd-hierarchy-chat-message-content {
+    margin-top: 5px;
+    color: rgb(239, 242, 246);
+    font-size: 12px;
+    white-space: normal;
+}
+
+.psd-hierarchy-chat-composer {
+    margin-top: 10px;
+    padding: 8px;
+    background-color: rgb(42, 47, 54);
+    border-width: 1px;
+    border-color: rgb(66, 73, 82);
+}
+
+.psd-hierarchy-chat-draft {
+    min-height: 68px;
+    max-height: 110px;
+}
+
+.psd-hierarchy-chat-footer {
+    flex-direction: row;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
+.psd-hierarchy-chat-status {
+    color: rgb(183, 211, 242);
+    background-color: rgb(48, 78, 106);
+    padding: 3px 7px;
+    font-size: 10px;
+}
+
+.psd-hierarchy-chat-send {
+    min-width: 86px;
+    height: 26px;
+}
+
+.psd-hierarchy-chat-empty-state {
+    padding: 16px;
+    color: rgb(205, 212, 221);
+}

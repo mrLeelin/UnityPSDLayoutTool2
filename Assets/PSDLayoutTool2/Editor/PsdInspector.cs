@@ -39,16 +39,6 @@
         private const string UseUnityUIPrefKey = "PsdLayoutTool2.UseUnityUI";
 
         /// <summary>
-        /// EditorPrefs key for target canvas hierarchy path.
-        /// </summary>
-        private const string TargetCanvasPathPrefKey = "PsdLayoutTool2.TargetCanvasPath";
-
-        /// <summary>
-        /// EditorPrefs key for preserving aspect ratio while scaling to target canvas.
-        /// </summary>
-        private const string PreserveAspectPrefKey = "PsdLayoutTool2.PreserveAspectWhenScalingToCanvas";
-
-        /// <summary>
         /// EditorPrefs key for auto anchor by name.
         /// </summary>
         private const string AutoAnchorByNamePrefKey = "PsdLayoutTool2.EnableAutoAnchorByName";
@@ -141,19 +131,11 @@
                 hasSavedUseUnityUI,
                 EditorPrefs.GetBool(UseUnityUIPrefKey, true));
 
-            if (EditorPrefs.HasKey(TargetCanvasPathPrefKey))
-            {
-                PsdImporter.TargetCanvasPath = EditorPrefs.GetString(TargetCanvasPathPrefKey, string.Empty);
-            }
-
-            // PSD pixels are the default coordinate system. Do not restore an
-            // older global preference that could silently rescale a new PSD.
+            // Target Canvas and target-canvas scaling are intentionally not exposed by this Inspector.
+            // Clear legacy preferences so an older UI selection cannot affect new generation runs.
+            PsdImporter.TargetCanvasPath = string.Empty;
             PsdImporter.ScaleToTargetCanvas = false;
-
-            if (EditorPrefs.HasKey(PreserveAspectPrefKey))
-            {
-                PsdImporter.PreserveAspectWhenScalingToCanvas = EditorPrefs.GetBool(PreserveAspectPrefKey, true);
-            }
+            PsdImporter.PreserveAspectWhenScalingToCanvas = true;
 
             if (EditorPrefs.HasKey(AutoAnchorByNamePrefKey))
             {
@@ -220,71 +202,6 @@
 
                     GUILayout.Label(Localize("<b>PSD 布局工具 2</b>", "<b>PSD Layout Tool 2</b>"), guiStyle, GUILayout.Height(23));
 
-                    // Keep the primary action above the native TextureImporter preview.  Unity can reserve
-                    // most of the Inspector height for that preview, which otherwise makes the action buttons
-                    // at the bottom of this custom inspector unreachable.
-                    if (GUILayout.Button(Localize("生成预制体", "Generate Prefab"), GUILayout.Height(26)))
-                    {
-                        GeneratePrefabWithMissingProfileRecovery(assetPath);
-                    }
-
-                    if (GUILayout.Button(
-                            new GUIContent(
-                                Localize("目标预制体丢失：归档层级配置后重新生成", "Target Prefab Missing: Archive Profile and Regenerate"),
-                                Localize(
-                                    "仅当层级配置记录的预制体和当前输出预制体都丢失时可用。旧 Profile 会移到 OrphanedHierarchyProfiles 备份，重新生成后需要再次整理层级。",
-                                    "Available only when both the Profile target and configured output Prefab are missing. The old Profile is moved to OrphanedHierarchyProfiles before regeneration; organize the new Prefab again afterward.")),
-                            GUILayout.Height(24)))
-                    {
-                        if (EditorUtility.DisplayDialog(
-                                "PSDLayoutTool2",
-                                Localize(
-                                    "这会归档失效的层级 Profile，并以全新 Prefab 重新生成。旧 Profile 的本地 ID 不能用于新 Prefab；完成后需要再次整理层级。是否继续？",
-                                    "This archives the orphaned hierarchy Profile and regenerates a new Prefab. The old Profile local IDs cannot be reused; organize the new Prefab again afterward. Continue?"),
-                                Localize("归档并重新生成", "Archive and Regenerate"),
-                                Localize("取消", "Cancel")))
-                        {
-                            RecoverMissingProfileAndGeneratePrefab(assetPath);
-                        }
-                    }
-
-                    if (GUILayout.Button(
-                            new GUIContent(
-                                Localize("打开全局配置", "Open Global Settings"),
-                                Localize(
-                                    "选择项目中的 PSDLayoutProjectSettings 配置资产。输出规则、字体、材质和公共资源前缀都在该资产的 Inspector 中编辑。",
-                                    "Selects the project PSDLayoutProjectSettings asset. Output rules, fonts, materials, and Common asset prefixes are edited in that asset Inspector.")),
-                            GUILayout.Height(24)))
-                    {
-                        PsdLayoutProjectSettingsAsset.OpenInInspector();
-                    }
-
-                    string hierarchyTargetPath;
-                    string hierarchyUnavailableReason;
-                    bool hierarchyOrganizerAvailable = PsdHierarchyOrganizerEntry.TryResolvePrefabAvailability(
-                        assetPath,
-                        PsdImporter.OutputMode,
-                        PsdImporter.OutputFolderName,
-                        PsdImporter.PrefabMode,
-                        path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
-                        out hierarchyTargetPath,
-                        out hierarchyUnavailableReason);
-                    if (hierarchyOrganizerAvailable)
-                    {
-                        if (GUILayout.Button(
-                                new GUIContent(
-                                    PsdHierarchyOrganizerEntry.AiButtonLabel,
-                                    "在全局配置指定的终端中启动 AI，并把整理技能与当前生成的 Prefab 发送给 AI。"),
-                                GUILayout.Height(24)))
-                        {
-                            string launchError;
-                            if (!PsdHierarchyOrganizerEntry.TryLaunch(assetPath, out launchError))
-                            {
-                                EditorUtility.DisplayDialog("PSDLayoutTool2", launchError, "确定");
-                            }
-                        }
-                    }
-
                     EditorGUI.BeginChangeCheck();
                     GUIContent useUnityUILabel = LocalizedContent(
                         "使用 Unity UI",
@@ -295,54 +212,6 @@
 
                     if (PsdImporter.UseUnityUI)
                     {
-                        UnityEngine.Canvas currentCanvas = FindCanvasByHierarchyPath(PsdImporter.TargetCanvasPath);
-                        GUIContent targetCanvasLabel = LocalizedContent(
-                            "目标 Canvas（可选）",
-                            "Target Canvas (Optional)",
-                            "指定后：生成结果会挂到这个 Canvas 下，并按 Canvas 的像素坐标对齐。\n留空：按旧行为自动创建一个 World Space Canvas。",
-                            "When set, generated results are parented under this canvas and aligned in canvas pixel coordinates.\nWhen empty, legacy behavior creates a World Space canvas automatically.");
-                        UnityEngine.Canvas selectedCanvas = (UnityEngine.Canvas)EditorGUILayout.ObjectField(
-                            targetCanvasLabel,
-                            currentCanvas,
-                            typeof(UnityEngine.Canvas),
-                            true);
-
-                        if (selectedCanvas != currentCanvas)
-                        {
-                            PsdImporter.TargetCanvasPath = selectedCanvas != null ? GetHierarchyPath(selectedCanvas.transform) : string.Empty;
-                        }
-
-                        if (!string.IsNullOrEmpty(PsdImporter.TargetCanvasPath))
-                        {
-                            EditorGUILayout.LabelField(Localize("Canvas 路径", "Canvas Path"), PsdImporter.TargetCanvasPath);
-                            if (currentCanvas == null)
-                            {
-                                EditorGUILayout.HelpBox(
-                                    Localize(
-                                        "未在当前场景找到该 Canvas，将回退为自动创建 Canvas。请重新选择目标 Canvas。",
-                                        "The canvas was not found in the current scene. Import will fall back to auto-created canvas. Please reselect the target canvas."),
-                                    MessageType.Warning);
-                            }
-                        }
-
-                        GUIContent scaleToCanvasLabel = LocalizedContent(
-                            "匹配目标 Canvas 尺寸",
-                            "Scale To Target Canvas",
-                            "默认关闭，保持 PSD 1:1 像素尺寸。仅在明确需要适配目标 Canvas 时开启。",
-                            "Disabled by default to keep strict 1:1 PSD pixel sizes. Enable only when target Canvas scaling is explicitly required.");
-                        PsdImporter.ScaleToTargetCanvas = EditorGUILayout.Toggle(scaleToCanvasLabel, PsdImporter.ScaleToTargetCanvas);
-
-                        EditorGUI.BeginDisabledGroup(!PsdImporter.ScaleToTargetCanvas);
-                        GUIContent preserveAspectLabel = LocalizedContent(
-                            "保持宽高比（不拉伸）",
-                            "Preserve Aspect Ratio (No Stretch)",
-                            "开启后使用等比缩放适配目标 Canvas，避免 X/Y 比例不一致导致的拉伸。\n关闭后按宽高分别缩放（可能拉伸）。",
-                            "When enabled, uses uniform scaling to avoid stretch when X/Y ratios differ.\nWhen disabled, scales X and Y independently (may stretch).");
-                        PsdImporter.PreserveAspectWhenScalingToCanvas = EditorGUILayout.Toggle(
-                            preserveAspectLabel,
-                            PsdImporter.PreserveAspectWhenScalingToCanvas);
-                        EditorGUI.EndDisabledGroup();
-
                         GUIContent autoAnchorLabel = LocalizedContent(
                             "按名称自动设置锚点",
                             "Auto Anchor By Name",
@@ -369,8 +238,6 @@
                     if (EditorGUI.EndChangeCheck())
                     {
                         EditorPrefs.SetBool(UseUnityUIPrefKey, PsdImporter.UseUnityUI);
-                        EditorPrefs.SetString(TargetCanvasPathPrefKey, PsdImporter.TargetCanvasPath ?? string.Empty);
-                        EditorPrefs.SetBool(PreserveAspectPrefKey, PsdImporter.PreserveAspectWhenScalingToCanvas);
                         EditorPrefs.SetBool(AutoAnchorByNamePrefKey, PsdImporter.EnableAutoAnchorByName);
                         EditorPrefs.SetBool(RootGlobalAnchorPrefKey, PsdImporter.RootUseGlobalAnchorByDefault);
                         EditorPrefs.SetBool(TextMeshProEnabledPrefKey, PsdImporter.UseTextMeshPro);
@@ -378,9 +245,43 @@
 
                     EditorGUILayout.HelpBox(
                         Localize(
-                            "提示：标签匹配不区分大小写。|Button 仅在启用 Unity UI 时生效，|Animation 仅在非 UI 模式生效。\n命名前缀必须写在名称开头，例如：左上关闭按钮、全局背景。\n上/下/左/右 会按单点锚点处理，不会做边缘拉伸；全局 会让 UI 节点四边距为 0，其中图片会额外按比例覆盖父节点。\n如果文件夹本身带锚点前缀，则其中没有前缀的子项会默认继承父级锚点。\n所有导入生成的 Unity UI Image 都会默认开启 Image.preserveAspect。\"保持宽高比（不拉伸）\" 只控制 PSD 到目标 Canvas 的坐标缩放，不等同于 Image.preserveAspect。",
-                            "Tip: Tag matching is case-insensitive. |Button only works when Unity UI is enabled, and |Animation only works in non-UI mode.\nAnchor prefixes must be written at the start of the name, for example: 左上CloseButton or 全局Background.\n上/下/左/右 use point anchors instead of edge stretch; 全局 gives zero margins, and images additionally cover the parent while keeping aspect.\nIf a folder has an anchor prefix, child items without their own prefix inherit the parent's anchor.\nAll generated Unity UI Images enable Image.preserveAspect by default. \"Preserve Aspect Ratio (No Stretch)\" only controls PSD-to-canvas coordinate scaling and is not the same as Image.preserveAspect."),
+                            "提示：标签匹配不区分大小写。|Button 仅在启用 Unity UI 时生效，|Animation 仅在非 UI 模式生效。\n命名前缀必须写在名称开头，例如：左上关闭按钮、全局背景。\n上/下/左/右 会按单点锚点处理，不会做边缘拉伸；全局 会让 UI 节点四边距为 0，其中图片会额外按比例覆盖父节点。\n如果文件夹本身带锚点前缀，则其中没有前缀的子项会默认继承父级锚点。\n所有导入生成的 Unity UI Image 都会默认开启 Image.preserveAspect。",
+                            "Tip: Tag matching is case-insensitive. |Button only works when Unity UI is enabled, and |Animation only works in non-UI mode.\nAnchor prefixes must be written at the start of the name, for example: 左上CloseButton or 全局Background.\n上/下/左/右 use point anchors instead of edge stretch; 全局 gives zero margins, and images additionally cover the parent while keeping aspect.\nIf a folder has an anchor prefix, child items without their own prefix inherit the parent's anchor.\nAll generated Unity UI Images enable Image.preserveAspect by default."),
                         MessageType.Info);
+
+                    if (GUILayout.Button(
+                            new GUIContent(
+                                Localize("打开全局配置", "Open Global Settings"),
+                                Localize(
+                                    "选择项目中的 PSDLayoutProjectSettings 配置资产。输出规则、字体、材质和公共资源前缀都在该资产的 Inspector 中编辑。",
+                                    "Selects the project PSDLayoutProjectSettings asset. Output rules, fonts, materials, and Common asset prefixes are edited in that asset Inspector.")),
+                            GUILayout.Height(24)))
+                    {
+                        PsdLayoutProjectSettingsAsset.OpenInInspector();
+                    }
+
+                    string hierarchyTargetPath;
+                    string hierarchyUnavailableReason;
+                    bool hierarchyOrganizerAvailable = PsdHierarchyOrganizerEntry.TryResolvePrefabAvailability(
+                        assetPath,
+                        PsdImporter.OutputMode,
+                        PsdImporter.OutputFolderName,
+                        PsdImporter.PrefabMode,
+                        path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
+                        out hierarchyTargetPath,
+                        out hierarchyUnavailableReason);
+                    if (hierarchyOrganizerAvailable && GUILayout.Button(
+                            new GUIContent(
+                                PsdHierarchyOrganizerEntry.AiButtonLabel,
+                                "在 Unity 编辑器中打开 AI 对话窗口，并把整理技能与当前目标 Prefab 发送给 AI。"),
+                            GUILayout.Height(24)))
+                    {
+                        string chatError;
+                        if (!PsdHierarchyOrganizerEntry.TryOpenChat(assetPath, out chatError))
+                        {
+                            EditorUtility.DisplayDialog("PSDLayoutTool2", chatError, "确定");
+                        }
+                    }
 
                     EditorGUILayout.BeginHorizontal();
                     if (GUILayout.Button(Localize("打开日志目录", "Open Log Folder")))
@@ -395,12 +296,6 @@
 
                     EditorGUILayout.EndHorizontal();
 
-                    // draw our custom buttons for PSD files
-                    if (GUILayout.Button(Localize("导出图层为纹理", "Export Layers As Textures")))
-                    {
-                        PsdImporter.ExportLayersAsTextures(assetPath);
-                    }
-
                     if (GUILayout.Button(Localize("打开九宫图工具", "Open 9-Slice Tool")))
                     {
                         PsdNineSliceWindow.Open(AssetDatabase.GetAssetPath(Selection.activeObject));
@@ -409,11 +304,6 @@
                     if (GUILayout.Button(Localize("生成/刷新公共资源映射表", "Generate / Refresh Common Asset Catalog")))
                     {
                         SettingsService.OpenProjectSettings("Project/PSD Layout Tool/Common Asset Catalog");
-                    }
-
-                    if (GUILayout.Button(Localize("在当前场景中布局", "Layout In Current Scene")))
-                    {
-                        PsdImporter.LayoutInCurrentScene(assetPath);
                     }
 
                     if (GUILayout.Button(Localize("生成预制体", "Generate Prefab")))

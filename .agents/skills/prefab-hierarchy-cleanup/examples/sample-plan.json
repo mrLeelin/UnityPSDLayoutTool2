@@ -2,8 +2,8 @@
   "version": 1,
   "prefabAssetPath": "Assets/UI/RewardPanel.prefab",
   "output": {
-    "mode": "copy",
-    "assetPath": "Assets/UI/RewardPanel.cleaned.prefab"
+    "mode": "in_place",
+    "assetPath": "Assets/UI/RewardPanel.prefab"
   },
   "prefabName": "RewardPanelView",
   "wrappers": [

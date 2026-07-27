@@ -9,8 +9,8 @@ Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed executio
   "version": 1,
   "prefabAssetPath": "Assets/UI/RewardPanel.prefab",
   "output": {
-    "mode": "copy",
-    "assetPath": "Assets/UI/RewardPanel.cleaned.prefab"
+    "mode": "in_place",
+    "assetPath": "Assets/UI/RewardPanel.prefab"
   },
   "prefabName": "RewardPanelView",
   "wrappers": [],
@@ -28,7 +28,7 @@ Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed executio
 }
 ```
 
-`output.mode` is `copy` or `in_place`. A copy needs a distinct `output.assetPath`; an in-place plan must use the source `prefabAssetPath` as `output.assetPath`.
+`output.mode` must be `in_place`, and `output.assetPath` must exactly equal `prefabAssetPath`. This cleanup never creates a `.cleaned.prefab`, duplicate, or replacement for the target Prefab.
 
 All asset paths are project-relative paths beginning with `Assets/`. `prefabName` must use PascalCase and end with `View` when Texture or SpriteAtlas assets are renamed.
 
@@ -78,7 +78,11 @@ Bind repeated labels, badges, counters, and interaction targets to their matchin
 
 Use inner-to-outer order so nested groups are tightened before their parents. When omitted, every new wrapper is tightened automatically.
 
-## Shared Component Extraction
+## Optional Component Extraction
+
+The `componentExtractions`, `stateComponentExtractions`, `variantComponentExtractions`, and `statefulComponentExtractions` fields are allowed only in a separate plan that the user explicitly approved. They may create a reusable component under `Prefab/Common`, but do not change the rule that the main target Prefab is saved in place at `prefabAssetPath`. Do not include them in an ordinary hierarchy-cleanup chat request.
+
+### Shared Component Extraction
 
 Run extraction in a separate plan after hierarchy cleanup. Each entry creates one shared nested Prefab from `template` and replaces every `instances` entry with an instance of that asset. The template must be included in `instances`.
 
@@ -105,7 +109,7 @@ Use this only when all listed units have the same recursive component/child sign
 
 The component asset root is named from the output filename (for example `ContentCard.prefab` has a `ContentCard` root); every original instance name is preserved as an instance override. A plan may contain multiple families only when none of their instance paths overlap or nest. `componentExtractions` cannot be combined with `wrappers`, `moves`, `renames`, or `tightBounds`; first complete the hierarchy plan, then extract the approved families in a second plan.
 
-## Stateful Component Extraction
+### Stateful Component Extraction
 
 Use `stateComponentExtractions` when several **direct sibling roots occupy one visual slot** but represent mutually exclusive states of one logical component. This collapses those roots into one nested Prefab instead of producing one nested instance per source.
 
@@ -131,7 +135,7 @@ All `states[].source` paths must be direct siblings of `template`; `template` mu
 
 State branches may have different recursive signatures, but the sources must be visually overlapping and semantically mutually exclusive. Do not use this for simultaneously visible list entries. `stateComponentExtractions` cannot be combined with `componentExtractions`, `wrappers`, `moves`, `renames`, or `tightBounds`; use a separate plan. It rejects nested source Prefabs, external serialized references, source-path overlap, and existing output assets. A state extraction adds the component root and its `[States]` container to the final hierarchy, so update optional node/component counts in `verify` by two for each extracted state component.
 
-## Variant List Component Extraction
+### Variant List Component Extraction
 
 Use `variantComponentExtractions` when several rows are visible at different list positions but represent one logical component in different visual states. It creates one shared Prefab and replaces every listed row with a nested instance. It does **not** collapse the rows into a single visible object.
 
@@ -162,7 +166,7 @@ Use `variantComponentExtractions` when several rows are visible at different lis
 
 `states[].source` must be direct siblings of `template`; every state source must appear exactly once in `instances`. The output root has direct `[Common]` and `[States]` children. Move only members proven common to every state into `[Common]`; leave it empty if no such proof exists. The runner normalizes each state root to the component origin, preserves each instance's original list position, and activates exactly `instances[].state`. `variantComponentExtractions` cannot be combined with the other extraction modes or hierarchy changes.
 
-## Stateful Repeated Component Extraction
+### Stateful Repeated Component Extraction
 
 Use `statefulComponentExtractions` for repeated items that contain real shared content plus a small number of visual states. It creates one shared nested Prefab, moves the reviewed shared members into `[Common]`, creates one state branch per visual state, and replaces every source item with an instance of that asset. `[States]` is created before `[Common]`, preserving the expected UI draw order for shared labels over state backgrounds.
 

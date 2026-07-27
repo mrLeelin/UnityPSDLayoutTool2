@@ -1,0 +1,69 @@
+namespace PsdLayoutTool2.Tests
+{
+    using NUnit.Framework;
+    using UnityEngine;
+    using UnityEngine.UIElements;
+
+    public sealed class PsdHierarchyChatWindowTests
+    {
+        [Test]
+        public void WindowBuildsOnlyChatControls()
+        {
+            PsdHierarchyChatWindow window = ScriptableObject.CreateInstance<PsdHierarchyChatWindow>();
+            try
+            {
+                window.InitializeForTests(new PsdHierarchyChatContext(
+                    "E:/Project/Demo/monsterhunter",
+                    "Assets/UI/Source.psd",
+                    "Assets/UI/Prefab/ExampleView.prefab",
+                    "E:/Project/Demo/monsterhunter/Skill.md",
+                    "Skill Body",
+                    "Prefab Body"));
+
+                VisualElement root = window.rootVisualElement.Q<VisualElement>(PsdHierarchyChatWindow.RootElementName);
+                Assert.That(root, Is.Not.Null);
+                Assert.That(window.rootVisualElement.Q<ScrollView>(PsdHierarchyChatWindow.MessagesElementName), Is.Not.Null);
+                Assert.That(
+                    window.rootVisualElement.Q<VisualElement>(PsdHierarchyChatWindow.ThinkingIndicatorElementName),
+                    Is.Null);
+                Assert.That(window.rootVisualElement.Q<TextField>(PsdHierarchyChatWindow.DraftFieldName), Is.Not.Null);
+                Assert.That(window.rootVisualElement.Q<Button>(PsdHierarchyChatWindow.SendButtonName), Is.Not.Null);
+                Assert.That(
+                    window.rootVisualElement.Q<Label>(PsdHierarchyChatWindow.AgentInfoElementName).text,
+                    Does.Contain("Agent"));
+                Button openCliButton = window.rootVisualElement.Q<Button>(PsdHierarchyChatWindow.OpenCliButtonName);
+                Assert.That(openCliButton, Is.Not.Null);
+                Assert.That(openCliButton.enabledSelf, Is.False);
+                Assert.That(
+                    window.rootVisualElement.Q<Button>(PsdHierarchyChatWindow.PingPsdButtonName).text,
+                    Is.EqualTo("Source.psd"));
+                Assert.That(
+                    window.rootVisualElement.Q<Button>(PsdHierarchyChatWindow.PingPrefabButtonName).text,
+                    Is.EqualTo("ExampleView.prefab"));
+                Assert.That(window.rootVisualElement.Q<VisualElement>("psd-hierarchy-chat-provider"), Is.Null);
+                Assert.That(window.rootVisualElement.Q<TextField>("psd-hierarchy-chat-api-key"), Is.Null);
+                Assert.That(
+                    window.rootVisualElement.Q<Label>("psd-hierarchy-chat-status").text,
+                    Is.EqualTo("准备分析"));
+
+                window.ShowThinkingIndicator();
+                VisualElement thinkingIndicator = window.rootVisualElement.Q<VisualElement>(
+                    PsdHierarchyChatWindow.ThinkingIndicatorElementName);
+                Assert.That(thinkingIndicator, Is.Not.Null);
+                Assert.That(thinkingIndicator.Q<Label>().text, Is.EqualTo("AI"));
+                Assert.That(
+                    thinkingIndicator.Q<Label>(className: "psd-hierarchy-chat-thinking-content").text,
+                    Does.Contain("正在分析"));
+
+                window.HideThinkingIndicator();
+                Assert.That(
+                    window.rootVisualElement.Q<VisualElement>(PsdHierarchyChatWindow.ThinkingIndicatorElementName),
+                    Is.Null);
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+    }
+}

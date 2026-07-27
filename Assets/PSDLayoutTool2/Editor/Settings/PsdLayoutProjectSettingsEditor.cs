@@ -1,5 +1,8 @@
 namespace PsdLayoutTool2
 {
+    using System;
+    using System.Collections.Generic;
+    using System.IO;
     using TMPro;
     using UnityEditor;
     using UnityEngine;
@@ -12,7 +15,7 @@ namespace PsdLayoutTool2
         public override void OnInspectorGUI()
         {
             PsdLayoutProjectSettings settings = (PsdLayoutProjectSettings)target;
-            DrawExternalAiSettings(settings);
+            DrawHierarchyAiSettings(settings);
             EditorGUILayout.Space();
             DrawOutputSettings(settings);
             EditorGUILayout.Space();
@@ -21,50 +24,133 @@ namespace PsdLayoutTool2
             DrawCommonAssetNaming(settings);
         }
 
-        private static void DrawExternalAiSettings(PsdLayoutProjectSettings settings)
+        private static void DrawHierarchyAiSettings(PsdLayoutProjectSettings settings)
         {
-            PsdHierarchyExternalAiSettingsSnapshot snapshot = settings.ResolveExternalAiSettings();
-            EditorGUILayout.LabelField("AI 整理", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "点击 PSD Inspector 的“AI整理”后，会打开所选终端并执行下面的 AI 命令。整理技能和目标 Prefab 会作为任务上下文传给 AI。",
-                MessageType.Info);
+            EditorGUILayout.LabelField("AI 层级整理", EditorStyles.boldLabel);
+            IReadOnlyList<PsdHierarchyAiCliDescriptor> installed = PsdHierarchyAiCliDiscovery.FindInstalled();
+            if (installed.Count == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "未检测到 Claude 或 Codex CLI。请先安装其中一个并重启 Unity，再使用 AI整理。",
+                    MessageType.Error);
+                return;
+            }
+
+            PsdHierarchyAiSettingsSnapshot snapshot = settings.ResolveHierarchyAiSettings();
+            int selectedIndex = FindProviderIndex(installed, snapshot.provider);
+            if (selectedIndex < 0)
+            {
+                selectedIndex = 0;
+                settings.SetHierarchyAiSettings(
+                    installed[selectedIndex].provider,
+                    snapshot.connectionMode,
+                    snapshot.customEndpoint,
+                    snapshot.customModel);
+                snapshot = settings.ResolveHierarchyAiSettings();
+            }
+
+            var displayNames = new string[installed.Count];
+            for (int index = 0; index < installed.Count; index++)
+            {
+                displayNames[index] = installed[index].displayName;
+            }
 
             EditorGUI.BeginChangeCheck();
-            PsdHierarchyAiTerminal terminal = (PsdHierarchyAiTerminal)EditorGUILayout.EnumPopup(
-                "终端",
-                snapshot.terminal);
-            string terminalExecutablePath = EditorGUILayout.TextField(
-                new GUIContent("终端路径（可选）", "留空时使用所选终端的默认可执行路径。"),
-                snapshot.terminalExecutablePath);
-            string aiCommand = EditorGUILayout.TextField(
-                new GUIContent("AI 命令", "例如 codex 或 claude，也可以填写可执行文件的完整路径。"),
-                snapshot.aiCommand);
-            string aiArguments = EditorGUILayout.TextField(
-                new GUIContent("AI 命令参数（可选）", "这些参数会原样追加在任务提示之前。"),
-                snapshot.aiArguments);
-            string skillPath = EditorGUILayout.TextField(
-                new GUIContent("整理技能路径", "支持相对项目根目录或绝对路径。"),
-                snapshot.skillPath);
+            int providerIndex = EditorGUILayout.Popup("AI", selectedIndex, displayNames);
+            int connectionModeIndex = EditorGUILayout.Popup(
+                "连接方式",
+                snapshot.connectionMode == PsdHierarchyAiConnectionMode.CustomApi ? 1 : 0,
+                new[] { "默认（本机 CLI）", "自定义 API" });
+            PsdHierarchyAiConnectionMode connectionMode = connectionModeIndex == 1
+                ? PsdHierarchyAiConnectionMode.CustomApi
+                : PsdHierarchyAiConnectionMode.LocalCli;
+            string endpoint = snapshot.customEndpoint;
+            string model = snapshot.customModel;
+            if (connectionMode == PsdHierarchyAiConnectionMode.LocalCli)
+            {
+                EditorGUILayout.HelpBox(
+                    "默认：后台调用本机 " + installed[providerIndex].displayName +
+                    " CLI，不会打开外部终端，也不需要填写 API Key。",
+                    MessageType.Info);
+            }
+            else
+            {
+                endpoint = EditorGUILayout.TextField(
+                    new GUIContent("自定义 API 地址", "留空时使用所选 AI 的官方默认地址。"),
+                    endpoint);
+                model = EditorGUILayout.TextField(
+                    new GUIContent("模型", "留空时使用所选 AI 的默认模型。"),
+                    model);
+                DrawStoredApiKey(installed[providerIndex].provider);
+            }
+
             if (EditorGUI.EndChangeCheck())
             {
                 try
                 {
-                    settings.SetExternalAiSettings(
-                        terminal,
-                        terminalExecutablePath,
-                        aiCommand,
-                        aiArguments,
-                        skillPath);
+                    settings.SetHierarchyAiSettings(
+                        installed[providerIndex].provider,
+                        connectionMode,
+                        endpoint,
+                        model);
                 }
-                catch (System.ArgumentException exception)
+                catch (ArgumentException exception)
                 {
                     EditorGUILayout.HelpBox(exception.Message, MessageType.Error);
                 }
             }
+        }
 
-            if (!snapshot.TryValidate(out string error))
+        private static int FindProviderIndex(
+            IReadOnlyList<PsdHierarchyAiCliDescriptor> installed,
+            PsdHierarchyAiProvider provider)
+        {
+            for (int index = 0; index < installed.Count; index++)
             {
-                EditorGUILayout.HelpBox(error, MessageType.Error);
+                if (installed[index].provider == provider)
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        private static void DrawStoredApiKey(PsdHierarchyAiProvider provider)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            var secretStore = new PsdHierarchyAiSecretStore();
+            string existingKey = string.Empty;
+            try
+            {
+                secretStore.TryReadApiKey(projectRoot, provider, out existingKey);
+            }
+            catch (InvalidOperationException exception)
+            {
+                EditorGUILayout.HelpBox(exception.Message, MessageType.Error);
+            }
+
+            EditorGUI.BeginChangeCheck();
+            string apiKey = EditorGUILayout.PasswordField(
+                new GUIContent("API Key（本机加密保存）", "不会写入项目配置或 Git。清空并确认后会删除本机保存的 Key。"),
+                existingKey);
+            if (EditorGUI.EndChangeCheck())
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(apiKey))
+                    {
+                        secretStore.ClearApiKey(projectRoot, provider);
+                    }
+                    else
+                    {
+                        secretStore.SaveApiKey(projectRoot, provider, apiKey);
+                    }
+                }
+                catch (InvalidOperationException exception)
+                {
+                    EditorGUILayout.HelpBox(exception.Message, MessageType.Error);
+                }
             }
         }
 

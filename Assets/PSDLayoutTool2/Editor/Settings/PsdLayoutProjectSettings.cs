@@ -288,7 +288,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 2;
+        private const int CurrentSettingsVersion = 4;
 
         [SerializeField]
         private int settingsVersion;
@@ -304,8 +304,7 @@ namespace PsdLayoutTool2
         private PsdLayoutProjectOutputSettings outputSettings = new PsdLayoutProjectOutputSettings();
 
         [SerializeField]
-        private PsdHierarchyExternalAiSettings externalAiSettings =
-            new PsdHierarchyExternalAiSettings();
+        private PsdHierarchyAiSettings hierarchyAiSettings = new PsdHierarchyAiSettings();
 
         internal static PsdLayoutProjectSettings instance => PsdLayoutProjectSettingsAsset.GetOrCreate();
 
@@ -336,26 +335,20 @@ namespace PsdLayoutTool2
             return outputSettings.Resolve();
         }
 
-        internal PsdHierarchyExternalAiSettingsSnapshot ResolveExternalAiSettings()
+        internal PsdHierarchyAiSettingsSnapshot ResolveHierarchyAiSettings()
         {
             EnsureData();
-            return externalAiSettings.Resolve();
+            return hierarchyAiSettings.Resolve();
         }
 
-        internal void SetExternalAiSettings(
-            PsdHierarchyAiTerminal terminal,
-            string terminalExecutablePath,
-            string aiCommand,
-            string aiArguments,
-            string skillPath)
+        internal void SetHierarchyAiSettings(
+            PsdHierarchyAiProvider provider,
+            PsdHierarchyAiConnectionMode connectionMode,
+            string customEndpoint,
+            string customModel)
         {
             EnsureData();
-            if (externalAiSettings.Set(
-                    terminal,
-                    terminalExecutablePath,
-                    aiCommand,
-                    aiArguments,
-                    skillPath))
+            if (hierarchyAiSettings.Set(provider, connectionMode, customEndpoint, customModel))
             {
                 SaveAsset();
             }
@@ -452,9 +445,9 @@ namespace PsdLayoutTool2
                 changed = true;
             }
 
-            if (externalAiSettings == null)
+            if (hierarchyAiSettings == null)
             {
-                externalAiSettings = new PsdHierarchyExternalAiSettings();
+                hierarchyAiSettings = new PsdHierarchyAiSettings();
                 changed = true;
             }
 

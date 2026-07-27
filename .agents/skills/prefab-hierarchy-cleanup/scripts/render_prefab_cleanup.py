@@ -67,12 +67,10 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         fail("output must be an object")
     output_mode = require_string(output.get("mode"), "output.mode")
     output_path = asset_path(output.get("assetPath"), "output.assetPath")
-    if output_mode not in {"copy", "in_place"}:
-        fail("output.mode must be copy or in_place")
-    if output_mode == "copy" and output_path == prefab_path:
-        fail("copy output.assetPath must differ from prefabAssetPath")
-    if output_mode == "in_place" and output_path != prefab_path:
-        fail("in_place output.assetPath must equal prefabAssetPath")
+    if output_mode != "in_place":
+        fail("output.mode must be in_place; this cleanup never creates a copy or .cleaned.prefab")
+    if output_path != prefab_path:
+        fail("in_place output.assetPath must exactly equal prefabAssetPath")
 
     prefab_name = require_string(raw.get("prefabName"), "prefabName")
     wrappers = require_list(raw.get("wrappers", []), "wrappers")
@@ -1262,7 +1260,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
     lines.extend(
         [
             "if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null) throw new InvalidOperationException(\"Prefab did not load: \" + prefabPath);",
-            "if (outputPath != prefabPath && AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(outputPath) != null) throw new InvalidOperationException(\"Refusing to overwrite copy output: \" + outputPath);",
+            "if (!string.Equals(outputPath, prefabPath, StringComparison.Ordinal)) throw new InvalidOperationException(\"Cleanup must save only the exact target Prefab in place.\");",
         ]
     )
 
