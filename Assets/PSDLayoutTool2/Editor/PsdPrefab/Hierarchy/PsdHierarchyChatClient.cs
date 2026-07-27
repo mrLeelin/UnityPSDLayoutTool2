@@ -127,6 +127,9 @@ namespace PsdLayoutTool2
             builder.AppendLine("You are assisting with a Unity Prefab hierarchy cleanup from inside the Unity Editor.");
             builder.AppendLine("The user supplied the exact cleanup skill and target Prefab below.");
             builder.AppendLine("Inspect first and provide a complete, reviewable plan. Do not claim to have edited a local asset: this chat has no local file-write capability.");
+            builder.AppendLine("This is an analysis-only chat. Do not create or modify JSON plan files.");
+            builder.AppendLine("Do not invoke PowerShell, Python, or the cleanup runner.");
+            builder.AppendLine("Return the complete plan directly in the chat reply. Do not attempt file writes before or after replying.");
             builder.AppendLine("The only allowed output mode is in_place: output.assetPath must exactly equal the supplied target Prefab path.");
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
             builder.AppendLine("Do not propose, create, copy, or offer a .cleaned.prefab or any other replacement Prefab. Any later approved cleanup must target the supplied Prefab in place while preserving visual layout, generated assets, bindings, and unrelated components.");

@@ -6,6 +6,7 @@
     "assetPath": "Assets/UI/RewardPanel.prefab"
   },
   "prefabName": "RewardPanelView",
+  "componentFamilyDecisions": [],
   "wrappers": [
     {
       "id": "content",

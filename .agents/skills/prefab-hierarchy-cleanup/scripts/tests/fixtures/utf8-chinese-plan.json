@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab"
+  },
+  "prefabName": "SevenDayTaskView",
+  "notes": "组"
+}

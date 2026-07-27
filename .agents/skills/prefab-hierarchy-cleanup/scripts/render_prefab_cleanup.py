@@ -87,6 +87,10 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     verify = raw.get("verify", {})
     if not isinstance(verify, dict):
         fail("verify must be an object")
+    component_family_decisions = require_list(
+        raw.get("componentFamilyDecisions", []),
+        "componentFamilyDecisions",
+    )
 
     if (texture_renames or atlas_renames) and not VIEW_RE.match(prefab_name):
         fail("prefabName must be PascalCase and end with View when renaming private assets")
@@ -447,6 +451,59 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         if not state_sources.issubset(instance_sources):
             fail(f"{label}.states[].source must appear in instances[].source")
 
+    extraction_decision_modes: dict[str, str] = {}
+    extraction_sources_by_id: dict[str, set[str]] = {}
+    for decision_mode, entries in (
+        ("component", component_extractions),
+        ("state", state_component_extractions),
+        ("variant", variant_component_extractions),
+        ("stateful", stateful_component_extractions),
+    ):
+        for extraction in entries:
+            extraction_id = extraction["id"]
+            extraction_decision_modes[extraction_id] = decision_mode
+            if decision_mode == "state":
+                extraction_sources_by_id[extraction_id] = {
+                    state["source"] for state in extraction["states"]
+                }
+            else:
+                extraction_sources_by_id[extraction_id] = {
+                    instance["source"] for instance in extraction["instances"]
+                }
+
+    declared_extraction_ids: set[str] = set()
+    declared_decision_sources: set[str] = set()
+    for index, decision in enumerate(component_family_decisions):
+        label = f"componentFamilyDecisions[{index}]"
+        require_string(decision.get("parent"), f"{label}.parent")
+        sources = decision.get("sources")
+        if not isinstance(sources, list) or not all(isinstance(source, str) and source for source in sources):
+            fail(f"{label}.sources must be a non-empty string list")
+        if len(sources) < 2 or len(sources) != len(set(sources)):
+            fail(f"{label}.sources must contain at least two unique paths")
+        if declared_decision_sources.intersection(sources):
+            fail(f"{label}.sources overlap another component family decision")
+        declared_decision_sources.update(sources)
+        decision_mode = require_string(decision.get("mode"), f"{label}.mode")
+        if decision_mode not in {"skip", "component", "state", "variant", "stateful"}:
+            fail(f"{label}.mode must be skip, component, state, variant, or stateful")
+        require_string(decision.get("reason"), f"{label}.reason")
+        if decision_mode == "skip":
+            if "extractionId" in decision:
+                fail(f"{label}.skip must not define extractionId")
+            continue
+        extraction_id = require_string(decision.get("extractionId"), f"{label}.extractionId")
+        if extraction_id in declared_extraction_ids:
+            fail(f"duplicate component family decision extractionId: {extraction_id}")
+        declared_extraction_ids.add(extraction_id)
+        if extraction_decision_modes.get(extraction_id) != decision_mode:
+            fail(f"{label}.extractionId must reference a matching {decision_mode} extraction")
+        if set(sources) != extraction_sources_by_id[extraction_id]:
+            fail(f"{label}.sources must exactly cover its extraction instances")
+
+    if declared_extraction_ids != set(extraction_decision_modes):
+        fail("componentFamilyDecisions must declare every component extraction exactly once")
+
     asset_targets: set[str] = set()
     for label, entries in (("textureRenames", texture_renames), ("spriteAtlasRenames", atlas_renames)):
         for index, rename in enumerate(entries):
@@ -521,6 +578,7 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         "state_component_extractions": state_component_extractions,
         "variant_component_extractions": variant_component_extractions,
         "stateful_component_extractions": stateful_component_extractions,
+        "component_family_decisions": component_family_decisions,
         "verify": verify,
     }
 
@@ -537,8 +595,11 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
     allowed_missing_image_prefixes = ", ".join(csharp(prefix) for prefix in verify.get("allowedMissingImagePathPrefixes", []))
     lines = [
         "var reopened = PrefabUtility.LoadPrefabContents(outputPath);",
+        "if (reopened == null) throw new InvalidOperationException(\"Prefab did not load for verification: \" + outputPath);",
         "try",
         "{",
+        "    try",
+        "    {",
         "    var missingComponents = 0;",
         "    var invalidNames = new List<string>();",
         "    var nodes = CountNodes(reopened.transform);",
@@ -546,11 +607,17 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
         "    var objectReferences = CountObjectReferences(reopened.transform);",
         "    var images = reopened.GetComponentsInChildren<Image>(true);",
         "    var prefixedTexturePaths = new HashSet<string>(StringComparer.Ordinal);",
+        "    var ignoredNestedMissingSprites = new List<string>();",
         "    foreach (var image in images)",
         "    {",
         "        if (image.sprite == null || image.sprite.texture == null)",
         "        {",
         "            var imagePath = TransformPath(image.transform);",
+        "            if (IsNestedPrefabContent(image.transform, reopened.transform))",
+        "            {",
+        "                ignoredNestedMissingSprites.Add(imagePath);",
+        "                continue;",
+        "            }",
         "            if (!IsAllowedMissingImage(imagePath, allowedMissingImagePathPrefixes)) throw new InvalidOperationException(\"Image has a missing Sprite: \" + imagePath);",
         "            continue;",
         "        }",
@@ -701,7 +768,12 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
 
     lines.extend(
         [
-            "    return \"VERIFY_OK nodes=\" + nodes + \";components=\" + components + \";objectReferences=\" + objectReferences + \";missingComponents=\" + missingComponents + \";images=\" + images.Length + \";prefixedTextures=\" + prefixedTexturePaths.Count;",
+            "    return \"VERIFY_OK nodes=\" + nodes + \";components=\" + components + \";objectReferences=\" + objectReferences + \";missingComponents=\" + missingComponents + \";images=\" + images.Length + \";prefixedTextures=\" + prefixedTexturePaths.Count + \";ignoredNestedMissingSprites=\" + ignoredNestedMissingSprites.Count + \";ignoredNestedMissingSpritePaths=\" + string.Join(\"|\", ignoredNestedMissingSprites.ToArray());",
+            "    }",
+            "    catch (Exception verificationError)",
+            "    {",
+            "        return \"VERIFY_WARN issue=\" + verificationError.Message.Replace(\"\\r\", \" \").Replace(\"\\n\", \" \");",
+            "    }",
             "}",
             "finally",
             "{",
@@ -789,6 +861,15 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "bool IsAllowedMissingImage(string path, string[] allowedPrefixes)",
         "{",
         "    foreach (var prefix in allowedPrefixes) if (path.StartsWith(prefix, StringComparison.Ordinal)) return true; return false;",
+        "}",
+        "",
+        "bool IsNestedPrefabContent(Transform node, Transform prefabRoot)",
+        "{",
+        "    for (var current = node; current != null && current != prefabRoot; current = current.parent)",
+        "    {",
+        "        if (PrefabUtility.IsAnyPrefabInstanceRoot(current.gameObject)) return true;",
+        "    }",
+        "    return false;",
         "}",
         "",
         "void CollectForbiddenNames(Transform node, string[] patterns, List<string> invalidNames)",

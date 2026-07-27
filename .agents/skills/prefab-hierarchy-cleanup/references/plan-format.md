@@ -20,6 +20,7 @@ Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed executio
   "tightBounds": [],
   "textureRenames": [],
   "spriteAtlasRenames": [],
+  "componentFamilyDecisions": [],
   "componentExtractions": [],
   "stateComponentExtractions": [],
   "variantComponentExtractions": [],
@@ -78,6 +79,38 @@ Bind repeated labels, badges, counters, and interaction targets to their matchin
 
 Use inner-to-outer order so nested groups are tightened before their parents. When omitted, every new wrapper is tightened automatically.
 
+## Component Family Decisions
+
+`componentFamilyDecisions` is required in every new plan created through this skill, including ordinary hierarchy-only plans. It makes the reusable-component decision reviewable instead of allowing a repeated family to disappear behind empty extraction arrays. The renderer accepts legacy v1 plans without the field so previously saved plans remain runnable. Names in this document are examples only; the schema is data-driven and applies to every Prefab type.
+
+```json
+{
+  "componentFamilyDecisions": [
+    {
+      "parent": "InventoryPanelView/[ItemList]",
+      "sources": [
+        "InventoryPanelView/[ItemList]/[Item_01]",
+        "InventoryPanelView/[ItemList]/[Item_02]"
+      ],
+      "mode": "skip",
+      "reason": "The two units have project-owned bindings that must remain local."
+    },
+    {
+      "parent": "InventoryPanelView/[ItemList]",
+      "sources": [
+        "InventoryPanelView/[ItemList]/[Item_03]",
+        "InventoryPanelView/[ItemList]/[Item_04]"
+      ],
+      "mode": "stateful",
+      "extractionId": "day_marker",
+      "reason": "The repeated markers differ only by explicit visual state and instance values."
+    }
+  ]
+}
+```
+
+`parent`, at least two unique `sources`, `mode`, and `reason` are required. Use `skip` only with a concrete preservation or safety reason. For every other mode, `extractionId` must reference exactly one matching extraction, and the declared sources must cover that extraction exactly. Valid modes are `component`, `state`, `variant`, and `stateful`.
+
 ## Optional Component Extraction
 
 The `componentExtractions`, `stateComponentExtractions`, `variantComponentExtractions`, and `statefulComponentExtractions` fields are allowed only in a separate plan that the user explicitly approved. They may create a reusable component under `Prefab/Common`, but do not change the rule that the main target Prefab is saved in place at `prefabAssetPath`. Do not include them in an ordinary hierarchy-cleanup chat request.
@@ -117,21 +150,21 @@ Use `stateComponentExtractions` when several **direct sibling roots occupy one v
 {
   "stateComponentExtractions": [
     {
-      "id": "seven_day_task_item",
-      "template": "SevenDayTaskView/[TaskStates]/Task_01",
-      "assetPath": "Assets/UI/Components/SevenDayTaskItem.prefab",
+      "id": "inventory_item",
+      "template": "InventoryPanelView/[ItemStates]/Item_01",
+      "assetPath": "Assets/UI/Components/InventoryItem.prefab",
       "defaultState": "available",
       "states": [
-        { "id": "locked", "source": "SevenDayTaskView/[TaskStates]/Task_01", "name": "[Locked]" },
-        { "id": "available", "source": "SevenDayTaskView/[TaskStates]/Task_02", "name": "[Available]" },
-        { "id": "completed", "source": "SevenDayTaskView/[TaskStates]/Task_03", "name": "[Completed]" }
+        { "id": "locked", "source": "InventoryPanelView/[ItemStates]/Item_01", "name": "[Locked]" },
+        { "id": "available", "source": "InventoryPanelView/[ItemStates]/Item_02", "name": "[Available]" },
+        { "id": "completed", "source": "InventoryPanelView/[ItemStates]/Item_03", "name": "[Completed]" }
       ]
     }
   ]
 }
 ```
 
-All `states[].source` paths must be direct siblings of `template`; `template` must be one of them. The generated root uses the output file name, such as `SevenDayTaskItem`, and contains a `[States]` child with the state names in the supplied order. Only `defaultState` is active in the saved component; branch selection at runtime remains outside this skill.
+All `states[].source` paths must be direct siblings of `template`; `template` must be one of them. The generated root uses the output file name, such as `InventoryItem`, and contains a `[States]` child with the state names in the supplied order. Only `defaultState` is active in the saved component; branch selection at runtime remains outside this skill.
 
 State branches may have different recursive signatures, but the sources must be visually overlapping and semantically mutually exclusive. Do not use this for simultaneously visible list entries. `stateComponentExtractions` cannot be combined with `componentExtractions`, `wrappers`, `moves`, `renames`, or `tightBounds`; use a separate plan. It rejects nested source Prefabs, external serialized references, source-path overlap, and existing output assets. A state extraction adds the component root and its `[States]` container to the final hierarchy, so update optional node/component counts in `verify` by two for each extracted state component.
 
@@ -143,21 +176,21 @@ Use `variantComponentExtractions` when several rows are visible at different lis
 {
   "variantComponentExtractions": [
     {
-      "id": "task_item",
-      "template": "SevenDayTaskView/[TaskList]/[Task_01]",
-      "assetPath": "Assets/UI/Prefab/Common/SevenDayTaskItem.prefab",
+      "id": "inventory_item",
+      "template": "InventoryPanelView/[ItemList]/[Item_01]",
+      "assetPath": "Assets/UI/Prefab/Common/InventoryItem.prefab",
       "commonName": "[Common]",
       "statesName": "[States]",
       "defaultState": "in_progress",
       "states": [
-        { "id": "in_progress", "source": "SevenDayTaskView/[TaskList]/[Task_01]", "name": "[State_InProgress]" },
-        { "id": "claimable", "source": "SevenDayTaskView/[TaskList]/[Task_02]", "name": "[State_Claimable]" },
-        { "id": "locked", "source": "SevenDayTaskView/[TaskList]/[Task_03]", "name": "[State_Locked]" }
+        { "id": "in_progress", "source": "InventoryPanelView/[ItemList]/[Item_01]", "name": "[State_InProgress]" },
+        { "id": "claimable", "source": "InventoryPanelView/[ItemList]/[Item_02]", "name": "[State_Claimable]" },
+        { "id": "locked", "source": "InventoryPanelView/[ItemList]/[Item_03]", "name": "[State_Locked]" }
       ],
       "instances": [
-        { "source": "SevenDayTaskView/[TaskList]/[Task_01]", "name": "[TaskItem_01]", "state": "in_progress" },
-        { "source": "SevenDayTaskView/[TaskList]/[Task_02]", "name": "[TaskItem_02]", "state": "claimable" },
-        { "source": "SevenDayTaskView/[TaskList]/[Task_03]", "name": "[TaskItem_03]", "state": "locked" }
+        { "source": "InventoryPanelView/[ItemList]/[Item_01]", "name": "[Item_01]", "state": "in_progress" },
+        { "source": "InventoryPanelView/[ItemList]/[Item_02]", "name": "[Item_02]", "state": "claimable" },
+        { "source": "InventoryPanelView/[ItemList]/[Item_03]", "name": "[Item_03]", "state": "locked" }
       ]
     }
   ]
@@ -174,50 +207,50 @@ Use `statefulComponentExtractions` for repeated items that contain real shared c
 {
   "statefulComponentExtractions": [
     {
-      "id": "day_reward_item",
-      "template": "SevenDayTaskView/[DayRewards]/[Day_01]",
-      "assetPath": "Assets/UI/Prefab/Common/SevenDayRewardItem.prefab",
+      "id": "inventory_item",
+      "template": "InventoryPanelView/[ItemList]/[Item_01]",
+      "assetPath": "Assets/UI/Prefab/Common/InventoryItem.prefab",
       "common": {
-        "source": "SevenDayTaskView/[DayRewards]/[Day_01]",
+        "source": "InventoryPanelView/[ItemList]/[Item_01]",
         "members": [
-          { "sourceName": "Day01Label", "name": "DayLabel" },
-          { "sourceName": "Day01Number", "name": "DayNumber" }
+          { "sourceName": "ItemLabel", "name": "ItemLabel" },
+          { "sourceName": "ItemValue", "name": "ItemValue" }
         ]
       },
       "states": [
         {
-          "id": "claimed",
-          "source": "SevenDayTaskView/[DayRewards]/[Day_01]",
-          "name": "[State_Claimed]",
+          "id": "available",
+          "source": "InventoryPanelView/[ItemList]/[Item_01]",
+          "name": "[State_Available]",
           "members": [
-            { "sourceName": "Day01RewardBackground", "name": "ClaimedBackground" }
+            { "sourceName": "ItemBackground", "name": "AvailableBackground" }
           ]
         },
         {
           "id": "locked",
-          "source": "SevenDayTaskView/[DayRewards]/[Day_03]",
+          "source": "InventoryPanelView/[ItemList]/[Item_03]",
           "name": "[State_Locked]",
           "members": [
-            { "sourceName": "Day03RewardBackground", "name": "LockedBackground" },
-            { "sourceName": "Day03Lock", "name": "LockIcon" }
+            { "sourceName": "ItemBackground", "name": "LockedBackground" },
+            { "sourceName": "ItemLock", "name": "LockIcon" }
           ]
         }
       ],
-      "defaultState": "claimed",
+      "defaultState": "available",
       "instances": [
         {
-          "source": "SevenDayTaskView/[DayRewards]/[Day_01]",
-          "name": "[DayRewardItem_01]",
-          "state": "claimed",
-          "commonSourceNames": ["Day01Label", "Day01Number"],
-          "stateSourceNames": ["Day01RewardBackground"]
+          "source": "InventoryPanelView/[ItemList]/[Item_01]",
+          "name": "[Item_01]",
+          "state": "available",
+          "commonSourceNames": ["ItemLabel", "ItemValue"],
+          "stateSourceNames": ["ItemBackground"]
         },
         {
-          "source": "SevenDayTaskView/[DayRewards]/[Day_03]",
-          "name": "[DayRewardItem_03]",
+          "source": "InventoryPanelView/[ItemList]/[Item_03]",
+          "name": "[Item_03]",
           "state": "locked",
-          "commonSourceNames": ["Day03Label", "Day03Number"],
-          "stateSourceNames": ["Day03RewardBackground", "Day03Lock"]
+          "commonSourceNames": ["ItemLabel", "ItemValue"],
+          "stateSourceNames": ["ItemBackground", "ItemLock"]
         }
       ]
     }
@@ -304,5 +337,9 @@ Use counts captured during the read-only snapshot. `hierarchy` paths are post-ap
 `absentPaths` is an optional string list. Use it with `emptyContainerRemovals` to prove the old grouping container is gone after saving.
 
 `forbiddenObjectNamePatterns` is a regex list checked against every GameObject name. Use it to reject PSD/export tokens, UUID names, punctuation-only names, and literal text values. `allowedMissingImagePathPrefixes` is an explicit exception list for known inherited nested-Prefab images with intentionally missing Sprite references; do not use it to silence missing Sprites in the target Prefab.
+
+The runner reports missing Sprite references found inside unchanged nested Prefab instances in `ignoredNestedMissingSpritePaths`; they do not fail outer-Prefab hierarchy validation. Missing Sprites owned by the target Prefab are reported as target-owned verification issues unless explicitly listed in `allowedMissingImagePathPrefixes`; they must not be silently treated as inherited nested-Prefab issues.
+
+Post-save verification is diagnostic and non-blocking. A contract mismatch returns `VERIFY_WARN issue=...` so the caller can display and carry the issue into the next cleanup step without treating the Unity command as failed. The target cannot load, an operation precondition fails, a hierarchy mutation fails, or saving the target fails remain hard failures; those conditions have no trustworthy output to continue from. `VERIFY_WARN` is not completion proof and must be included in the next status message or plan.
 
 Run `-VerifyOnly` after an uncertain or timed-out apply. It does not mutate assets; it checks the saved Prefab, final hierarchy, asset GUIDs, Texture paths, and SpriteAtlas paths against this contract. It cannot reconstruct a pre-apply world-corner baseline, so the apply pass is responsible for the `0.01` world-corner invariant.

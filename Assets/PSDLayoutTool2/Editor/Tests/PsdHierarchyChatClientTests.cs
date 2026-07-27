@@ -152,6 +152,16 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ChatContextRequiresThePlanToRemainInTheChatReply()
+        {
+            string instructions = CreateSmallContext().BuildInstructions();
+
+            Assert.That(instructions, Does.Contain("Do not create or modify JSON plan files."));
+            Assert.That(instructions, Does.Contain("Do not invoke PowerShell, Python, or the cleanup runner."));
+            Assert.That(instructions, Does.Contain("Return the complete plan directly in the chat reply."));
+        }
+
+        [Test]
         public void ConsecutiveUserMessagesAreMergedForProviderCompatibleConversation()
         {
             PsdHierarchyChatHttpRequest request = PsdHierarchyChatClient.BuildRequest(

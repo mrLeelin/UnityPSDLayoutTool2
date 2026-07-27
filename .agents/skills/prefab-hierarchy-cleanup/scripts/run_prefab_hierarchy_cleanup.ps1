@@ -35,7 +35,9 @@ if (-not (Test-Path -LiteralPath $PlanPath)) {
 }
 
 try {
-    $rawPlan = Get-Content -LiteralPath $PlanPath -Raw | ConvertFrom-Json
+    $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    $planJson = [System.IO.File]::ReadAllText($PlanPath, $utf8)
+    $rawPlan = $planJson | ConvertFrom-Json
 }
 catch {
     throw "PlanPath does not contain valid JSON: $($_.Exception.Message)"
