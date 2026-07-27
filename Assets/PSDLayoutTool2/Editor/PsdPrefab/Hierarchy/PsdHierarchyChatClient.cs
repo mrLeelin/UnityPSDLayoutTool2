@@ -4,10 +4,16 @@ namespace PsdLayoutTool2
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
+    using System.Security.Cryptography;
     using System.Text;
     using System.Threading.Tasks;
+    using Newtonsoft.Json;
+    using Newtonsoft.Json.Linq;
+    using UnityEditor;
     using UnityEngine;
     using UnityEngine.Networking;
+    using UnityEngine.UI;
 
     internal readonly struct PsdHierarchyChatConnection
     {
@@ -104,7 +110,11 @@ namespace PsdLayoutTool2
             string targetPrefabAssetPath,
             string skillFullPath,
             string skillContent,
-            string prefabContent)
+            string prefabContent,
+            string planFormatContent = "",
+            string hierarchySnapshotJson = "",
+            string hierarchySnapshotFingerprint = "",
+            string hierarchySnapshotFullPath = "")
         {
             this.projectRoot = projectRoot ?? string.Empty;
             this.sourcePsdAssetPath = sourcePsdAssetPath ?? string.Empty;
@@ -112,6 +122,11 @@ namespace PsdLayoutTool2
             this.skillFullPath = skillFullPath ?? string.Empty;
             this.skillContent = skillContent ?? string.Empty;
             this.prefabContent = prefabContent ?? string.Empty;
+            this.planFormatContent = planFormatContent ?? string.Empty;
+            this.hierarchySnapshotJson = hierarchySnapshotJson ?? string.Empty;
+            this.hierarchySnapshotFingerprint = hierarchySnapshotFingerprint ?? string.Empty;
+            this.hierarchySnapshotFullPath = hierarchySnapshotFullPath ?? string.Empty;
+            nodePathsById = ParseNodePaths(this.hierarchySnapshotJson);
         }
 
         internal readonly string projectRoot;
@@ -120,20 +135,33 @@ namespace PsdLayoutTool2
         internal readonly string skillFullPath;
         internal readonly string skillContent;
         internal readonly string prefabContent;
+        internal readonly string planFormatContent;
+        internal readonly string hierarchySnapshotJson;
+        internal readonly string hierarchySnapshotFingerprint;
+        internal readonly string hierarchySnapshotFullPath;
+        private readonly Dictionary<string, string> nodePathsById;
+
+        internal bool TryGetNodePath(string nodeId, out string path)
+        {
+            return nodePathsById.TryGetValue(nodeId ?? string.Empty, out path);
+        }
 
         internal string BuildInstructions()
         {
             var builder = new StringBuilder();
             builder.AppendLine("You are assisting with a Unity Prefab hierarchy cleanup from inside the Unity Editor.");
             builder.AppendLine("The user supplied the exact cleanup skill and target Prefab below.");
-            builder.AppendLine("Inspect first and provide a complete, reviewable plan. Do not claim to have edited a local asset: this chat has no local file-write capability.");
-            builder.AppendLine("This is an analysis-only chat. Do not create or modify JSON plan files.");
-            builder.AppendLine("Do not invoke PowerShell, Python, or the cleanup runner.");
-            builder.AppendLine("Return the complete plan directly in the chat reply. Do not attempt file writes before or after replying.");
+            builder.AppendLine("Inspect first and provide a complete, reviewable plan. Do not claim to have edited a local asset: the Unity chat window performs the approved update.");
+            builder.AppendLine("Do not invoke PowerShell, Python, Unity runners, or file-writing tools yourself.");
+            builder.AppendLine("Your first reply must contain the human-readable review in Simplified Chinese, followed by exactly one complete UTF-8 JSON plan in a fenced ```json code block that follows the supplied plan format.");
+            builder.AppendLine("The JSON root must contain \"version\": 2, \"snapshotFingerprint\" copied exactly from the supplied snapshot, and every required operation array, including empty arrays for unused operations. The window rejects incomplete JSON before it can be confirmed.");
+            builder.AppendLine("If that reply fails plan validation, the Unity chat window automatically sends the validation error back in this same AI session. Treat that message as an internal correction request: return only one complete replacement JSON code block, never a patch, and never ask the user to retry or send another message. The window preserves the initial five-section review for the user.");
+            builder.AppendLine("The user will inspect that reply. When the user replies with an explicit confirmation, the Unity chat window validates the JSON and directly runs the approved plan through Unity Editor APIs. Do not ask for an additional confirmation, output-mode choice, or manual script command.");
             builder.AppendLine("The only allowed output mode is in_place: output.assetPath must exactly equal the supplied target Prefab path.");
+            builder.AppendLine("Every reference to an existing Prefab node must use node:<id> from the authoritative snapshot. Never write a raw hierarchy path in wrappers, moves, renames, removals, tight bounds, component-family decisions, or extraction contracts.");
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
             builder.AppendLine("Do not propose, create, copy, or offer a .cleaned.prefab or any other replacement Prefab. Any later approved cleanup must target the supplied Prefab in place while preserving visual layout, generated assets, bindings, and unrelated components.");
-            builder.AppendLine("This chat request does not authorize component extraction. Do not propose or include componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, Prefab/Common, or any nested Prefab.");
+            builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Do not silently omit a repeated component family; use componentFamilyDecisions for every candidate.");
             builder.AppendLine("Return an auditable analysis summary, not private chain-of-thought. In Simplified Chinese, use exactly these sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence.");
             builder.AppendLine("Source PSD: " + sourcePsdAssetPath);
             builder.AppendLine("Target Prefab: " + targetPrefabAssetPath);
@@ -141,11 +169,52 @@ namespace PsdLayoutTool2
             builder.AppendLine("===== BEGIN prefab-hierarchy-cleanup/SKILL.md =====");
             builder.AppendLine(skillContent);
             builder.AppendLine("===== END prefab-hierarchy-cleanup/SKILL.md =====");
+            if (!string.IsNullOrWhiteSpace(planFormatContent))
+            {
+                builder.AppendLine();
+                builder.AppendLine("===== BEGIN prefab-hierarchy-cleanup/references/plan-format.md =====");
+                builder.AppendLine(planFormatContent);
+                builder.AppendLine("===== END prefab-hierarchy-cleanup/references/plan-format.md =====");
+            }
             builder.AppendLine();
-            builder.AppendLine("===== BEGIN TARGET PREFAB YAML =====");
-            builder.AppendLine(prefabContent);
-            builder.AppendLine("===== END TARGET PREFAB YAML =====");
+            builder.AppendLine("===== BEGIN TARGET PREFAB NODE SNAPSHOT =====");
+            builder.AppendLine(hierarchySnapshotJson);
+            builder.AppendLine("===== END TARGET PREFAB NODE SNAPSHOT =====");
             return builder.ToString();
+        }
+
+        private static Dictionary<string, string> ParseNodePaths(string snapshotJson)
+        {
+            var paths = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(snapshotJson))
+            {
+                return paths;
+            }
+
+            try
+            {
+                JObject snapshot = JObject.Parse(snapshotJson);
+                if (!(snapshot["nodes"] is JArray nodes))
+                {
+                    return paths;
+                }
+
+                foreach (JObject node in nodes.OfType<JObject>())
+                {
+                    string id = node.Value<string>("id");
+                    string path = node.Value<string>("path");
+                    if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(path))
+                    {
+                        paths[id] = path;
+                    }
+                }
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                // Invalid snapshots are rejected by the context builder.
+            }
+
+            return paths;
         }
     }
 
@@ -153,6 +222,9 @@ namespace PsdLayoutTool2
     {
         internal const string DefaultSkillRelativePath =
             "Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/SKILL.md";
+
+        internal const string DefaultPlanFormatRelativePath =
+            "Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/references/plan-format.md";
 
         internal const long MaxContextFileBytes = 512 * 1024;
 
@@ -184,15 +256,255 @@ namespace PsdLayoutTool2
                 return false;
             }
 
+            string planFormatFullPath = PlanFormatFullPath(projectRoot);
+            if (!TryReadContextFile(planFormatFullPath, "整理计划格式", out string planFormatContent, out error))
+            {
+                return false;
+            }
+
+            string snapshotFingerprint;
+            string hierarchySnapshotJson;
+            string hierarchySnapshotFullPath;
+            if (!TryBuildHierarchySnapshot(
+                    prefabAssetPath,
+                    prefabFullPath,
+                    projectRoot,
+                    out hierarchySnapshotJson,
+                    out snapshotFingerprint,
+                    out hierarchySnapshotFullPath,
+                    out error))
+            {
+                return false;
+            }
+
             context = new PsdHierarchyChatContext(
                 projectRoot,
                 NormalizeAssetPath(sourcePsdAssetPath),
                 prefabAssetPath,
                 skillFullPath,
                 skillContent,
-                prefabContent);
+                prefabContent,
+                planFormatContent,
+                hierarchySnapshotJson,
+                snapshotFingerprint,
+                hierarchySnapshotFullPath);
             error = string.Empty;
             return true;
+        }
+
+        private static bool TryBuildHierarchySnapshot(
+            string prefabAssetPath,
+            string prefabFullPath,
+            string projectRoot,
+            out string snapshotJson,
+            out string fingerprint,
+            out string snapshotFullPath,
+            out string error)
+        {
+            snapshotJson = string.Empty;
+            fingerprint = string.Empty;
+            snapshotFullPath = string.Empty;
+            GameObject root = null;
+            try
+            {
+                fingerprint = ComputeFileFingerprint(prefabFullPath);
+                root = PrefabUtility.LoadPrefabContents(prefabAssetPath);
+                if (root == null)
+                {
+                    error = "无法加载目标 Prefab 以生成节点快照：" + prefabAssetPath;
+                    return false;
+                }
+
+                var nodes = new JArray();
+                int nodeIndex = 0;
+                AppendSnapshotNode(root.transform, string.Empty, nodes, ref nodeIndex);
+                var snapshot = new JObject
+                {
+                    ["schemaVersion"] = 1,
+                    ["prefabAssetPath"] = prefabAssetPath,
+                    ["fingerprint"] = fingerprint,
+                    ["nodeReferenceSyntax"] = "node:<id>",
+                    ["nodes"] = nodes,
+                };
+                snapshotJson = snapshot.ToString(Formatting.None);
+
+                snapshotFullPath = Path.Combine(
+                    projectRoot,
+                    "Library",
+                    "PSDLayoutTool2",
+                    "HierarchySnapshots",
+                    fingerprint + ".json");
+                Directory.CreateDirectory(Path.GetDirectoryName(snapshotFullPath));
+                File.WriteAllText(snapshotFullPath, snapshotJson, new UTF8Encoding(false));
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = "生成目标 Prefab 节点快照失败：" + exception.Message;
+                return false;
+            }
+            finally
+            {
+                if (root != null)
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+        }
+
+        private static void AppendSnapshotNode(
+            Transform node,
+            string parentId,
+            JArray nodes,
+            ref int nodeIndex)
+        {
+            string id = "n" + nodeIndex.ToString("D6");
+            nodeIndex++;
+            var componentTypes = new JArray();
+            foreach (Component component in node.GetComponents<Component>())
+            {
+                componentTypes.Add(component == null ? "<Missing>" : component.GetType().FullName);
+            }
+
+            var entry = new JObject
+            {
+                ["id"] = id,
+                ["path"] = BuildPlanPath(node),
+                ["name"] = node.name,
+                ["parentId"] = parentId,
+                ["siblingIndex"] = node.GetSiblingIndex(),
+                ["childCount"] = node.childCount,
+                ["active"] = node.gameObject.activeSelf,
+                ["components"] = componentTypes,
+            };
+
+            if (node is RectTransform rect)
+            {
+                entry["rect"] = new JObject
+                {
+                    ["anchoredPosition"] = Vector(rect.anchoredPosition.x, rect.anchoredPosition.y),
+                    ["sizeDelta"] = Vector(rect.sizeDelta.x, rect.sizeDelta.y),
+                    ["anchorMin"] = Vector(rect.anchorMin.x, rect.anchorMin.y),
+                    ["anchorMax"] = Vector(rect.anchorMax.x, rect.anchorMax.y),
+                    ["pivot"] = Vector(rect.pivot.x, rect.pivot.y),
+                    ["localScale"] = new JArray(rect.localScale.x, rect.localScale.y, rect.localScale.z),
+                    ["rotationZ"] = rect.localEulerAngles.z,
+                };
+            }
+
+            string displayedText = ReadDisplayedText(node);
+            if (!string.IsNullOrEmpty(displayedText))
+            {
+                entry["displayedText"] = displayedText;
+            }
+
+            Image image = node.GetComponent<Image>();
+            if (image != null && image.sprite != null)
+            {
+                entry["sprite"] = image.sprite.name;
+                entry["spriteAssetPath"] = AssetDatabase.GetAssetPath(image.sprite);
+            }
+
+            if (PrefabUtility.IsAnyPrefabInstanceRoot(node.gameObject))
+            {
+                string nestedPrefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(node.gameObject);
+                if (!string.IsNullOrEmpty(nestedPrefabPath))
+                {
+                    entry["nestedPrefabAssetPath"] = nestedPrefabPath;
+                }
+            }
+
+            nodes.Add(entry);
+            for (int childIndex = 0; childIndex < node.childCount; childIndex++)
+            {
+                AppendSnapshotNode(node.GetChild(childIndex), id, nodes, ref nodeIndex);
+            }
+        }
+
+        private static string ReadDisplayedText(Transform node)
+        {
+            foreach (Component component in node.GetComponents<Component>())
+            {
+                if (component == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var serialized = new SerializedObject(component);
+                    SerializedProperty text = serialized.FindProperty("m_Text");
+                    if (text != null && text.propertyType == SerializedPropertyType.String &&
+                        !string.IsNullOrEmpty(text.stringValue))
+                    {
+                        return text.stringValue;
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    // Components without serialized text are expected.
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string BuildPlanPath(Transform node)
+        {
+            var segments = new List<string>();
+            for (Transform current = node; current != null; current = current.parent)
+            {
+                string segment = current.name;
+                if (current.parent != null)
+                {
+                    int occurrence = 0;
+                    for (int siblingIndex = 0; siblingIndex < current.parent.childCount; siblingIndex++)
+                    {
+                        Transform sibling = current.parent.GetChild(siblingIndex);
+                        if (!string.Equals(sibling.name, current.name, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        if (sibling == current)
+                        {
+                            break;
+                        }
+
+                        occurrence++;
+                    }
+
+                    if (occurrence > 0)
+                    {
+                        segment += "#" + occurrence;
+                    }
+                }
+
+                segments.Add(segment);
+            }
+
+            segments.Reverse();
+            return string.Join("/", segments.ToArray());
+        }
+
+        private static JArray Vector(float x, float y)
+        {
+            return new JArray(x, y);
+        }
+
+        internal static string ComputeFileFingerprint(string fullPath)
+        {
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                byte[] hash = sha256.ComputeHash(File.ReadAllBytes(fullPath));
+                return BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
+            }
+        }
+
+        internal static string PlanFormatFullPath(string projectRoot)
+        {
+            return ToFullPath(projectRoot, DefaultPlanFormatRelativePath);
         }
 
         private static bool TryReadContextFile(string fullPath, string label, out string content, out string error)
@@ -342,8 +654,13 @@ namespace PsdLayoutTool2
         internal const string OpenAiEndpoint = "https://api.openai.com/v1/responses";
         internal const string AnthropicEndpoint = "https://api.anthropic.com/v1/messages";
         private const int MaxClaudePromptCharacters = 6000;
+        private const string RequiredPlanRootFields =
+            "\"version\", \"snapshotFingerprint\", \"prefabAssetPath\", \"output\", \"prefabName\", \"wrappers\", \"moves\", \"renames\", " +
+            "\"emptyContainerRemovals\", \"tightBounds\", \"textureRenames\", \"spriteAtlasRenames\", " +
+            "\"componentFamilyDecisions\", \"componentExtractions\", \"stateComponentExtractions\", " +
+            "\"variantComponentExtractions\", \"statefulComponentExtractions\", \"verify\"";
         internal const string DefaultUserPrompt =
-            "请按整理技能完整审查当前目标 Prefab，而不是只查看顶层或按名称猜测。\n" +
+            "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
             "1. 结合 PSD 与 Prefab 的完整层级、节点几何、组件、同级顺序和重复结构，说明当前结构的主要问题。\n" +
             "2. 给出完整的原地整理后树形结构：每个新增语义容器、节点重命名、节点归属和保留顺序都要明确。\n" +
             "3. 对重复视觉单元按整体分组，不要把背景、文本、图标、锁等平铺到按类型命名的大容器中。\n" +
@@ -355,7 +672,64 @@ namespace PsdLayoutTool2
             "三、风险与保留项：说明不移动或不改名节点的具体原因。\n" +
             "四、原地整理方案：给出完整目标树与每项调整。\n" +
             "五、验证清单：列出应用前后必须检查的不变量。\n" +
-            "本次只原地整理当前目标 Prefab；不要新建、复制、抽取、嵌套或另存为任何 Prefab，也不要声称已经修改本地文件。";
+            "在上述五个章节后，必须额外附上一个完整的 ```json 计划代码块，严格遵循随附计划格式。\n" +
+            "本次主界面只原地更新当前目标 Prefab，不创建、复制或另存新的屏幕 Prefab；仅当证据充分时，才可在计划中声明经确认的 Prefab/Common 复用组件。\n" +
+            "不要声称已经修改本地文件。用户确认该计划后，Unity 窗口会直接更新 Prefab。";
+
+        internal static string BuildJsonOnlyPlanRepairPrompt(string validationError)
+        {
+            string error = string.IsNullOrWhiteSpace(validationError)
+                ? "The plan was incomplete or failed execution-plan validation."
+                : validationError.Trim();
+            return
+                "The previously returned plan failed Unity execution-plan validation:\n" + error + "\n" +
+                "Return exactly one complete UTF-8 JSON plan in one fenced ```json code block. Do not output prose, headings, explanations, diffs, or Markdown outside that code block. This must be a full replacement plan, not a patch.\n" +
+                "Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.\n" +
+                "A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.";
+        }
+
+        internal static string BuildClaudeDirectPrompt(
+            PsdHierarchyChatContext context,
+            IReadOnlyList<PsdHierarchyChatMessage> messages)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+
+            PsdHierarchyChatMessage[] normalized = NormalizeMessages(messages);
+            string userPrompt = DefaultUserPrompt;
+            for (int index = normalized.Length - 1; index >= 0; index--)
+            {
+                if (string.Equals(normalized[index].role, "user", StringComparison.Ordinal))
+                {
+                    userPrompt = normalized[index].content;
+                    break;
+                }
+            }
+
+            if (userPrompt.Length > MaxClaudePromptCharacters)
+            {
+                userPrompt = userPrompt.Substring(0, MaxClaudePromptCharacters) + "\n[后续追问已截断]";
+            }
+
+            var builder = new StringBuilder();
+            builder.AppendLine("You are reviewing one existing Unity Prefab hierarchy from inside a Unity Editor tool.");
+            builder.AppendLine("Use the Read tool to inspect exactly these three files before answering:");
+            builder.AppendLine("1. Cleanup skill: " + context.skillFullPath);
+            builder.AppendLine("2. Executable plan format: " + PsdHierarchyChatContextBuilder.PlanFormatFullPath(context.projectRoot));
+            builder.AppendLine("3. Authoritative Prefab node snapshot: " + context.hierarchySnapshotFullPath);
+            builder.AppendLine("Do not use any other tool. Do not edit, create, rename, or delete any file.");
+            builder.AppendLine("Return a concise, reviewable hierarchy-cleanup plan in Simplified Chinese with exactly these five sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单.");
+            builder.AppendLine("After those five sections, return exactly one complete UTF-8 JSON plan in a fenced ```json code block. The JSON is an executable contract, not illustrative pseudo-JSON.");
+            builder.AppendLine("Use exactly these required root fields: " + RequiredPlanRootFields + ". Use [] for every unused operation array.");
+            builder.AppendLine("Do not use legacy field names such as wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. The main Prefab output must be in_place at the exact target path.");
+            builder.AppendLine("Use version 2 and copy snapshotFingerprint exactly from the authoritative snapshot.");
+            builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every reference to an existing node must use node:<id> from the authoritative snapshot. Never emit a raw hierarchy path or invent a node ID.");
+            builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract. Do not silently omit a repeated component family; use componentFamilyDecisions for every candidate.");
+            builder.AppendLine("The executable plan-format file is authoritative. Follow its field names and object shapes exactly.");
+            builder.AppendLine("Do not claim that a local asset was changed.");
+            builder.AppendLine("User request:");
+            builder.Append(userPrompt);
+            return builder.ToString();
+        }
 
         internal static PsdHierarchyChatHttpRequest BuildRequest(
             PsdHierarchyChatContext context,
@@ -1238,25 +1612,7 @@ namespace PsdLayoutTool2
                 PsdHierarchyChatContext context,
                 IReadOnlyList<PsdHierarchyChatMessage> messages)
             {
-                var builder = new StringBuilder();
-                builder.AppendLine("You are reviewing one existing Unity Prefab hierarchy from inside a Unity Editor tool.");
-                builder.AppendLine("Use the Read tool to inspect exactly these two files before answering:");
-                builder.AppendLine("1. Cleanup skill: " + context.skillFullPath);
-                builder.AppendLine(
-                    "2. Target Prefab: " + Path.Combine(
-                        context.projectRoot,
-                        context.targetPrefabAssetPath.Replace('/', Path.DirectorySeparatorChar)));
-                builder.AppendLine("Do not use any other tool. Do not edit, create, rename, or delete any file.");
-                builder.AppendLine("Follow the cleanup skill. Return a complete, reviewable hierarchy-cleanup plan in Simplified Chinese.");
-                builder.AppendLine("The plan must preserve visual layout, bindings, components, nested Prefab boundaries, and sibling order.");
-                builder.AppendLine("The only permitted main-Prefab output is in_place at the exact Target Prefab path. Do not offer copy mode, a .cleaned.prefab, or any replacement Prefab.");
-                builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
-                builder.AppendLine("This chat request authorizes no component extraction. Do not propose Prefab/Common, a nested component Prefab, or any component extraction field.");
-                builder.AppendLine("Return an auditable analysis summary, not private chain-of-thought. In Simplified Chinese, use exactly these sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence.");
-                builder.AppendLine("Do not claim that a local asset was changed.");
-                builder.AppendLine("User request:");
-                builder.Append(TrimPrompt(LastUserMessage(messages)));
-                return builder.ToString();
+                return PsdHierarchyChatClient.BuildClaudeDirectPrompt(context, messages);
             }
 
             private static string LastUserMessage(IReadOnlyList<PsdHierarchyChatMessage> messages)

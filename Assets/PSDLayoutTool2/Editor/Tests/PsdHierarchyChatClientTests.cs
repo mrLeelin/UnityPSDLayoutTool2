@@ -8,9 +8,9 @@ namespace PsdLayoutTool2.Tests
 
     public sealed class PsdHierarchyChatClientTests
     {
-        private const string SourcePsdPath = "Assets/PSDLayoutTool2/TestData/7日任务拆分.psd";
+        private const string SourcePsdPath = "Assets/PSDLayoutTool2/TestData/跳格子切图.psd";
         private const string TargetPrefabPath =
-            "Assets/PSDLayoutTool2/TestData/7日任务拆分/Prefab/SevenDayTaskView.prefab";
+            "Assets/PSDLayoutTool2/TestData/跳格子切图/Prefab/跳格子切图.prefab";
 
         [Test]
         public void ContextBuilderReadsTheCleanupSkillAndActualTargetPrefab()
@@ -26,8 +26,27 @@ namespace PsdLayoutTool2.Tests
             Assert.That(context.targetPrefabAssetPath, Is.EqualTo(TargetPrefabPath));
             Assert.That(context.skillContent, Does.Contain("prefab-hierarchy-cleanup"));
             Assert.That(context.prefabContent, Does.Contain("%YAML"));
-            Assert.That(context.BuildInstructions(), Does.Contain("===== BEGIN TARGET PREFAB YAML ====="));
-            Assert.That(context.BuildInstructions(), Does.Contain("SevenDayTaskView"));
+            Assert.That(context.BuildInstructions(), Does.Contain("===== BEGIN TARGET PREFAB NODE SNAPSHOT ====="));
+            Assert.That(context.BuildInstructions(), Does.Contain("跳格子切图"));
+        }
+
+        [Test]
+        public void ContextBuilderCreatesAnAuthoritativeNodeSnapshotForTheAi()
+        {
+            bool created = PsdHierarchyChatContextBuilder.TryCreate(
+                SourcePsdPath,
+                TargetPrefabPath,
+                out PsdHierarchyChatContext context,
+                out string error);
+
+            Assert.That(created, Is.True, error);
+            Assert.That(context.hierarchySnapshotJson, Does.Contain("\"nodes\"").And.Contain("\"id\":\"n"));
+            Assert.That(context.hierarchySnapshotJson, Does.Contain("跳格子切图"));
+            Assert.That(context.hierarchySnapshotFingerprint, Is.Not.Empty);
+            Assert.That(File.Exists(context.hierarchySnapshotFullPath), Is.True);
+            Assert.That(context.BuildInstructions(), Does.Contain("TARGET PREFAB NODE SNAPSHOT"));
+            Assert.That(context.BuildInstructions(), Does.Contain("node:<id>"));
+            Assert.That(context.BuildInstructions(), Does.Not.Contain("BEGIN TARGET PREFAB YAML"));
         }
 
         [Test]
@@ -42,7 +61,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(request.GetHeader("Authorization"), Is.EqualTo("Bearer openai-key"));
             Assert.That(request.GetHeader("Content-Type"), Is.EqualTo("application/json"));
             Assert.That(request.body, Does.Contain("Skill Body"));
-            Assert.That(request.body, Does.Contain("Prefab Body"));
+            Assert.That(request.body, Does.Contain("n000001").And.Contain("node:<id>"));
             Assert.That(request.body, Does.Contain("检查层级"));
             Assert.That(request.body, Does.Contain("\"store\":false"));
         }
@@ -60,7 +79,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(request.GetHeader("anthropic-version"), Is.EqualTo("2023-06-01"));
             Assert.That(request.body, Does.Contain("\"max_tokens\":4096"));
             Assert.That(request.body, Does.Contain("Skill Body"));
-            Assert.That(request.body, Does.Contain("Prefab Body"));
+            Assert.That(request.body, Does.Contain("n000001").And.Contain("node:<id>"));
         }
 
         [Test]
@@ -133,32 +152,117 @@ namespace PsdLayoutTool2.Tests
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("可审查的分析摘要"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("分组依据"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("不要输出原始内部推理"));
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Not.Contain("已经修改本地文件"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("```json 计划代码块"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("Unity 窗口会直接更新 Prefab"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("不要声称已经修改本地文件"));
         }
 
         [Test]
-        public void ChatContextRequiresTheExistingPrefabToBeOrganizedInPlace()
+        public void ChatContextKeepsTheExistingPrefabInPlaceAndReviewsComponentFamilies()
         {
             string instructions = CreateSmallContext().BuildInstructions();
 
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("仅修改当前目标 Prefab"));
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("本次不要新建、复制、抽取、嵌套或另存为任何 Prefab"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("本次主界面只原地更新当前目标 Prefab"));
             Assert.That(instructions, Does.Contain("The only allowed output mode is in_place"));
             Assert.That(instructions, Does.Contain("already confirmed for in-place cleanup"));
             Assert.That(instructions, Does.Contain(".cleaned.prefab"));
-            Assert.That(instructions, Does.Contain("This chat request does not authorize component extraction"));
+            Assert.That(instructions, Does.Contain("include the complete reviewed extraction contract"));
             Assert.That(instructions, Does.Contain("Return an auditable analysis summary"));
             Assert.That(instructions, Does.Contain("风险与保留项"));
         }
 
         [Test]
-        public void ChatContextRequiresThePlanToRemainInTheChatReply()
+        public void ChatContextUsesAReviewedJsonPlanForTheSecondTurnExecution()
         {
             string instructions = CreateSmallContext().BuildInstructions();
 
-            Assert.That(instructions, Does.Contain("Do not create or modify JSON plan files."));
-            Assert.That(instructions, Does.Contain("Do not invoke PowerShell, Python, or the cleanup runner."));
-            Assert.That(instructions, Does.Contain("Return the complete plan directly in the chat reply."));
+            Assert.That(instructions, Does.Contain("Do not invoke PowerShell, Python, Unity runners"));
+            Assert.That(instructions, Does.Contain("exactly one complete UTF-8 JSON plan"));
+            Assert.That(instructions, Does.Contain("the Unity chat window validates the JSON"));
+        }
+
+        [Test]
+        public void PlanRepairPromptRequestsJsonOnlyReplacementToAvoidTruncation()
+        {
+            const string validationError = "计划 version 必须为 2。";
+
+            string prompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(validationError);
+
+            Assert.That(prompt, Does.Contain(validationError));
+            Assert.That(prompt, Does.Contain("exactly one complete UTF-8 JSON plan"));
+            Assert.That(prompt, Does.Contain("Do not output prose"));
+            Assert.That(prompt, Does.Contain("\"version\": 2"));
+            Assert.That(prompt, Does.Contain("snapshotFingerprint"));
+            Assert.That(prompt, Does.Contain("```json"));
+            Assert.That(prompt, Does.Contain("must be exactly @wrapperId"));
+            Assert.That(prompt, Does.Contain("node:<id>"));
+            Assert.That(prompt, Does.Not.Contain("original pre-apply full path"));
+        }
+
+        [Test]
+        public void InitialAndRepairPromptsRequireLowerSnakeCaseWrapperIds()
+        {
+            string instructions = CreateSmallContext().BuildInstructions();
+            string repairPrompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(
+                "wrappers[1].id must be lower snake_case");
+
+            Assert.That(instructions, Does.Contain("wrappers[].id must use lower snake_case"));
+            Assert.That(instructions, Does.Contain("screen_root").And.Contain("[a-z][a-z0-9_]*"));
+            Assert.That(repairPrompt, Does.Contain("wrappers[].id must use lower snake_case"));
+            Assert.That(repairPrompt, Does.Contain("screen_root").And.Contain("[a-z][a-z0-9_]*"));
+        }
+
+        [Test]
+        public void InvalidNodeRepairPromptForbidsInventingAnotherIdentifier()
+        {
+            string prompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(
+                "moves[18].source 引用的节点 n999999 在当前快照中不存在。");
+
+            Assert.That(prompt, Does.Contain("node IDs listed in the authoritative snapshot"));
+            Assert.That(prompt, Does.Contain("Remove an operation"));
+            Assert.That(prompt, Does.Contain("never invent a node ID"));
+        }
+
+        [Test]
+        public void ClaudeDirectPromptSuppliesTheCanonicalExecutablePlanContract()
+        {
+            const string planFormat =
+                "{\n" +
+                "  \"version\": 2,\n" +
+                "  \"snapshotFingerprint\": \"snapshot-123\",\n" +
+                "  \"prefabName\": \"ExampleView\",\n" +
+                "  \"wrappers\": [],\n" +
+                "  \"moves\": [],\n" +
+                "  \"renames\": []\n" +
+                "}";
+            var context = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                planFormat,
+                "{\"fingerprint\":\"snapshot-123\",\"nodes\":[{\"id\":\"n000001\",\"path\":\"Root\"}]}",
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+
+            string prompt = PsdHierarchyChatClient.BuildClaudeDirectPrompt(
+                context,
+                new List<PsdHierarchyChatMessage>
+                {
+                    new PsdHierarchyChatMessage("user", "整理目标 Prefab"),
+                });
+
+            Assert.That(prompt, Does.Contain("exactly one complete UTF-8 JSON plan"));
+            Assert.That(prompt, Does.Contain("\"prefabName\""));
+            Assert.That(prompt, Does.Contain("\"wrappers\""));
+            Assert.That(prompt, Does.Contain("\"moves\""));
+            Assert.That(prompt, Does.Contain("\"renames\""));
+            Assert.That(prompt, Does.Contain("wrapperCreations").And.Contain("Do not use"));
+            Assert.That(prompt, Does.Contain("snapshot-123.json"));
+            Assert.That(prompt, Does.Contain("node:<id>"));
+            Assert.That(prompt, Does.Not.Contain("Target Prefab: E:/Project"));
         }
 
         [Test]
@@ -304,7 +408,11 @@ namespace PsdLayoutTool2.Tests
                 "Assets/UI/Prefab/ExampleView.prefab",
                 "E:/Project/Demo/monsterhunter/Skill.md",
                 "Skill Body",
-                "Prefab Body");
+                "Prefab Body",
+                "Plan Format",
+                "{\"fingerprint\":\"snapshot-123\",\"nodes\":[{\"id\":\"n000001\",\"path\":\"Root\",\"name\":\"Root\"}]}",
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
         }
 
         private static PsdHierarchyChatConnection CreateCustomApiConnection(

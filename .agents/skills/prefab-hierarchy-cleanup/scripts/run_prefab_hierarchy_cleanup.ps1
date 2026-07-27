@@ -12,17 +12,44 @@ param(
 
     [switch]$CompileOnly,
 
+    [switch]$Preflight,
+
     [string]$PythonPath = "python"
 )
 
 $ErrorActionPreference = "Stop"
 
+function Get-UnityFailureDetail {
+    param([string]$Result)
+
+    $detail = if ($null -eq $Result) { "" } else { $Result.Trim() }
+    if ([string]::IsNullOrWhiteSpace($detail)) {
+        return "Unity did not return a failure detail."
+    }
+
+    try {
+        $response = $detail | ConvertFrom-Json
+        foreach ($propertyName in @("ErrorMessage", "Error", "Exception", "Message")) {
+            $property = $response.PSObject.Properties[$propertyName]
+            if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                return ([string]$property.Value).Trim()
+            }
+        }
+    }
+    catch {
+        # Preserve the original output when a runner writes non-JSON diagnostics.
+    }
+
+    return $detail
+}
+
 $selectedModes = 0
 if ($ApplyConfirmed) { $selectedModes++ }
 if ($VerifyOnly) { $selectedModes++ }
 if ($CompileOnly) { $selectedModes++ }
+if ($Preflight) { $selectedModes++ }
 if ($selectedModes -ne 1) {
-    throw "Choose exactly one mode: -ApplyConfirmed, -VerifyOnly, or -CompileOnly."
+    throw "Choose exactly one mode: -ApplyConfirmed, -VerifyOnly, -CompileOnly, or -Preflight."
 }
 
 $ProjectPath = [System.IO.Path]::GetFullPath($ProjectPath)
@@ -62,9 +89,16 @@ if ($ApplyConfirmed) {
     $mode = "apply"
 } elseif ($CompileOnly) {
     $mode = "apply"
+} elseif ($Preflight) {
+    $mode = "preflight"
 } else {
     $mode = "verify"
 }
+
+$priorOutputEncoding = $OutputEncoding
+$priorConsoleOutputEncoding = [Console]::OutputEncoding
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $OutputEncoding
 
 try {
     & $PythonPath $renderer --plan $PlanPath --mode $mode --output $payloadPath
@@ -78,19 +112,32 @@ try {
         $unityResult = & uloop execute-dynamic-code --project-path $ProjectPath --code-file $payloadPath 2>&1 | Out-String
     }
     $unityExitCode = $LASTEXITCODE
-    Write-Output $unityResult
     if ($unityExitCode -ne 0 -or $unityResult -notmatch '"Success"\s*:\s*true') {
+        $failureDetail = Get-UnityFailureDetail $unityResult
         if ($ApplyConfirmed) {
-            throw "Unity apply did not return a successful result. Do not apply again; run this plan with -VerifyOnly first."
+            throw "Unity apply failed: $failureDetail"
         }
         if ($CompileOnly) {
-            throw "Unity compile did not return a successful result. No asset was written."
+            throw "Unity compile failed: $failureDetail"
         }
-        throw "Unity verification did not return a successful result."
+        if ($Preflight) {
+            throw "Unity preflight failed: $failureDetail"
+        }
+        throw "Unity verification failed: $failureDetail"
     }
+    Write-Output $unityResult
+}
+catch {
+    [pscustomobject]@{
+        success = $false
+        error = $_.Exception.Message
+    } | ConvertTo-Json -Compress
+    exit 1
 }
 finally {
     if (Test-Path -LiteralPath $payloadPath) {
         Remove-Item -LiteralPath $payloadPath -Force
     }
+    [Console]::OutputEncoding = $priorConsoleOutputEncoding
+    $OutputEncoding = $priorOutputEncoding
 }

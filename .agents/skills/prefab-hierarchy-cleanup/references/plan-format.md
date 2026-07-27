@@ -2,7 +2,60 @@
 
 Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed execution contract.
 
-## Required Fields
+## Unity AI Chat Plan (Version 2)
+
+The Unity AI hierarchy chat window accepts only version 2 plans. The window supplies an authoritative node snapshot generated through Unity Editor APIs. Copy its `fingerprint` into `snapshotFingerprint`, and reference every existing Prefab node as `node:<id>` using an ID present in that snapshot.
+
+```json
+{
+  "version": 2,
+  "snapshotFingerprint": "8f13c6...",
+  "prefabAssetPath": "Assets/UI/RewardPanel.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/UI/RewardPanel.prefab"
+  },
+  "prefabName": "RewardPanelView",
+  "wrappers": [
+    { "id": "content", "parent": "node:n000001", "name": "[Content]", "siblingIndex": 0 }
+  ],
+  "moves": [
+    { "source": "node:n000014", "destination": "@content", "siblingIndex": 0 }
+  ],
+  "renames": [],
+  "emptyContainerRemovals": [],
+  "tightBounds": [{ "target": "@content" }],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentFamilyDecisions": [],
+  "componentExtractions": [],
+  "stateComponentExtractions": [],
+  "variantComponentExtractions": [],
+  "statefulComponentExtractions": [],
+  "verify": {}
+}
+```
+
+The following fields are existing-node references and therefore must use `node:<id>` in a chat plan:
+
+- `wrappers[].parent`, unless it is an earlier `@wrapperId`;
+- `moves[].source` and `moves[].destination`, with `destination` also allowing `@wrapperId`;
+- `renames[].target`, with `@wrapperId` allowed;
+- `emptyContainerRemovals[].source`;
+- `tightBounds[].target`, with `@wrapperId` allowed;
+- `componentFamilyDecisions[].parent` and every entry in `sources`;
+- `componentExtractions[].template` and every entry in `instances`;
+- every `template`, `common.source`, `states[].source`, and `instances[].source` in state, variant, and stateful extraction contracts.
+
+Asset paths, output verification paths, new semantic names, state/member names, and wrapper IDs are not node references. Keep their existing schema below. Never invent a node ID, derive one from a GameObject name, or emit a raw pre-apply hierarchy path in an existing-node reference. If the intended object cannot be proven from the supplied snapshot, omit that operation and report the ambiguity in the review.
+
+Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, then writes a temporary internal version 1 runner plan. The AI must never emit that internal plan.
+
+## Internal Runner Plan (Version 1)
+
+The bundled PowerShell/Python runner remains compatible with existing version 1 path plans. This section defines its operation shapes and is also the shape reference for version 2 chat plans. Direct script callers use version 1; the Unity AI chat window performs the conversion automatically.
+
+### Required Fields
 
 ```json
 {
@@ -33,9 +86,13 @@ Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed executio
 
 All asset paths are project-relative paths beginning with `Assets/`. `prefabName` must use PascalCase and end with `View` when Texture or SpriteAtlas assets are renamed.
 
-## Operations
+### Operations
 
 `wrappers` are created in order. `parent` and every `source` path refer to the pre-apply Prefab tree, including the Prefab root name. Prefix a previously created wrapper ID with `@` when it is the parent or target.
+
+An `@` reference names only a wrapper root: it must be exactly `@wrapperId`, never `@wrapperId/Child`. Existing nodes must always use their original, full pre-apply Prefab path in `moves.source`, `renames.target`, and `emptyContainerRemovals.source`, even when the operation later moves that node into a wrapper. `tightBounds.target` may use an exact wrapper-root reference or an existing pre-apply path. The renderer resolves existing nodes before it creates wrappers and applies moves, so post-move paths are not valid plan inputs.
+
+For direct internal runner plans, every source-tree path is an identity contract and must be copied exactly from the Unity snapshot, including its original sibling name and duplicate occurrence marker where applicable. Do not infer a GameObject name from a `TextMeshProUGUI.text` value, a Sprite name, or a visual label. The AI chat window never accepts these paths from the model: it resolves validated version 2 node IDs into this internal form and then runs the same source-path preflight.
 
 ```json
 {
@@ -54,7 +111,7 @@ All asset paths are project-relative paths beginning with `Assets/`. `prefabName
 
 Each move source must be unique. A wrapper cannot overwrite an existing child. Reparenting is performed with world-position preservation. Every wrapper is tightened to the exact union of its direct child `RectTransform` bounds after all moves; use `tightBounds` to also tighten existing semantic containers.
 
-`emptyContainerRemovals` is intentionally narrow: use it only to remove an existing structural grouping container after all of its children were moved. The runner rejects a non-empty target, any target with a component other than `Transform`, or a target referenced elsewhere in the Prefab. Pair every removal with `verify.absentPaths` so the saved hierarchy proves that a former flat type/layer group was not left behind.
+`emptyContainerRemovals` is intentionally narrow: use it only to remove an existing structural grouping container after every current direct child is either moved out or removed by an earlier entry in the same list. Nested removals must be ordered child before parent. The read-only preflight creates the planned wrappers, performs the planned moves, and attempts the removals on an unsaved Prefab instance; it reports every removal that would remain non-empty, including its remaining direct child paths, before the plan can be confirmed. The runner also rejects any target with a component other than `Transform` or a target referenced elsewhere in the Prefab. Pair every removal with `verify.absentPaths` so the saved hierarchy proves that a former flat type/layer group was not left behind.
 
 ```json
 {
@@ -113,7 +170,7 @@ Use inner-to-outer order so nested groups are tightened before their parents. Wh
 
 ## Optional Component Extraction
 
-The `componentExtractions`, `stateComponentExtractions`, `variantComponentExtractions`, and `statefulComponentExtractions` fields are allowed only in a separate plan that the user explicitly approved. They may create a reusable component under `Prefab/Common`, but do not change the rule that the main target Prefab is saved in place at `prefabAssetPath`. Do not include them in an ordinary hierarchy-cleanup chat request.
+The `componentExtractions`, `stateComponentExtractions`, `variantComponentExtractions`, and `statefulComponentExtractions` fields are allowed only in a separate plan that the user explicitly approved. They may create a reusable component under `Prefab/Common`, but do not change the rule that the main target Prefab is saved in place at `prefabAssetPath`. Do not include them unless the reviewed request explicitly calls for a reusable, state, variant, or stateful component.
 
 ### Shared Component Extraction
 

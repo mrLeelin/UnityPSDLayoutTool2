@@ -18,8 +18,10 @@ namespace PsdLayoutTool2
         internal const string ThinkingIndicatorElementName = "psd-hierarchy-chat-thinking";
         internal const string AgentInfoElementName = "psd-hierarchy-chat-agent-info";
         internal const string OpenCliButtonName = "psd-hierarchy-chat-open-cli";
+        internal const string CopyMessageButtonClassName = "psd-hierarchy-chat-message-copy";
 
         private const string StyleSheetGuid = "18f53073502d4d7e89345f900b727c7e";
+        private const int MaxAutomaticPlanRepairAttempts = 1;
 
         private PsdHierarchyChatContext context;
         private readonly List<PsdHierarchyChatMessage> conversation = new List<PsdHierarchyChatMessage>();
@@ -33,6 +35,7 @@ namespace PsdLayoutTool2
         private VisualElement thinkingIndicator;
         private PsdHierarchyChatConnection activeConnection;
         private string cliSessionId = string.Empty;
+        private string pendingPlanJson = string.Empty;
         private bool initialRequestQueued;
         private bool isSending;
         private bool hasActiveConnection;
@@ -90,6 +93,7 @@ namespace PsdLayoutTool2
             hasActiveConnection = false;
             activeConnection = default(PsdHierarchyChatConnection);
             cliSessionId = string.Empty;
+            pendingPlanJson = string.Empty;
             RebuildUi();
             if (autoSendInitialRequest)
             {
@@ -262,7 +266,22 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            SendMessage(PsdHierarchyChatClient.ResolveUserPrompt(draftField.value), false);
+            string prompt = draftField.value ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(pendingPlanJson) &&
+                (string.IsNullOrWhiteSpace(prompt) || PsdHierarchyChatCleanupExecution.IsApplyIntent(prompt)))
+            {
+                ApplyPendingPlan(string.IsNullOrWhiteSpace(prompt) ? "确认" : prompt);
+                return;
+            }
+
+            if (PsdHierarchyChatCleanupExecution.IsApplyIntent(prompt))
+            {
+                AppendMessage("system", "当前没有通过校验的执行计划，因此不会重新请求 AI 或修改 Prefab。请先等待完整计划生成。 ");
+                return;
+            }
+
+            SetPendingPlan(string.Empty);
+            SendMessage(PsdHierarchyChatClient.ResolveUserPrompt(prompt), false);
         }
 
         private async void SendMessage(string prompt, bool isInitialRequest)
@@ -294,30 +313,101 @@ namespace PsdLayoutTool2
 
             try
             {
-                PsdHierarchyChatSendResult result = await PsdHierarchyChatClient.SendWithCliSessionAsync(
-                    context,
-                    connection,
-                    conversation,
-                    cliSessionId);
-                if (result.success)
+                string lastAssistantReply = string.Empty;
+                string lastPlanError = string.Empty;
+                string initialReviewText = string.Empty;
+                for (int repairAttempt = 0; repairAttempt <= MaxAutomaticPlanRepairAttempts; repairAttempt++)
                 {
+                    PsdHierarchyChatSendResult result = await PsdHierarchyChatClient.SendWithCliSessionAsync(
+                        context,
+                        connection,
+                        conversation,
+                        cliSessionId);
+                    if (!result.success)
+                    {
+                        HideThinkingIndicator();
+                        SetPendingPlan(string.Empty);
+                        string prefix = repairAttempt == 0 ? string.Empty : "AI 自动补全失败：";
+                        AppendMessage("system", prefix + result.message + "。本轮未修改 Prefab。");
+                        SetSending(false, repairAttempt == 0 ? "发送失败" : "自动补全失败");
+                        return;
+                    }
+
                     if (connection.connectionMode == PsdHierarchyAiConnectionMode.LocalCli)
                     {
                         cliSessionId = result.cliSessionId;
                         RefreshConnectionUi();
                     }
 
-                    HideThinkingIndicator();
+                    lastAssistantReply = result.message;
                     conversation.Add(new PsdHierarchyChatMessage("assistant", result.message));
-                    AppendMessage("assistant", result.message);
-                    SetSending(false, "分析完成");
+                    if (repairAttempt == 0)
+                    {
+                        initialReviewText = PsdHierarchyChatCleanupExecution.ExtractReviewText(result.message);
+                    }
+
+                    if (PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                            result.message,
+                            context,
+                            out string planJson,
+                            out string planError))
+                    {
+                        ShowThinkingIndicator("正在使用执行器校验 AI 计划...");
+                        SetSending(true, "正在校验执行计划...");
+                        PsdHierarchyChatCleanupExecutionResult validation =
+                            await PsdHierarchyChatCleanupExecution.ValidatePlanAsync(context, planJson);
+                        HideThinkingIndicator();
+                        if (validation.success)
+                        {
+                            string reviewableReply = repairAttempt == 0
+                                ? result.message
+                                : PsdHierarchyChatCleanupExecution.ComposeReviewableReply(initialReviewText, planJson);
+                            AppendMessage("assistant", reviewableReply);
+                            SetPendingPlan(planJson);
+                            AppendMessage("system", "方案已就绪。点击“确认并更新”或回复“确认”即可直接更新当前 Prefab；确认不会再发送给 AI。 ");
+                            SetSending(false, "方案待确认");
+                            return;
+                        }
+
+                        lastPlanError = validation.message;
+                    }
+                    else
+                    {
+                        lastPlanError = planError;
+                    }
+
+                    if (repairAttempt >= MaxAutomaticPlanRepairAttempts)
+                    {
+                        break;
+                    }
+
+                    int nextAttempt = repairAttempt + 1;
+                    string repairPrompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(lastPlanError);
+                    conversation.Add(new PsdHierarchyChatMessage("user", repairPrompt));
+                    ShowThinkingIndicator(
+                        "AI 返回的计划未通过校验，正在同一会话自动补全（" + nextAttempt + "/" +
+                        MaxAutomaticPlanRepairAttempts + "）...");
+                    SetSending(
+                        true,
+                        "正在自动补全计划（" + nextAttempt + "/" + MaxAutomaticPlanRepairAttempts + "）...");
                 }
-                else
+
+                HideThinkingIndicator();
+                SetPendingPlan(string.Empty);
+                ResetFailedPlanConversation();
+                string failedReply = string.IsNullOrWhiteSpace(initialReviewText)
+                    ? lastAssistantReply
+                    : initialReviewText;
+                if (!string.IsNullOrWhiteSpace(failedReply))
                 {
-                    HideThinkingIndicator();
-                    AppendMessage("system", result.message);
-                    SetSending(false, "发送失败");
+                    AppendMessage("assistant", failedReply);
                 }
+
+                AppendMessage(
+                    "system",
+                    "AI 自动补全 " + MaxAutomaticPlanRepairAttempts + " 次后仍未生成可执行计划：" +
+                    lastPlanError + "。本轮未修改 Prefab。");
+                SetSending(false, "计划生成失败");
             }
             catch (Exception exception)
             {
@@ -332,7 +422,46 @@ namespace PsdLayoutTool2
             }
         }
 
-        internal void ShowThinkingIndicator()
+        private async void ApplyPendingPlan(string confirmation)
+        {
+            if (context == null || isSending || string.IsNullOrWhiteSpace(pendingPlanJson))
+            {
+                return;
+            }
+
+            string planToApply = pendingPlanJson;
+            SetPendingPlan(string.Empty);
+            isSending = true;
+            AppendMessage("user", confirmation.Trim());
+            if (draftField != null)
+            {
+                draftField.value = string.Empty;
+            }
+
+            ShowThinkingIndicator("正在校验已确认方案，并通过 Unity Editor API 更新 Prefab...");
+            SetSending(true, "正在更新 Prefab...");
+            try
+            {
+                PsdHierarchyChatCleanupExecutionResult result =
+                    await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(context, planToApply);
+                HideThinkingIndicator();
+                AppendMessage("system", result.message);
+                SetSending(false, result.success ? "更新完成" : "更新失败");
+            }
+            catch (Exception exception)
+            {
+                HideThinkingIndicator();
+                AppendMessage("system", "更新 Prefab 时发生异常：" + exception.Message);
+                SetSending(false, "更新失败");
+            }
+            finally
+            {
+                HideThinkingIndicator();
+                isSending = false;
+            }
+        }
+
+        internal void ShowThinkingIndicator(string content = "正在分析：读取整理技能、完整层级、节点几何、组件与重复结构...")
         {
             HideThinkingIndicator();
             if (messagesView == null)
@@ -340,17 +469,19 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            thinkingIndicator = new VisualElement { name = ThinkingIndicatorElementName };
-            thinkingIndicator.AddToClassList("psd-hierarchy-chat-thinking");
+            var indicator = new VisualElement { name = ThinkingIndicatorElementName };
+            thinkingIndicator = indicator;
+            indicator.AddToClassList("psd-hierarchy-chat-thinking");
             var roleLabel = new Label("AI");
             roleLabel.AddToClassList("psd-hierarchy-chat-message-role");
-            thinkingIndicator.Add(roleLabel);
-            var contentLabel = new Label("正在分析：读取整理技能、完整层级、节点几何、组件与重复结构...");
+            indicator.Add(roleLabel);
+            var contentLabel = new Label(content);
             contentLabel.AddToClassList("psd-hierarchy-chat-thinking-content");
             contentLabel.style.whiteSpace = WhiteSpace.Normal;
-            thinkingIndicator.Add(contentLabel);
-            messagesView.Add(thinkingIndicator);
-            messagesView.schedule.Execute(() => messagesView.ScrollTo(thinkingIndicator));
+            indicator.Add(contentLabel);
+            ScrollView targetView = messagesView;
+            targetView.Add(indicator);
+            targetView.schedule.Execute(() => ScrollToIfAttached(targetView, indicator));
         }
 
         internal void HideThinkingIndicator()
@@ -369,6 +500,30 @@ namespace PsdLayoutTool2
             if (draftField != null) draftField.SetEnabled(!sending);
             if (sendButton != null) sendButton.SetEnabled(!sending);
             if (statusLabel != null) statusLabel.text = status;
+        }
+
+        private void SetPendingPlan(string planJson)
+        {
+            pendingPlanJson = planJson ?? string.Empty;
+            bool canApply = !string.IsNullOrWhiteSpace(pendingPlanJson);
+            if (sendButton != null)
+            {
+                sendButton.text = canApply ? "确认并更新" : "发送追问";
+            }
+
+            if (draftField != null)
+            {
+                draftField.tooltip = canApply
+                    ? "点击确认并更新，或输入“确认”后发送。输入其他内容会继续追问并使当前方案失效。"
+                    : "继续追问 AI";
+            }
+        }
+
+        private void ResetFailedPlanConversation()
+        {
+            conversation.Clear();
+            cliSessionId = string.Empty;
+            RefreshConnectionUi();
         }
 
         private void OpenCurrentConversationInCli()
@@ -399,18 +554,74 @@ namespace PsdLayoutTool2
                 return;
             }
 
+            VisualElement message = CreateMessageElement(role, content);
+            ScrollView targetView = messagesView;
+            targetView.Add(message);
+            targetView.schedule.Execute(() => ScrollToIfAttached(targetView, message));
+        }
+
+        internal static void ScrollToIfAttached(ScrollView scrollView, VisualElement child)
+        {
+            if (scrollView == null || child == null || scrollView.panel == null ||
+                child.panel != scrollView.panel)
+            {
+                return;
+            }
+
+            VisualElement ancestor = child.parent;
+            while (ancestor != null && ancestor != scrollView)
+            {
+                ancestor = ancestor.parent;
+            }
+
+            if (ancestor == scrollView)
+            {
+                scrollView.ScrollTo(child);
+            }
+        }
+
+        internal static VisualElement CreateMessageElement(string role, string content)
+        {
+            string messageContent = content ?? string.Empty;
             var message = new VisualElement();
             message.AddToClassList("psd-hierarchy-chat-message");
             message.AddToClassList("psd-hierarchy-chat-message-" + role);
             var roleLabel = new Label(RoleLabel(role));
             roleLabel.AddToClassList("psd-hierarchy-chat-message-role");
             message.Add(roleLabel);
-            var contentLabel = new Label(content ?? string.Empty);
+            var contentLabel = new Label(messageContent);
             contentLabel.AddToClassList("psd-hierarchy-chat-message-content");
             contentLabel.style.whiteSpace = WhiteSpace.Normal;
             message.Add(contentLabel);
-            messagesView.Add(message);
-            messagesView.schedule.Execute(() => messagesView.ScrollTo(message));
+
+            var copyButton = new Button(() => CopyMessageToClipboard(messageContent))
+            {
+                tooltip = "复制完整消息",
+            };
+            copyButton.AddToClassList(CopyMessageButtonClassName);
+            GUIContent copyIconContent = EditorGUIUtility.IconContent("d_TreeEditor.Duplicate");
+            if (copyIconContent.image != null)
+            {
+                var copyIcon = new Image
+                {
+                    image = copyIconContent.image,
+                    pickingMode = PickingMode.Ignore,
+                };
+                copyIcon.AddToClassList("psd-hierarchy-chat-message-copy-icon");
+                copyButton.Add(copyIcon);
+            }
+            else
+            {
+                copyButton.text = "复制";
+            }
+
+            message.Add(copyButton);
+            return message;
+        }
+
+        internal static void CopyMessageToClipboard(string content)
+        {
+            EditorGUIUtility.systemCopyBuffer = content ?? string.Empty;
         }
 
         private bool TryResolveConnection(out PsdHierarchyChatConnection connection, out string error)

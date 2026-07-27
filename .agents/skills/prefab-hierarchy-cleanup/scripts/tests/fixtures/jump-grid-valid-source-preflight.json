@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "prefabAssetPath": "Assets/PSDLayoutTool2/TestData/跳格子切图/Prefab/跳格子切图.prefab",
+  "output": {
+    "mode": "in_place",
+    "assetPath": "Assets/PSDLayoutTool2/TestData/跳格子切图/Prefab/跳格子切图.prefab"
+  },
+  "prefabName": "JumpGridView",
+  "wrappers": [],
+  "moves": [],
+  "renames": [
+    {
+      "target": "跳格子切图/[Content]/[Backgrounds]/MainBackground",
+      "name": "RewardAmount"
+    }
+  ],
+  "emptyContainerRemovals": [],
+  "tightBounds": [],
+  "textureRenames": [],
+  "spriteAtlasRenames": [],
+  "componentFamilyDecisions": [],
+  "componentExtractions": [],
+  "stateComponentExtractions": [],
+  "variantComponentExtractions": [],
+  "statefulComponentExtractions": [],
+  "verify": {}
+}

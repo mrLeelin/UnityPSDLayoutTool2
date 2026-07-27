@@ -1,6 +1,7 @@
 namespace PsdLayoutTool2.Tests
 {
     using NUnit.Framework;
+    using UnityEditor;
     using UnityEngine;
     using UnityEngine.UIElements;
 
@@ -64,6 +65,38 @@ namespace PsdLayoutTool2.Tests
             {
                 window.Close();
             }
+        }
+
+        [TestCase("user")]
+        [TestCase("assistant")]
+        [TestCase("system")]
+        public void MessageElementProvidesCopyButtonForEveryRole(string role)
+        {
+            VisualElement message = PsdHierarchyChatWindow.CreateMessageElement(role, "完整错误内容");
+
+            Button copyButton = message.Q<Button>(className: PsdHierarchyChatWindow.CopyMessageButtonClassName);
+            Assert.That(copyButton, Is.Not.Null);
+            Assert.That(copyButton.tooltip, Is.EqualTo("复制完整消息"));
+        }
+
+        [Test]
+        public void CopyMessageToClipboardPreservesTheCompleteErrorMessage()
+        {
+            const string errorMessage = "Prefab 更新失败：Path was not found: 跳格子切图/1/122M";
+
+            PsdHierarchyChatWindow.CopyMessageToClipboard(errorMessage);
+
+            Assert.That(EditorGUIUtility.systemCopyBuffer, Is.EqualTo(errorMessage));
+        }
+
+        [Test]
+        public void ScrollToIfAttachedIgnoresMissingOrDetachedElement()
+        {
+            var scrollView = new ScrollView();
+
+            Assert.DoesNotThrow(() => PsdHierarchyChatWindow.ScrollToIfAttached(scrollView, null));
+            Assert.DoesNotThrow(
+                () => PsdHierarchyChatWindow.ScrollToIfAttached(scrollView, new VisualElement()));
         }
     }
 }

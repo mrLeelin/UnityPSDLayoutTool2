@@ -57,6 +57,25 @@ def state_component_target_path(extraction: dict[str, Any]) -> str:
     return parent_path + "/" + PurePosixPath(extraction["assetPath"]).stem
 
 
+def validate_wrapper_reference(
+    value: str,
+    label: str,
+    wrapper_ids: set[str],
+    unknown_wrapper_message: str,
+) -> None:
+    if not value.startswith("@"):
+        return
+
+    wrapper_id = value[1:]
+    if "/" in wrapper_id or "\\" in wrapper_id:
+        fail(
+            f"{label} wrapper reference must be exactly @wrapperId; "
+            "use the original pre-apply full path to address an existing child"
+        )
+    if wrapper_id not in wrapper_ids:
+        fail(unknown_wrapper_message)
+
+
 def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     if raw.get("version") != 1:
         fail("version must be 1")
@@ -109,8 +128,12 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
             fail(f"duplicate wrapper id: {wrapper_id}")
         wrapper_ids.add(wrapper_id)
         parent = require_string(wrapper.get("parent"), f"wrappers[{index}].parent")
-        if parent.startswith("@") and parent[1:] not in wrapper_ids:
-            fail(f"wrappers[{index}].parent references an unknown or later wrapper")
+        validate_wrapper_reference(
+            parent,
+            f"wrappers[{index}].parent",
+            wrapper_ids,
+            f"wrappers[{index}].parent references an unknown or later wrapper",
+        )
         if not parent.startswith("@"):
             require_string(parent, f"wrappers[{index}].parent")
         require_string(wrapper.get("name"), f"wrappers[{index}].name")
@@ -121,23 +144,35 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     for index, move in enumerate(moves):
         source = require_string(move.get("source"), f"moves[{index}].source")
         destination = require_string(move.get("destination"), f"moves[{index}].destination")
+        if source.startswith("@"):
+            fail(f"moves[{index}].source must use the original pre-apply full path")
         if source in move_sources:
             fail(f"each move source must be unique: {source}")
         move_sources.add(source)
-        if destination.startswith("@") and destination[1:] not in wrapper_ids:
-            fail(f"moves[{index}].destination references an unknown wrapper")
+        validate_wrapper_reference(
+            destination,
+            f"moves[{index}].destination",
+            wrapper_ids,
+            f"moves[{index}].destination references an unknown wrapper",
+        )
         if not isinstance(move.get("siblingIndex"), int) or move["siblingIndex"] < 0:
             fail(f"moves[{index}].siblingIndex must be a non-negative integer")
 
     for index, rename in enumerate(renames):
         target = require_string(rename.get("target"), f"renames[{index}].target")
-        if target.startswith("@") and target[1:] not in wrapper_ids:
-            fail(f"renames[{index}].target references an unknown wrapper")
+        validate_wrapper_reference(
+            target,
+            f"renames[{index}].target",
+            wrapper_ids,
+            f"renames[{index}].target references an unknown wrapper",
+        )
         require_string(rename.get("name"), f"renames[{index}].name")
 
     removal_sources: set[str] = set()
     for index, removal in enumerate(empty_container_removals):
         source = require_string(removal.get("source"), f"emptyContainerRemovals[{index}].source")
+        if source.startswith("@"):
+            fail(f"emptyContainerRemovals[{index}].source must use the original pre-apply full path")
         if "/" not in source:
             fail(f"emptyContainerRemovals[{index}].source must not be the Prefab root")
         if source in removal_sources:
@@ -150,8 +185,12 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     tight_targets: set[str] = set()
     for index, tight_bound in enumerate(tight_bounds):
         target = require_string(tight_bound.get("target"), f"tightBounds[{index}].target")
-        if target.startswith("@") and target[1:] not in wrapper_ids:
-            fail(f"tightBounds[{index}].target references an unknown wrapper")
+        validate_wrapper_reference(
+            target,
+            f"tightBounds[{index}].target",
+            wrapper_ids,
+            f"tightBounds[{index}].target references an unknown wrapper",
+        )
         if target in tight_targets:
             fail(f"duplicate tightBounds target: {target}")
         tight_targets.add(target)
@@ -784,6 +823,205 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
     return lines
 
 
+def emit_preflight(plan: dict[str, Any]) -> list[str]:
+    lines = [
+        "string PlanPath(Transform node)",
+        "{",
+        "    var segments = new List<string>();",
+        "    for (var current = node; current != null; current = current.parent)",
+        "    {",
+        "        var segment = current.name;",
+        "        if (current.parent != null)",
+        "        {",
+        "            var occurrence = 0;",
+        "            for (var siblingIndex = 0; siblingIndex < current.parent.childCount; siblingIndex++)",
+        "            {",
+        "                var sibling = current.parent.GetChild(siblingIndex);",
+        "                if (sibling.name != current.name) continue;",
+        "                if (sibling == current) break;",
+        "                occurrence++;",
+        "            }",
+        "            if (occurrence > 0) segment += \"#\" + occurrence;",
+        "        }",
+        "        segments.Add(segment);",
+        "    }",
+        "    segments.Reverse();",
+        "    return string.Join(\"/\", segments.ToArray());",
+        "}",
+        "",
+        "string FindCandidateSourcePaths(GameObject root, string path)",
+        "{",
+        "    var requestedName = path.Substring(path.LastIndexOf('/') + 1);",
+        "    var duplicateMarker = requestedName.LastIndexOf('#');",
+        "    if (duplicateMarker > 0) requestedName = requestedName.Substring(0, duplicateMarker);",
+        "    var candidates = new List<string>();",
+        "    foreach (var node in root.GetComponentsInChildren<Transform>(true))",
+        "    {",
+        "        if (node.name.Length < 3) continue;",
+        "        if (node.name.IndexOf(requestedName, StringComparison.OrdinalIgnoreCase) < 0 && requestedName.IndexOf(node.name, StringComparison.OrdinalIgnoreCase) < 0) continue;",
+        "        candidates.Add(PlanPath(node));",
+        "        if (candidates.Count >= 5) break;",
+        "    }",
+        "    return string.Join(\", \", candidates.ToArray());",
+        "}",
+        "",
+        "void AssertPlanPath(GameObject root, string operation, string path)",
+        "{",
+        "    try { FindByPath(root, path); }",
+        "    catch (InvalidOperationException)",
+        "    {",
+        "        var candidates = FindCandidateSourcePaths(root, path);",
+        "        var hint = string.IsNullOrEmpty(candidates) ? string.Empty : \" Candidate source paths: \" + candidates;",
+        "        throw new InvalidOperationException(\"Plan source path was not found for \" + operation + \": \" + path + hint);",
+        "    }",
+        "}",
+        "",
+        "if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null) throw new InvalidOperationException(\"Prefab did not load: \" + prefabPath);",
+        "if (!string.Equals(outputPath, prefabPath, StringComparison.Ordinal)) throw new InvalidOperationException(\"Cleanup must save only the exact target Prefab in place.\");",
+    ]
+
+    for index, rename in enumerate(plan["texture_renames"] + plan["atlas_renames"]):
+        source = rename["from"]
+        target = final_asset_path(source, rename["toName"])
+        lines.extend(
+            [
+                f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(source)}) == null) throw new InvalidOperationException(\"Source asset did not load: \" + {csharp(source)});",
+                f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(target)}) != null) throw new InvalidOperationException(\"Rename target already exists: \" + {csharp(target)});",
+                f"AssertGuid({csharp(source)}, {csharp(rename['expectedGuid'])});",
+            ]
+        )
+
+    for extraction in plan["component_extractions"]:
+        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+    for extraction in plan["state_component_extractions"]:
+        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"State component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+    for extraction in plan["variant_component_extractions"]:
+        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Variant component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+    for extraction in plan["stateful_component_extractions"]:
+        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Stateful component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+
+    lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
+
+    def assert_path(operation: str, path: str) -> None:
+        lines.append(f"    AssertPlanPath(root, {csharp(operation)}, {csharp(path)});")
+
+    for index, wrapper in enumerate(plan["wrappers"]):
+        if not wrapper["parent"].startswith("@"):
+            assert_path(f"wrappers[{index}].parent", wrapper["parent"])
+    for index, move in enumerate(plan["moves"]):
+        assert_path(f"moves[{index}].source", move["source"])
+        if not move["destination"].startswith("@"):
+            assert_path(f"moves[{index}].destination", move["destination"])
+    for index, rename in enumerate(plan["renames"]):
+        if not rename["target"].startswith("@"):
+            assert_path(f"renames[{index}].target", rename["target"])
+    for index, removal in enumerate(plan["empty_container_removals"]):
+        assert_path(f"emptyContainerRemovals[{index}].source", removal["source"])
+    for index, tight_bound in enumerate(plan["tight_bounds"]):
+        if not tight_bound["target"].startswith("@"):
+            assert_path(f"tightBounds[{index}].target", tight_bound["target"])
+    for index, decision in enumerate(plan["component_family_decisions"]):
+        assert_path(f"componentFamilyDecisions[{index}].parent", decision["parent"])
+        for source_index, source in enumerate(decision["sources"]):
+            assert_path(f"componentFamilyDecisions[{index}].sources[{source_index}]", source)
+    for index, extraction in enumerate(plan["component_extractions"]):
+        assert_path(f"componentExtractions[{index}].template", extraction["template"])
+        for instance_index, instance in enumerate(extraction["instances"]):
+            assert_path(f"componentExtractions[{index}].instances[{instance_index}]", instance)
+    for index, extraction in enumerate(plan["state_component_extractions"]):
+        assert_path(f"stateComponentExtractions[{index}].template", extraction["template"])
+        for state_index, state in enumerate(extraction["states"]):
+            assert_path(f"stateComponentExtractions[{index}].states[{state_index}].source", state["source"])
+    for index, extraction in enumerate(plan["variant_component_extractions"]):
+        assert_path(f"variantComponentExtractions[{index}].template", extraction["template"])
+        for state_index, state in enumerate(extraction["states"]):
+            assert_path(f"variantComponentExtractions[{index}].states[{state_index}].source", state["source"])
+        for instance_index, instance in enumerate(extraction["instances"]):
+            assert_path(f"variantComponentExtractions[{index}].instances[{instance_index}].source", instance["source"])
+    for index, extraction in enumerate(plan["stateful_component_extractions"]):
+        assert_path(f"statefulComponentExtractions[{index}].template", extraction["template"])
+        assert_path(f"statefulComponentExtractions[{index}].common.source", extraction["common"]["source"])
+        for state_index, state in enumerate(extraction["states"]):
+            assert_path(f"statefulComponentExtractions[{index}].states[{state_index}].source", state["source"])
+        for instance_index, instance in enumerate(extraction["instances"]):
+            assert_path(f"statefulComponentExtractions[{index}].instances[{instance_index}].source", instance["source"])
+
+    for index, wrapper in enumerate(plan["wrappers"]):
+        if not wrapper["parent"].startswith("@"):
+            lines.append(
+                f"    var preflightWrapperParent{index} = FindByPath(root, {csharp(wrapper['parent'])}).transform;"
+            )
+    for index, move in enumerate(plan["moves"]):
+        lines.append(
+            f"    var preflightMoveSource{index} = FindByPath(root, {csharp(move['source'])}).transform;"
+        )
+        if not move["destination"].startswith("@"):
+            lines.append(
+                f"    var preflightMoveDestination{index} = FindByPath(root, {csharp(move['destination'])}).transform;"
+            )
+    for index, removal in enumerate(plan["empty_container_removals"]):
+        lines.append(
+            f"    var preflightRemoval{index} = FindByPath(root, {csharp(removal['source'])}).transform;"
+        )
+
+    preflight_wrapper_vars: dict[str, str] = {}
+    for index, wrapper in enumerate(plan["wrappers"]):
+        parent = wrapper["parent"]
+        parent_expr = (
+            f"{preflight_wrapper_vars[parent[1:]]}.transform"
+            if parent.startswith("@")
+            else f"preflightWrapperParent{index}"
+        )
+        variable = f"preflightWrapper{index}"
+        preflight_wrapper_vars[wrapper["id"]] = variable
+        lines.append(
+            f"    var {variable} = CreateWrapper({parent_expr}, {csharp(wrapper['name'])}, {wrapper['siblingIndex']});"
+        )
+
+    for index, move in enumerate(plan["moves"]):
+        destination = move["destination"]
+        destination_expr = (
+            f"{preflight_wrapper_vars[destination[1:]]}.transform"
+            if destination.startswith("@")
+            else f"preflightMoveDestination{index}"
+        )
+        lines.append(
+            f"    preflightMoveSource{index}.SetParent({destination_expr}, true);"
+        )
+        lines.append(
+            f"    preflightMoveSource{index}.SetSiblingIndex({move['siblingIndex']});"
+        )
+
+    if plan["empty_container_removals"]:
+        lines.append("    var preflightRemovalErrors = new List<string>();")
+    for index, _ in enumerate(plan["empty_container_removals"]):
+        lines.extend(
+            [
+                f"    try {{ RemoveEmptyContainer(root.transform, preflightRemoval{index}); }}",
+                f"    catch (Exception preflightRemovalError{index})",
+                "    {",
+                f"        preflightRemovalErrors.Add(\"emptyContainerRemovals[{index}]: \" + preflightRemovalError{index}.Message);",
+                "    }",
+            ]
+        )
+    if plan["empty_container_removals"]:
+        lines.append(
+            '    if (preflightRemovalErrors.Count > 0) throw new InvalidOperationException("Planned empty container removals are invalid: " + string.Join(" | ", preflightRemovalErrors.ToArray()));'
+        )
+
+    lines.extend(
+        [
+            "    return \"PREFLIGHT_OK\";",
+            "}",
+            "finally",
+            "{",
+            "    PrefabUtility.UnloadPrefabContents(root);",
+            "}",
+        ]
+    )
+    return lines
+
+
 def render(plan: dict[str, Any], mode: str) -> str:
     verify = plan["verify"]
     prefix = verify.get("texturePathPrefix", "")
@@ -900,7 +1138,12 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "void RemoveEmptyContainer(Transform prefabRoot, Transform container)",
         "{",
         "    if (container.parent == null) throw new InvalidOperationException(\"Cannot remove the Prefab root\");",
-        "    if (container.childCount != 0) throw new InvalidOperationException(\"Container is not empty: \" + TransformPath(container));",
+        "    if (container.childCount != 0)",
+        "    {",
+        "        var remainingChildren = new List<string>();",
+        "        for (var childIndex = 0; childIndex < container.childCount; childIndex++) remainingChildren.Add(TransformPath(container.GetChild(childIndex)));",
+        "        throw new InvalidOperationException(\"Container is not empty after planned moves: \" + TransformPath(container) + \". Remaining direct children: \" + string.Join(\", \", remainingChildren.ToArray()));",
+        "    }",
         "    foreach (var component in container.GetComponents<Component>()) if (component != null && !(component is Transform)) throw new InvalidOperationException(\"Container has non-Transform components: \" + TransformPath(container));",
         "    AssertNoExternalReferences(prefabRoot, container);",
         "    Object.DestroyImmediate(container.gameObject);",
@@ -1338,6 +1581,10 @@ def render(plan: dict[str, Any], mode: str) -> str:
         lines.extend(emit_verification(plan, mode))
         return "\n".join(lines) + "\n"
 
+    if mode == "preflight":
+        lines.extend(emit_preflight(plan))
+        return "\n".join(lines) + "\n"
+
     lines.extend(
         [
             "if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null) throw new InvalidOperationException(\"Prefab did not load: \" + prefabPath);",
@@ -1718,7 +1965,7 @@ def render_snapshot(prefab_path: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path)
-    parser.add_argument("--mode", required=True, choices=("apply", "verify", "snapshot"))
+    parser.add_argument("--mode", required=True, choices=("apply", "preflight", "verify", "snapshot"))
     parser.add_argument("--prefab-path")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -1729,7 +1976,7 @@ def main() -> int:
             args.output.write_text(render_snapshot(asset_path(args.prefab_path, "prefabPath")), encoding="utf-8")
         else:
             if args.plan is None:
-                fail("--plan is required for apply and verify modes")
+                fail("--plan is required for apply, preflight, and verify modes")
             raw = json.loads(args.plan.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 fail("plan root must be an object")
