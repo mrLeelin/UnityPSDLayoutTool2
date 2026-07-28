@@ -38,6 +38,22 @@ namespace PsdLayoutTool2
         internal readonly string materialGuid;
     }
 
+    [Serializable]
+    internal sealed class PsdCommonAssetPreviewSettings
+    {
+        internal const int DefaultPort = 52342;
+        [SerializeField] private int port = DefaultPort;
+        internal int ResolvePort() => port >= 1 && port <= 65535 ? port : DefaultPort;
+        internal bool TrySetPort(int value, out string error)
+        {
+            if (value < 1 || value > 65535) { error = "端口必须在 1 到 65535 之间。"; return false; }
+            error = string.Empty;
+            if (port == value) return false;
+            port = value;
+            return true;
+        }
+    }
+
     /// <summary>
     /// 项目级通用资源命名前缀快照，同时用于 PSD 图层解析和公共资源映射表扫描。
     /// 前缀之后的文本会作为资源键，例如 UI_Prefab_Button_Green 的资源键为 Button_Green。
@@ -65,16 +81,45 @@ namespace PsdLayoutTool2
             string outputFolderName,
             PsdImporter.PrefabOutputMode prefabMode,
             PsdImporter.SpriteAtlasVersion spriteAtlasVersion)
+            : this(
+                outputMode,
+                outputFolderName,
+                string.Empty,
+                prefabMode,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                spriteAtlasVersion)
+        {
+        }
+
+        internal PsdLayoutProjectOutputSnapshot(
+            PsdImporter.OutputDirectoryMode outputMode,
+            string outputFolderName,
+            string fixedOutputPath,
+            PsdImporter.PrefabOutputMode prefabMode,
+            string atlasOutputPath,
+            string textureOutputPath,
+            string prefabOutputPath,
+            PsdImporter.SpriteAtlasVersion spriteAtlasVersion)
         {
             this.outputMode = outputMode;
             this.outputFolderName = outputFolderName ?? string.Empty;
+            this.fixedOutputPath = fixedOutputPath ?? string.Empty;
             this.prefabMode = prefabMode;
+            this.atlasOutputPath = atlasOutputPath ?? string.Empty;
+            this.textureOutputPath = textureOutputPath ?? string.Empty;
+            this.prefabOutputPath = prefabOutputPath ?? string.Empty;
             this.spriteAtlasVersion = spriteAtlasVersion;
         }
 
         internal readonly PsdImporter.OutputDirectoryMode outputMode;
         internal readonly string outputFolderName;
+        internal readonly string fixedOutputPath;
         internal readonly PsdImporter.PrefabOutputMode prefabMode;
+        internal readonly string atlasOutputPath;
+        internal readonly string textureOutputPath;
+        internal readonly string prefabOutputPath;
         internal readonly PsdImporter.SpriteAtlasVersion spriteAtlasVersion;
     }
 
@@ -165,7 +210,19 @@ namespace PsdLayoutTool2
         private string outputFolderName = string.Empty;
 
         [SerializeField]
+        private string fixedOutputPath = string.Empty;
+
+        [SerializeField]
         private PsdImporter.PrefabOutputMode prefabMode = PsdImporter.PrefabOutputMode.SiblingToOutputFolder;
+
+        [SerializeField]
+        private string atlasOutputPath = string.Empty;
+
+        [SerializeField]
+        private string textureOutputPath = string.Empty;
+
+        [SerializeField]
+        private string prefabOutputPath = string.Empty;
 
         [SerializeField]
         private PsdImporter.SpriteAtlasVersion spriteAtlasVersion = PsdImporter.SpriteAtlasVersion.V1;
@@ -176,10 +233,37 @@ namespace PsdLayoutTool2
             PsdImporter.PrefabOutputMode newPrefabMode,
             PsdImporter.SpriteAtlasVersion newSpriteAtlasVersion)
         {
+            return Set(
+                newOutputMode,
+                newOutputFolderName,
+                string.Empty,
+                newPrefabMode,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                newSpriteAtlasVersion);
+        }
+
+        internal bool Set(
+            PsdImporter.OutputDirectoryMode newOutputMode,
+            string newOutputFolderName,
+            string newFixedOutputPath,
+            PsdImporter.PrefabOutputMode newPrefabMode,
+            string newAtlasOutputPath,
+            string newTextureOutputPath,
+            string newPrefabOutputPath,
+            PsdImporter.SpriteAtlasVersion newSpriteAtlasVersion)
+        {
             string normalizedFolderName = (newOutputFolderName ?? string.Empty).Trim();
+            string normalizedAtlasPath = (newAtlasOutputPath ?? string.Empty).Trim().Replace('\\', '/').TrimEnd('/');
+            string normalizedTexturePath = (newTextureOutputPath ?? string.Empty).Trim().Replace('\\', '/').TrimEnd('/');
+            string normalizedPrefabPath = (newPrefabOutputPath ?? string.Empty).Trim().Replace('\\', '/').TrimEnd('/');
             if (outputMode == newOutputMode &&
                 outputFolderName == normalizedFolderName &&
                 prefabMode == newPrefabMode &&
+                atlasOutputPath == normalizedAtlasPath &&
+                textureOutputPath == normalizedTexturePath &&
+                prefabOutputPath == normalizedPrefabPath &&
                 spriteAtlasVersion == newSpriteAtlasVersion)
             {
                 return false;
@@ -187,7 +271,11 @@ namespace PsdLayoutTool2
 
             outputMode = newOutputMode;
             outputFolderName = normalizedFolderName;
+            fixedOutputPath = string.Empty;
             prefabMode = newPrefabMode;
+            atlasOutputPath = normalizedAtlasPath;
+            textureOutputPath = normalizedTexturePath;
+            prefabOutputPath = normalizedPrefabPath;
             spriteAtlasVersion = newSpriteAtlasVersion;
             return true;
         }
@@ -197,7 +285,11 @@ namespace PsdLayoutTool2
             return new PsdLayoutProjectOutputSnapshot(
                 outputMode,
                 outputFolderName,
+                string.Empty,
                 prefabMode,
+                atlasOutputPath,
+                textureOutputPath,
+                prefabOutputPath,
                 spriteAtlasVersion);
         }
     }
@@ -288,7 +380,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 4;
+        private const int CurrentSettingsVersion = 5;
 
         [SerializeField]
         private int settingsVersion;
@@ -305,6 +397,9 @@ namespace PsdLayoutTool2
 
         [SerializeField]
         private PsdHierarchyAiSettings hierarchyAiSettings = new PsdHierarchyAiSettings();
+
+        [SerializeField]
+        private PsdCommonAssetPreviewSettings previewServerSettings = new PsdCommonAssetPreviewSettings();
 
         internal static PsdLayoutProjectSettings instance => PsdLayoutProjectSettingsAsset.GetOrCreate();
 
@@ -354,14 +449,36 @@ namespace PsdLayoutTool2
             }
         }
 
+        internal int ResolvePreviewServerPort() { EnsureData(); return previewServerSettings.ResolvePort(); }
+
+        internal bool TrySetPreviewServerPort(int port, out string error)
+        {
+            EnsureData();
+            bool changed = previewServerSettings.TrySetPort(port, out error);
+            if (changed) SaveAsset();
+            return changed;
+        }
+
         internal void SetOutputSettings(
             PsdImporter.OutputDirectoryMode outputMode,
             string outputFolderName,
+            string fixedOutputPath,
             PsdImporter.PrefabOutputMode prefabMode,
+            string atlasOutputPath,
+            string textureOutputPath,
+            string prefabOutputPath,
             PsdImporter.SpriteAtlasVersion spriteAtlasVersion)
         {
             EnsureData();
-            if (outputSettings.Set(outputMode, outputFolderName, prefabMode, spriteAtlasVersion))
+            if (outputSettings.Set(
+                    outputMode,
+                    outputFolderName,
+                    fixedOutputPath,
+                    prefabMode,
+                    atlasOutputPath,
+                    textureOutputPath,
+                    prefabOutputPath,
+                    spriteAtlasVersion))
             {
                 SaveAsset();
             }
@@ -448,6 +565,12 @@ namespace PsdLayoutTool2
             if (hierarchyAiSettings == null)
             {
                 hierarchyAiSettings = new PsdHierarchyAiSettings();
+                changed = true;
+            }
+
+            if (previewServerSettings == null)
+            {
+                previewServerSettings = new PsdCommonAssetPreviewSettings();
                 changed = true;
             }
 

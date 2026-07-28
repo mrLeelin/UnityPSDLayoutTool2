@@ -382,7 +382,7 @@ namespace PsdLayoutTool2
                     }
 
                     int nextAttempt = repairAttempt + 1;
-                    string repairPrompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(lastPlanError);
+                    string repairPrompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(lastPlanError, context);
                     conversation.Add(new PsdHierarchyChatMessage("user", repairPrompt));
                     ShowThinkingIndicator(
                         "AI 返回的计划未通过校验，正在同一会话自动补全（" + nextAttempt + "/" +

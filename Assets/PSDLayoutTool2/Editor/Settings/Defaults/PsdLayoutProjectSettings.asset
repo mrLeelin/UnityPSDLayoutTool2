@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7cf2ac1ba76b460a888c7caee041c257, type: 3}
   m_Name: PsdLayoutProjectSettings
   m_EditorClassIdentifier: PsdLayoutTool2.Editor::PsdLayoutTool2.PsdLayoutProjectSettings
-  settingsVersion: 4
+  settingsVersion: 5
   fontSettings:
     textMeshProFontGuid:
     textMeshProBaseMaterialGuid:
@@ -22,7 +22,12 @@ MonoBehaviour:
   outputSettings:
     outputMode: 0
     outputFolderName:
+    fixedOutputPath:
     prefabMode: 0
+    atlasOutputPath:
+    textureOutputPath:
+    prefabOutputPath:
+    spriteAtlasVersion: 0
   hierarchyAiSettings:
     provider: 0
     connectionMode: 0

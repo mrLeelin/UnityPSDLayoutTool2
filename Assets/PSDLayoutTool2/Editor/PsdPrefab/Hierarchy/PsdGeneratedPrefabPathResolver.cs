@@ -36,10 +36,22 @@ namespace PsdLayoutTool2
             PsdImporter.PrefabOutputMode prefabMode,
             out string prefabAssetPath)
         {
+            return TryResolve(psdAssetPath, outputMode, outputFolderName, string.Empty, string.Empty, prefabMode, out prefabAssetPath);
+        }
+
+        internal static bool TryResolve(
+            string psdAssetPath,
+            PsdImporter.OutputDirectoryMode outputMode,
+            string outputFolderName,
+            string fixedOutputPath,
+            string prefabOutputPath,
+            PsdImporter.PrefabOutputMode prefabMode,
+            out string prefabAssetPath)
+        {
             prefabAssetPath = string.Empty;
 
             string outputRootAssetPath;
-            if (!TryResolveOutputRoot(psdAssetPath, outputMode, outputFolderName, out outputRootAssetPath))
+            if (!TryResolveOutputRoot(psdAssetPath, outputMode, outputFolderName, fixedOutputPath, out outputRootAssetPath))
             {
                 return false;
             }
@@ -50,13 +62,13 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            // Keep the legacy enum parameter for serialized settings compatibility,
-            // but generated Prefabs now always live in the fixed Prefab folder.
-            prefabAssetPath = string.Format(
-                "{0}/{1}/{2}.prefab",
-                outputRootAssetPath,
-                PrefabFolderName,
-                psdName);
+            string prefabFolder;
+            if (!TryResolveContentFolder(outputRootAssetPath, PrefabFolderName, prefabOutputPath, out prefabFolder))
+            {
+                return false;
+            }
+
+            prefabAssetPath = prefabFolder + "/" + psdName + ".prefab";
             return true;
         }
 
@@ -71,19 +83,50 @@ namespace PsdLayoutTool2
             out string textureFolderAssetPath,
             out string prefabFolderAssetPath)
         {
+            return TryResolveContentFolders(
+                psdAssetPath,
+                outputMode,
+                outputFolderName,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                out atlasFolderAssetPath,
+                out textureFolderAssetPath,
+                out prefabFolderAssetPath);
+        }
+
+        internal static bool TryResolveContentFolders(
+            string psdAssetPath,
+            PsdImporter.OutputDirectoryMode outputMode,
+            string outputFolderName,
+            string fixedOutputPath,
+            string atlasOutputPath,
+            string textureOutputPath,
+            string prefabOutputPath,
+            out string atlasFolderAssetPath,
+            out string textureFolderAssetPath,
+            out string prefabFolderAssetPath)
+        {
             atlasFolderAssetPath = string.Empty;
             textureFolderAssetPath = string.Empty;
             prefabFolderAssetPath = string.Empty;
 
             string outputRootAssetPath;
-            if (!TryResolveOutputRoot(psdAssetPath, outputMode, outputFolderName, out outputRootAssetPath))
+            if (!TryResolveOutputRoot(psdAssetPath, outputMode, outputFolderName, fixedOutputPath, out outputRootAssetPath))
             {
                 return false;
             }
 
-            atlasFolderAssetPath = outputRootAssetPath + "/" + AtlasFolderName;
-            textureFolderAssetPath = outputRootAssetPath + "/" + TextureFolderName;
-            prefabFolderAssetPath = outputRootAssetPath + "/" + PrefabFolderName;
+            if (!TryResolveContentFolder(outputRootAssetPath, AtlasFolderName, atlasOutputPath, out atlasFolderAssetPath) ||
+                !TryResolveContentFolder(outputRootAssetPath, TextureFolderName, textureOutputPath, out textureFolderAssetPath) ||
+                !TryResolveContentFolder(outputRootAssetPath, PrefabFolderName, prefabOutputPath, out prefabFolderAssetPath))
+            {
+                atlasFolderAssetPath = string.Empty;
+                textureFolderAssetPath = string.Empty;
+                prefabFolderAssetPath = string.Empty;
+                return false;
+            }
             return true;
         }
 
@@ -94,6 +137,16 @@ namespace PsdLayoutTool2
             string psdAssetPath,
             PsdImporter.OutputDirectoryMode outputMode,
             string outputFolderName,
+            out string outputRootAssetPath)
+        {
+            return TryResolveOutputRoot(psdAssetPath, outputMode, outputFolderName, string.Empty, out outputRootAssetPath);
+        }
+
+        internal static bool TryResolveOutputRoot(
+            string psdAssetPath,
+            PsdImporter.OutputDirectoryMode outputMode,
+            string outputFolderName,
+            string fixedOutputPath,
             out string outputRootAssetPath)
         {
             outputRootAssetPath = string.Empty;
@@ -126,6 +179,56 @@ namespace PsdLayoutTool2
             }
 
             outputRootAssetPath = string.Format("{0}/{1}", basePath.TrimEnd('/'), folderName);
+            return true;
+        }
+
+        private static bool TryResolveContentFolder(
+            string outputRootAssetPath,
+            string defaultFolderName,
+            string configuredPath,
+            out string folderPath)
+        {
+            folderPath = string.Empty;
+            if (string.IsNullOrWhiteSpace(configuredPath))
+            {
+                folderPath = outputRootAssetPath + "/" + defaultFolderName;
+                return true;
+            }
+
+            string normalizedPath;
+            if (!TryNormalizeAssetsFolderPath(configuredPath, out normalizedPath))
+            {
+                return false;
+            }
+
+            folderPath = normalizedPath;
+            return true;
+        }
+
+        private static bool TryNormalizeAssetsFolderPath(string path, out string normalizedPath)
+        {
+            normalizedPath = NormalizeAssetPath(path).TrimEnd('/');
+            if (string.IsNullOrEmpty(normalizedPath) ||
+                ContainsTraversalSegment(normalizedPath) ||
+                (!normalizedPath.Equals("Assets", StringComparison.Ordinal) &&
+                 !normalizedPath.StartsWith("Assets/", StringComparison.Ordinal)))
+            {
+                normalizedPath = string.Empty;
+                return false;
+            }
+
+            string[] segments = normalizedPath.Split('/');
+            for (int index = 1; index < segments.Length; index++)
+            {
+                string safeSegment = MakeNameSafe(segments[index]);
+                if (string.IsNullOrEmpty(safeSegment) ||
+                    !string.Equals(segments[index], safeSegment, StringComparison.Ordinal))
+                {
+                    normalizedPath = string.Empty;
+                    return false;
+                }
+            }
+
             return true;
         }
 

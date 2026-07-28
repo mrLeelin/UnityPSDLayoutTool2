@@ -4,6 +4,7 @@ namespace PsdLayoutTool2.Tests
     using TMPro;
     using UnityEditor;
     using UnityEngine;
+    using UnityEngine.UIElements;
 
     public sealed class PsdLayoutProjectSettingsTests
     {
@@ -12,6 +13,11 @@ namespace PsdLayoutTool2.Tests
         private const string MaterialPath = TempFolder + "/ProjectFontMaterial.mat";
         private const string TemplatePath = TempFolder + "/Template.asset";
         private const string ProjectCopyPath = TempFolder + "/Project/PsdLayoutProjectSettings.asset";
+        private const string AiSectionName = "psd-project-settings-ai";
+        private const string OutputSectionName = "psd-project-settings-output";
+        private const string FontSectionName = "psd-project-settings-font";
+        private const string CommonNamingSectionName = "psd-project-settings-common-naming";
+        private const string FixedOutputContentName = "psd-project-settings-fixed-output";
 
         [SetUp]
         public void SetUp()
@@ -138,6 +144,29 @@ namespace PsdLayoutTool2.Tests
             Assert.That(snapshot.outputFolderName, Is.EqualTo("UI_Activity"));
             Assert.That(snapshot.prefabMode, Is.EqualTo(PsdImporter.PrefabOutputMode.InsideOutputFolder));
             Assert.That(snapshot.spriteAtlasVersion, Is.EqualTo(PsdImporter.SpriteAtlasVersion.V2));
+        }
+
+        [Test]
+        public void 输出配置忽略固定根目录并保存独立资产目录()
+        {
+            var data = new PsdLayoutProjectOutputSettings();
+
+            data.Set(
+                PsdImporter.OutputDirectoryMode.FixedPath,
+                "",
+                "Assets/UI/Generated",
+                PsdImporter.PrefabOutputMode.InsideOutputFolder,
+                "Assets/UI/Atlases",
+                "Assets/UI/Textures",
+                "Assets/UI/Prefabs",
+                PsdImporter.SpriteAtlasVersion.V2);
+            PsdLayoutProjectOutputSnapshot snapshot = data.Resolve();
+
+            Assert.That(snapshot.outputMode, Is.EqualTo(PsdImporter.OutputDirectoryMode.FixedPath));
+            Assert.That(snapshot.fixedOutputPath, Is.Empty);
+            Assert.That(snapshot.atlasOutputPath, Is.EqualTo("Assets/UI/Atlases"));
+            Assert.That(snapshot.textureOutputPath, Is.EqualTo("Assets/UI/Textures"));
+            Assert.That(snapshot.prefabOutputPath, Is.EqualTo("Assets/UI/Prefabs"));
         }
 
         [Test]
@@ -269,6 +298,63 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(PsdImporter.TextMeshProFont, Is.Null);
             Assert.That(PsdImporter.TextMeshProBaseMaterial, Is.Null);
+        }
+
+        [Test]
+        public void UiToolkitInspectorShowsAllSectionsAndHidesFixedOutputControlsByDefault()
+        {
+            var settings = ScriptableObject.CreateInstance<PsdLayoutProjectSettings>();
+            UnityEditor.Editor editor = UnityEditor.Editor.CreateEditor(settings);
+            try
+            {
+                VisualElement root = editor.CreateInspectorGUI();
+
+                Assert.That(root, Is.Not.Null);
+                Assert.That(root.Q<VisualElement>(AiSectionName), Is.Not.Null);
+                Assert.That(root.Q<VisualElement>(OutputSectionName), Is.Not.Null);
+                Assert.That(root.Q<VisualElement>(FontSectionName), Is.Not.Null);
+                Assert.That(root.Q<VisualElement>(CommonNamingSectionName), Is.Not.Null);
+                Assert.That(root.Q<VisualElement>(FixedOutputContentName), Is.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(editor);
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void UiToolkitInspectorShowsFixedOutputControlsForFixedOutputMode()
+        {
+            var settings = ScriptableObject.CreateInstance<PsdLayoutProjectSettings>();
+            settings.SetOutputSettings(
+                PsdImporter.OutputDirectoryMode.FixedPath,
+                string.Empty,
+                string.Empty,
+                PsdImporter.PrefabOutputMode.CustomPath,
+                "Assets/UI/Atlas",
+                "Assets/UI/Textures",
+                "Assets/UI/Prefabs",
+                PsdImporter.SpriteAtlasVersion.V2);
+            UnityEditor.Editor editor = UnityEditor.Editor.CreateEditor(settings);
+            try
+            {
+                VisualElement root = editor.CreateInspectorGUI();
+                VisualElement fixedOutput = root == null
+                    ? null
+                    : root.Q<VisualElement>(FixedOutputContentName);
+
+                Assert.That(fixedOutput, Is.Not.Null);
+                Assert.That(fixedOutput.Q<TextField>("psd-project-settings-prefab-output-path"), Is.Not.Null);
+                Assert.That(fixedOutput.Q<TextField>("psd-project-settings-atlas-output-path"), Is.Not.Null);
+                Assert.That(fixedOutput.Q<TextField>("psd-project-settings-texture-output-path"), Is.Not.Null);
+                Assert.That(fixedOutput.Q<PopupField<string>>("psd-project-settings-atlas-version"), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(editor);
+                Object.DestroyImmediate(settings);
+            }
         }
 
         private static void EnsureAssetFolder(string assetPath)

@@ -184,7 +184,10 @@ namespace PsdLayoutTool2
                 }
 
                 ValidateAllExistingNodeReferences(plan, context);
+                ValidateRequiredComponentFamilyDecisions(plan, context);
                 ResolveExistingNodeReferences(plan, context);
+                NormalizeStatefulInstanceMappings(plan, context);
+                RemoveCandidateDecisionMetadata(plan);
                 plan["version"] = 1;
                 plan.Remove("snapshotFingerprint");
                 runnerPlanJson = plan.ToString(Newtonsoft.Json.Formatting.None);
@@ -273,7 +276,35 @@ namespace PsdLayoutTool2
             {
                 Directory.CreateDirectory(temporaryDirectory);
                 File.WriteAllText(planPath, runnerPlanJson, new UTF8Encoding(false));
-                return await Task.Run(() => RunCleanup(runnerPath, context.projectRoot, planPath));
+                try
+                {
+                    // Every confirmed local operation is a replay stage. Later
+                    // extraction stages may address wrappers/renames created by
+                    // earlier hierarchy-only stages, so replacing or dropping
+                    // those stages would make regeneration nondeterministic.
+                    PsdHierarchyCleanupReplayProfile.Persist(
+                        context.sourcePsdAssetPath,
+                        context.targetPrefabAssetPath,
+                        runnerPlanJson);
+                }
+                catch (Exception exception)
+                {
+                    return new PsdHierarchyChatCleanupExecutionResult(
+                        false,
+                        "Prefab 未修改，因为整理重放 Profile 保存失败：" + exception.Message);
+                }
+
+                PsdHierarchyChatCleanupExecutionResult result =
+                    await Task.Run(() => RunCleanup(runnerPath, context.projectRoot, planPath));
+                if (!result.success)
+                {
+                    return new PsdHierarchyChatCleanupExecutionResult(
+                        false,
+                        result.message + Environment.NewLine +
+                        "整理意图已写入重放 Profile；下次从 PSD 生成时会从原始候选确定性恢复该阶段。");
+                }
+
+                return result;
             }
             catch (Exception exception)
             {
@@ -337,6 +368,80 @@ namespace PsdLayoutTool2
                     false,
                     "Prefab 更新失败：" + SummarizeFailure(detail) +
                     "。请不要直接重复确认；先重新分析并生成新计划。");
+            }
+        }
+
+        internal static async Task<PsdHierarchyChatCleanupExecutionResult> ReapplyPersistedPlanAsync(
+            string projectRoot,
+            string runnerPlanJson)
+        {
+            string runnerPath = ToFullPath(projectRoot, CleanupRunnerRelativePath);
+            if (!File.Exists(runnerPath))
+                return new PsdHierarchyChatCleanupExecutionResult(false, "Prefab cleanup replay runner was not found: " + runnerPath);
+
+            string temporaryDirectory = Path.Combine(
+                projectRoot,
+                "Library",
+                "PSDLayoutTool2",
+                "HierarchyCleanupReplayPlans");
+            string planPath = Path.Combine(temporaryDirectory, Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                Directory.CreateDirectory(temporaryDirectory);
+                File.WriteAllText(planPath, runnerPlanJson, new UTF8Encoding(false));
+                return await Task.Run(() => RunReplay(runnerPath, projectRoot, planPath));
+            }
+            catch (Exception exception)
+            {
+                return new PsdHierarchyChatCleanupExecutionResult(false, "Prefab cleanup replay failed: " + exception.Message);
+            }
+            finally
+            {
+                DeleteTemporaryFile(planPath);
+            }
+        }
+
+        private static PsdHierarchyChatCleanupExecutionResult RunReplay(
+            string runnerPath,
+            string projectRoot,
+            string planPath)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Quote(runnerPath) +
+                            " -ProjectPath " + Quote(projectRoot) +
+                            " -PlanPath " + Quote(planPath) +
+                            " -Reapply",
+                WorkingDirectory = projectRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = new UTF8Encoding(false),
+                StandardErrorEncoding = Encoding.Default,
+                CreateNoWindow = true,
+            };
+
+            using (Process process = Process.Start(startInfo))
+            {
+                if (process == null)
+                    return new PsdHierarchyChatCleanupExecutionResult(false, "Could not start the Prefab cleanup replay runner.");
+
+                Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> errorTask = process.StandardError.ReadToEndAsync();
+                process.WaitForExit();
+                Task.WaitAll(outputTask, errorTask);
+
+                string output = outputTask.Result.Trim();
+                string error = errorTask.Result.Trim();
+                string detail = string.IsNullOrEmpty(error)
+                    ? output
+                    : string.IsNullOrEmpty(output) ? error : output + Environment.NewLine + error;
+                return process.ExitCode == 0
+                    ? new PsdHierarchyChatCleanupExecutionResult(true, detail)
+                    : new PsdHierarchyChatCleanupExecutionResult(
+                        false,
+                        "Prefab cleanup replay failed: " + SummarizeFailure(detail));
             }
         }
 
@@ -570,6 +675,106 @@ namespace PsdLayoutTool2
             }
         }
 
+        private static void ValidateRequiredComponentFamilyDecisions(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            if (context.componentFamilyCandidates == null || context.componentFamilyCandidates.Count == 0)
+            {
+                return;
+            }
+
+            var candidatesById = context.componentFamilyCandidates
+                .ToDictionary(candidate => candidate.id, StringComparer.Ordinal);
+            var requiredCandidateIds = new HashSet<string>(
+                context.componentFamilyCandidates
+                    .Where(candidate => candidate.requiresExtraction)
+                    .Select(candidate => candidate.id),
+                StringComparer.Ordinal);
+            if (requiredCandidateIds.Count == 0)
+            {
+                return;
+            }
+
+            if (!(plan["componentFamilyDecisions"] is JArray decisions))
+            {
+                throw new InvalidDataException("计划缺少 componentFamilyDecisions 数组。");
+            }
+
+            var declaredCandidateIds = new HashSet<string>(StringComparer.Ordinal);
+            var errors = new List<string>();
+            for (int index = 0; index < decisions.Count; index++)
+            {
+                if (!(decisions[index] is JObject decision))
+                {
+                    errors.Add("componentFamilyDecisions[" + index + "] 必须为对象。");
+                    continue;
+                }
+
+                string candidateId = decision.Value<string>("candidateId");
+                if (string.IsNullOrWhiteSpace(candidateId))
+                {
+                    continue;
+                }
+
+                if (!candidatesById.TryGetValue(candidateId, out PsdHierarchyComponentFamilyCandidate candidate))
+                {
+                    errors.Add("componentFamilyDecisions[" + index + "].candidateId 未出现在当前快照候选中：" + candidateId);
+                    continue;
+                }
+
+                if (!declaredCandidateIds.Add(candidateId))
+                {
+                    errors.Add("componentFamilyDecisions 重复声明候选：" + candidateId);
+                    continue;
+                }
+
+                string parent = decision.Value<string>("parent");
+                string[] sources = (decision["sources"] as JArray)?.Values<string>().ToArray() ?? Array.Empty<string>();
+                if (!string.Equals(parent, candidate.parent, StringComparison.Ordinal) ||
+                    !sources.SequenceEqual(candidate.sources, StringComparer.Ordinal))
+                {
+                    errors.Add(
+                        "componentFamilyDecisions[" + index + "] 必须原样覆盖候选 " + candidateId +
+                        " 的 parent 与完整 sources。");
+                }
+
+                if (candidate.requiresExtraction &&
+                    string.Equals(decision.Value<string>("mode"), "skip", StringComparison.Ordinal))
+                {
+                    errors.Add("高置信重复组件候选 " + candidateId + "（" + candidate.suggestedAssetName + "）不能使用 skip；必须抽取为 component、state、variant 或 stateful Prefab。");
+                }
+            }
+
+            foreach (string candidateId in requiredCandidateIds.Where(id => !declaredCandidateIds.Contains(id)))
+            {
+                PsdHierarchyComponentFamilyCandidate candidate = candidatesById[candidateId];
+                errors.Add(
+                    "componentFamilyDecisions 必须覆盖高置信候选 " + candidateId + "（" +
+                    candidate.suggestedAssetName + "）。不要遗漏 " + string.Join(", ", candidate.sources) + "。");
+            }
+
+            if (errors.Count > 0)
+            {
+                throw new InvalidDataException(
+                    "重复组件候选校验失败：" + Environment.NewLine +
+                    "- " + string.Join(Environment.NewLine + "- ", errors));
+            }
+        }
+
+        private static void RemoveCandidateDecisionMetadata(JObject plan)
+        {
+            if (!(plan["componentFamilyDecisions"] is JArray decisions))
+            {
+                return;
+            }
+
+            foreach (JObject decision in decisions.OfType<JObject>())
+            {
+                decision.Remove("candidateId");
+            }
+        }
+
         private static void AddObjectPropertySlots(
             JObject plan,
             string arrayProperty,
@@ -760,6 +965,430 @@ namespace PsdLayoutTool2
                 ResolveNestedNodeProperties(item, "states", "source", label + ".states", context);
                 ResolveNestedNodeProperties(item, "instances", "source", label + ".instances", context);
             });
+        }
+
+        private static void NormalizeStatefulInstanceMappings(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            if (!(plan["statefulComponentExtractions"] is JArray extractions))
+            {
+                throw new InvalidDataException("statefulComponentExtractions must be an array.");
+            }
+
+            Dictionary<string, string> renamedNamesByPath = BuildPlannedRenameMap(plan);
+            for (int extractionIndex = 0; extractionIndex < extractions.Count; extractionIndex++)
+            {
+                if (!(extractions[extractionIndex] is JObject extraction))
+                {
+                    throw new InvalidDataException(
+                        "statefulComponentExtractions[" + extractionIndex + "] must be an object.");
+                }
+
+                string extractionLabel = "statefulComponentExtractions[" + extractionIndex + "]";
+                if (!(extraction["common"] is JObject common) ||
+                    !(common["members"] is JArray commonMembers) ||
+                    !(extraction["states"] is JArray states) ||
+                    !(extraction["instances"] is JArray instances))
+                {
+                    throw new InvalidDataException(
+                        extractionLabel + " must contain common.members, states, and instances arrays.");
+                }
+
+                if (commonMembers.Count == 0)
+                {
+                    throw new InvalidDataException(
+                        extractionLabel + ".common.members must not be empty; use variantComponentExtractions " +
+                        "when no direct child is common to every source.");
+                }
+
+                NormalizeStatefulContractMemberNames(
+                    common,
+                    extractionLabel + ".common",
+                    context,
+                    renamedNamesByPath);
+
+                string commonSourcePath = ReadRequiredString(common, "source");
+                var stateMemberCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+                var statesById = new Dictionary<string, JObject>(StringComparer.Ordinal);
+                for (int stateIndex = 0; stateIndex < states.Count; stateIndex++)
+                {
+                    if (!(states[stateIndex] is JObject state) ||
+                        !(state["members"] is JArray stateMembers))
+                    {
+                        throw new InvalidDataException(
+                            extractionLabel + ".states[" + stateIndex + "].members must be an array.");
+                    }
+
+                    NormalizeStatefulContractMemberNames(
+                        state,
+                        extractionLabel + ".states[" + stateIndex + "]",
+                        context,
+                        renamedNamesByPath);
+
+                    string stateId = ReadRequiredString(state, "id");
+                    if (stateMemberCounts.ContainsKey(stateId))
+                    {
+                        throw new InvalidDataException(extractionLabel + " contains duplicate state id " + stateId + ".");
+                    }
+
+                    stateMemberCounts.Add(stateId, stateMembers.Count);
+                    statesById.Add(stateId, state);
+                }
+
+                for (int instanceIndex = 0; instanceIndex < instances.Count; instanceIndex++)
+                {
+                    if (!(instances[instanceIndex] is JObject instance))
+                    {
+                        throw new InvalidDataException(
+                            extractionLabel + ".instances[" + instanceIndex + "] must be an object.");
+                    }
+
+                    string instanceLabel = extractionLabel + ".instances[" + instanceIndex + "]";
+                    string sourcePath = ReadRequiredString(instance, "source");
+                    string stateId = ReadRequiredString(instance, "state");
+                    if (!stateMemberCounts.TryGetValue(stateId, out int expectedStateMemberCount))
+                    {
+                        throw new InvalidDataException(instanceLabel + ".state does not match states[].id.");
+                    }
+
+                    JObject selectedState = statesById[stateId];
+                    var selectedStateMembers = (JArray)selectedState["members"];
+
+                    if (!context.TryGetDirectChildren(
+                            sourcePath,
+                            out IReadOnlyList<PsdHierarchySnapshotChild> snapshotChildren))
+                    {
+                        throw new InvalidDataException(
+                            instanceLabel + ".source has no direct-child records in the authoritative snapshot: " +
+                            sourcePath);
+                    }
+
+                    string[] directChildNames = snapshotChildren
+                        .Select(child => renamedNamesByPath.TryGetValue(child.path, out string renamed)
+                            ? renamed
+                            : child.name)
+                        .ToArray();
+                    if (directChildNames.Any(string.IsNullOrWhiteSpace) ||
+                        directChildNames.Distinct(StringComparer.Ordinal).Count() != directChildNames.Length)
+                    {
+                        throw new InvalidDataException(
+                            instanceLabel + ".source has duplicate or empty direct-child names after planned renames.");
+                    }
+
+                    int expectedCommonMemberCount = commonMembers.Count;
+                    if (directChildNames.Length != expectedCommonMemberCount + expectedStateMemberCount)
+                    {
+                        throw new InvalidDataException(
+                            instanceLabel + " cannot derive Common/State mappings: snapshot has " +
+                            directChildNames.Length + " direct children but the contracts require " +
+                            expectedCommonMemberCount + " Common plus " + expectedStateMemberCount +
+                            " selected-state members.");
+                    }
+
+                    bool commonMappingIsComplete = TryResolveCompleteDirectChildMapping(
+                        instance["commonSourceNames"],
+                        expectedCommonMemberCount,
+                        snapshotChildren,
+                        directChildNames,
+                        instanceLabel + ".commonSourceNames",
+                        out string[] commonSourceNames);
+                    bool stateMappingIsComplete = TryResolveCompleteDirectChildMapping(
+                        instance["stateSourceNames"],
+                        expectedStateMemberCount,
+                        snapshotChildren,
+                        directChildNames,
+                        instanceLabel + ".stateSourceNames",
+                        out string[] stateSourceNames);
+
+                    bool commonMappingIsAuthoritative =
+                        string.Equals(sourcePath, commonSourcePath, StringComparison.Ordinal);
+                    if (commonMappingIsAuthoritative)
+                    {
+                        commonSourceNames = ReadContractMemberSourceNames(commonMembers);
+                        commonMappingIsComplete = true;
+                    }
+
+                    bool stateMappingIsAuthoritative = string.Equals(
+                        sourcePath,
+                        ReadRequiredString(selectedState, "source"),
+                        StringComparison.Ordinal);
+                    if (stateMappingIsAuthoritative)
+                    {
+                        stateSourceNames = ReadContractMemberSourceNames(selectedStateMembers);
+                        stateMappingIsComplete = true;
+                    }
+
+                    if (commonMappingIsAuthoritative && stateMappingIsAuthoritative)
+                    {
+                        AssertCompleteStatefulPartition(
+                            directChildNames,
+                            commonSourceNames,
+                            stateSourceNames,
+                            expectedCommonMemberCount,
+                            expectedStateMemberCount,
+                            instanceLabel);
+                    }
+                    else if (commonMappingIsAuthoritative ||
+                             (!stateMappingIsAuthoritative && commonMappingIsComplete))
+                    {
+                        string[] stateComplement = ComplementDirectChildNames(directChildNames, commonSourceNames);
+                        if (stateComplement.Length != expectedStateMemberCount)
+                        {
+                            throw new InvalidDataException(
+                                instanceLabel + ".commonSourceNames do not leave exactly one member for every " +
+                                "selected-state contract entry.");
+                        }
+
+                        stateSourceNames = MappingHasSameMembers(stateSourceNames, stateComplement)
+                            ? stateSourceNames
+                            : stateComplement;
+                        stateMappingIsComplete = true;
+                    }
+                    else if (stateMappingIsComplete)
+                    {
+                        string[] commonComplement = ComplementDirectChildNames(directChildNames, stateSourceNames);
+                        if (commonComplement.Length != expectedCommonMemberCount)
+                        {
+                            throw new InvalidDataException(
+                                instanceLabel + ".stateSourceNames do not leave exactly one member for every " +
+                                "Common contract entry.");
+                        }
+
+                        commonSourceNames = MappingHasSameMembers(commonSourceNames, commonComplement)
+                            ? commonSourceNames
+                            : commonComplement;
+                        commonMappingIsComplete = true;
+                    }
+
+                    if (!commonMappingIsComplete || !stateMappingIsComplete)
+                    {
+                        throw new InvalidDataException(
+                            instanceLabel + " cannot safely derive Common/State mappings because neither side " +
+                            "contains a complete observed direct-child mapping.");
+                    }
+
+                    AssertCompleteStatefulPartition(
+                        directChildNames,
+                        commonSourceNames,
+                        stateSourceNames,
+                        expectedCommonMemberCount,
+                        expectedStateMemberCount,
+                        instanceLabel);
+                    instance["commonSourceNames"] = new JArray(commonSourceNames);
+                    instance["stateSourceNames"] = new JArray(stateSourceNames);
+                }
+            }
+        }
+
+        private static bool TryResolveCompleteDirectChildMapping(
+            JToken token,
+            int expectedCount,
+            IReadOnlyList<PsdHierarchySnapshotChild> snapshotChildren,
+            IReadOnlyList<string> finalNames,
+            string label,
+            out string[] resolved)
+        {
+            string[] requested = ReadOptionalStringArray(token);
+            resolved = Array.Empty<string>();
+            if (requested.Length != expectedCount ||
+                requested.Distinct(StringComparer.Ordinal).Count() != requested.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                resolved = ResolveFinalDirectChildNames(requested, snapshotChildren, finalNames, label);
+                return resolved.Distinct(StringComparer.Ordinal).Count() == resolved.Length;
+            }
+            catch (InvalidDataException)
+            {
+                resolved = Array.Empty<string>();
+                return false;
+            }
+        }
+
+        private static string[] ReadContractMemberSourceNames(JArray members)
+        {
+            return members
+                .OfType<JObject>()
+                .Select(member => ReadRequiredString(member, "sourceName"))
+                .ToArray();
+        }
+
+        private static string[] ComplementDirectChildNames(
+            IReadOnlyList<string> directChildNames,
+            IReadOnlyList<string> mappedNames)
+        {
+            var mapped = new HashSet<string>(mappedNames, StringComparer.Ordinal);
+            return directChildNames.Where(name => !mapped.Contains(name)).ToArray();
+        }
+
+        private static bool MappingHasSameMembers(
+            IReadOnlyList<string> mapping,
+            IReadOnlyList<string> expectedMembers)
+        {
+            return mapping.Count == expectedMembers.Count &&
+                   new HashSet<string>(mapping, StringComparer.Ordinal).SetEquals(expectedMembers);
+        }
+
+        private static void AssertCompleteStatefulPartition(
+            IReadOnlyList<string> directChildNames,
+            IReadOnlyList<string> commonSourceNames,
+            IReadOnlyList<string> stateSourceNames,
+            int expectedCommonMemberCount,
+            int expectedStateMemberCount,
+            string label)
+        {
+            if (commonSourceNames.Count != expectedCommonMemberCount ||
+                stateSourceNames.Count != expectedStateMemberCount)
+            {
+                throw new InvalidDataException(label + " does not match the Common/State member counts.");
+            }
+
+            var mapped = new HashSet<string>(commonSourceNames, StringComparer.Ordinal);
+            if (mapped.Count != commonSourceNames.Count ||
+                stateSourceNames.Any(name => !mapped.Add(name)) ||
+                !mapped.SetEquals(directChildNames))
+            {
+                throw new InvalidDataException(
+                    label + ".commonSourceNames and stateSourceNames must cover every direct child exactly once.");
+            }
+        }
+
+        private static void NormalizeStatefulContractMemberNames(
+            JObject contract,
+            string label,
+            PsdHierarchyChatContext context,
+            IReadOnlyDictionary<string, string> renamedNamesByPath)
+        {
+            string sourcePath = ReadRequiredString(contract, "source");
+            if (!(contract["members"] is JArray members))
+            {
+                throw new InvalidDataException(label + ".members must be an array.");
+            }
+
+            if (!context.TryGetDirectChildren(
+                    sourcePath,
+                    out IReadOnlyList<PsdHierarchySnapshotChild> snapshotChildren))
+            {
+                throw new InvalidDataException(
+                    label + ".source has no direct-child records in the authoritative snapshot: " + sourcePath);
+            }
+
+            string[] finalNames = snapshotChildren
+                .Select(child => renamedNamesByPath.TryGetValue(child.path, out string renamed)
+                    ? renamed
+                    : child.name)
+                .ToArray();
+            for (int memberIndex = 0; memberIndex < members.Count; memberIndex++)
+            {
+                if (!(members[memberIndex] is JObject member))
+                {
+                    throw new InvalidDataException(label + ".members[" + memberIndex + "] must be an object.");
+                }
+
+                string sourceName = ReadRequiredString(member, "sourceName");
+                member["sourceName"] = ResolveFinalDirectChildNames(
+                    new[] { sourceName },
+                    snapshotChildren,
+                    finalNames,
+                    label + ".members[" + memberIndex + "].sourceName")[0];
+            }
+        }
+
+        private static string[] ResolveFinalDirectChildNames(
+            IReadOnlyList<string> requestedNames,
+            IReadOnlyList<PsdHierarchySnapshotChild> snapshotChildren,
+            IReadOnlyList<string> finalNames,
+            string label)
+        {
+            var resolved = new string[requestedNames.Count];
+            for (int requestedIndex = 0; requestedIndex < requestedNames.Count; requestedIndex++)
+            {
+                string requestedName = requestedNames[requestedIndex];
+                int matchedIndex = -1;
+                for (int childIndex = 0; childIndex < snapshotChildren.Count; childIndex++)
+                {
+                    if (!string.Equals(finalNames[childIndex], requestedName, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (matchedIndex >= 0)
+                    {
+                        throw new InvalidDataException(label + " contains an ambiguous direct-child name: " + requestedName);
+                    }
+
+                    matchedIndex = childIndex;
+                }
+
+                if (matchedIndex < 0)
+                {
+                    for (int childIndex = 0; childIndex < snapshotChildren.Count; childIndex++)
+                    {
+                        if (!string.Equals(snapshotChildren[childIndex].name, requestedName, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        if (matchedIndex >= 0)
+                        {
+                            throw new InvalidDataException(
+                                label + " contains an ambiguous original direct-child name: " + requestedName);
+                        }
+
+                        matchedIndex = childIndex;
+                    }
+                }
+
+                if (matchedIndex < 0)
+                {
+                    throw new InvalidDataException(
+                        label + " contains a name that is not an observed direct child: " + requestedName);
+                }
+
+                resolved[requestedIndex] = finalNames[matchedIndex];
+            }
+
+            return resolved;
+        }
+
+        private static Dictionary<string, string> BuildPlannedRenameMap(JObject plan)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!(plan["renames"] is JArray renames))
+            {
+                return result;
+            }
+
+            foreach (JObject rename in renames.OfType<JObject>())
+            {
+                string target = rename.Value<string>("target");
+                string name = rename.Value<string>("name");
+                if (!string.IsNullOrWhiteSpace(target) && !target.StartsWith("@", StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(name))
+                {
+                    result[target] = name;
+                }
+            }
+
+            return result;
+        }
+
+        private static string[] ReadOptionalStringArray(JToken token)
+        {
+            if (!(token is JArray values))
+            {
+                return Array.Empty<string>();
+            }
+
+            return values
+                .Where(value => value.Type == JTokenType.String &&
+                                !string.IsNullOrWhiteSpace(value.Value<string>()))
+                .Values<string>()
+                .ToArray();
         }
 
         private static void ResolveObjectArray(JObject plan, string propertyName, Action<JObject, string> resolver)

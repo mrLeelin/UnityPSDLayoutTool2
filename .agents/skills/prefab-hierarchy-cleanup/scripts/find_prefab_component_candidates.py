@@ -29,6 +29,10 @@ RECT_RE = re.compile(
 TRAILING_STATE_INDEX_RE = re.compile(r"(?:[_\s-]*(?:\d+|[一二三四五六七八九十]+))$")
 
 
+NUMBERED_FAMILY_RE = re.compile(r"^(?P<stem>[A-Za-z][A-Za-z0-9]*)(?:[_\s-]?)(?P<index>\d+)$")
+BARE_INDEX_RE = re.compile(r"^\d+$")
+
+
 @dataclass
 class Node:
     path: str
@@ -98,6 +102,16 @@ def signature(node: Node) -> tuple[tuple[str, ...], tuple[object, ...]]:
         node.components,
         tuple(signature(child) for child in sorted(node.children, key=lambda item: item.sibling)),
     )
+
+
+def has_common_direct_child_name(nodes: list[Node]) -> bool:
+    common_names: set[str] | None = None
+    for node in nodes:
+        names = {child.name for child in node.children}
+        common_names = names if common_names is None else common_names & names
+        if not common_names:
+            return False
+    return bool(common_names)
 
 
 def has_nested_prefab(node: Node) -> bool:
@@ -196,8 +210,108 @@ def state_groups(parent: Node) -> list[list[Node]]:
     return result
 
 
-def component_candidates(root: Node, state_paths: set[str]) -> list[dict[str, object]]:
+def numbered_family_name(node: Node) -> str | None:
+    match = NUMBERED_FAMILY_RE.match(node.name.strip("[]").strip())
+    return match.group("stem") if match is not None else None
+
+
+def numbered_family_index(node: Node) -> int | None:
+    match = NUMBERED_FAMILY_RE.match(node.name.strip("[]").strip())
+    return int(match.group("index")) if match is not None else None
+
+
+def bare_numbered_index(node: Node) -> int | None:
+    value = node.name.strip("[]").strip()
+    return int(value) if BARE_INDEX_RE.match(value) is not None else None
+
+
+def matching_rect_transform_frame(nodes: list[Node]) -> bool:
+    if len(nodes) < 2:
+        return False
+    first = nodes[0]
+    if first.anchor_min is None or first.anchor_max is None or first.pivot is None:
+        return False
+    return all(
+        node.anchor_min is not None
+        and node.anchor_max is not None
+        and node.pivot is not None
+        and approximately_equal(first.anchor_min, node.anchor_min)
+        and approximately_equal(first.anchor_max, node.anchor_max)
+        and approximately_equal(first.pivot, node.pivot)
+        for node in nodes[1:]
+    )
+
+
+def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
+    """Find high-confidence numbered families, including stateful size variants."""
     result: list[dict[str, object]] = []
+    candidate_index = 1
+    for parent in visit(root):
+        groups: dict[str, list[Node]] = {}
+        bare_index_nodes: list[tuple[int, Node]] = []
+        for child in parent.children:
+            if child.child_count == 0 or has_nested_prefab(child):
+                continue
+            family_name = numbered_family_name(child)
+            if family_name is None:
+                bare_index = bare_numbered_index(child)
+                if bare_index is not None:
+                    bare_index_nodes.append((bare_index, child))
+                continue
+            groups.setdefault(family_name, []).append(child)
+
+        for bare_index, bare_node in bare_index_nodes:
+            eligible_families = []
+            for family_name, group in groups.items():
+                represented_indices = {numbered_family_index(node) for node in group}
+                if (
+                    len(group) >= 2
+                    and bare_index not in represented_indices
+                    and matching_rect_transform_frame(group + [bare_node])
+                ):
+                    eligible_families.append(family_name)
+            if len(eligible_families) == 1:
+                groups[eligible_families[0]].append(bare_node)
+
+        for family_name, group in sorted(groups.items()):
+            ordered = sorted(group, key=lambda item: item.sibling)
+            if len(ordered) < 3 or not matching_rect_transform_frame(ordered):
+                continue
+            identical_structure = len({signature(node) for node in ordered}) == 1
+            has_common_direct_child = has_common_direct_child_name(ordered)
+            result.append(
+                {
+                    "id": f"numbered_{candidate_index:03d}",
+                    "kind": "numbered_repeated",
+                    "parent": parent.path,
+                    "suggestedAssetName": family_name,
+                    "template": ordered[0].path,
+                    "instances": [node.path for node in ordered],
+                    "instanceCount": len(ordered),
+                    "recommendedMode": (
+                        "component"
+                        if identical_structure
+                        else "stateful"
+                        if has_common_direct_child
+                        else "variant"
+                    ),
+                    "requiresExtraction": identical_structure or has_common_direct_child,
+                    "sizeDeltaOverridesAllowed": True,
+                    "nestedPrefabInsideAnySource": False,
+                    "requiresUnityExternalReferenceCheck": True,
+                }
+            )
+            candidate_index += 1
+    return result
+
+
+def component_candidates(
+    root: Node,
+    state_paths: set[str],
+    excluded_instance_paths: set[str] | None = None,
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    excluded_instance_paths = excluded_instance_paths or set()
     for parent in visit(root):
         groups: dict[tuple[tuple[str, ...], tuple[object, ...]], list[Node]] = {}
         for child in parent.children:
@@ -209,6 +323,8 @@ def component_candidates(root: Node, state_paths: set[str]) -> list[dict[str, ob
                 continue
             ordered = sorted(group, key=lambda item: item.sibling)
             if all(node.path in state_paths for node in ordered):
+                continue
+            if any(node.path in excluded_instance_paths for node in ordered):
                 continue
             result.append(
                 {
@@ -262,7 +378,12 @@ def main() -> int:
     root = parse_snapshot(text)
     states = state_candidates(root)
     state_paths = {path for state in states for path in state["sources"]}
-    components = component_candidates(root, state_paths)
+    numbered = numbered_component_candidates(root)
+    components = numbered + component_candidates(
+        root,
+        state_paths,
+        {path for candidate in numbered for path in candidate["instances"]},
+    )
     report = {
         "candidates": components,
         "componentCandidates": components,

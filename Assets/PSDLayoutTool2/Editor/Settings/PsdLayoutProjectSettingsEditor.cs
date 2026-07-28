@@ -46,6 +46,7 @@ namespace PsdLayoutTool2
             root.Add(CreateHierarchyAiSection(settings));
             root.Add(CreateOutputSection(settings));
             root.Add(CreateFontSection(settings));
+            root.Add(CreatePreviewServerSection(settings));
             root.Add(CreateCommonNamingSection(settings));
             return root;
         }
@@ -587,6 +588,32 @@ namespace PsdLayoutTool2
             }
 
             return section;
+        }
+
+        private static VisualElement CreatePreviewServerSection(PsdLayoutProjectSettings settings)
+        {
+            VisualElement section = CreateSection("psd-project-settings-preview-server", "本地资源预览服务");
+            var port = new IntegerField("端口") { value = settings.ResolvePreviewServerPort(), isDelayed = true, name = "psd-project-settings-preview-server-port" };
+            var status = new Label();
+            var actions = new VisualElement(); actions.style.flexDirection = FlexDirection.Row;
+            var start = new Button { text = "启动", name = "psd-project-settings-preview-server-start" };
+            var stop = new Button { text = "停止" };
+            var open = new Button { text = "在浏览器打开" };
+            actions.Add(start); actions.Add(stop); actions.Add(open);
+            section.Add(port); section.Add(status); section.Add(actions);
+            void Refresh()
+            {
+                bool running = PsdCommonAssetPreviewServer.IsRunning;
+                string address = PsdCommonAssetPreviewServer.GetLocalAddress();
+                status.text = running ? "● 运行中  " + address : string.IsNullOrEmpty(PsdCommonAssetPreviewServer.Error) ? "● 已停止" : PsdCommonAssetPreviewServer.Error;
+                status.style.color = running ? new Color(0.25f, 0.85f, 0.5f) : new Color(0.75f, 0.78f, 0.84f);
+                start.SetEnabled(!running); stop.SetEnabled(running); open.SetEnabled(running);
+            }
+            port.RegisterValueChangedCallback(change => { settings.TrySetPreviewServerPort(change.newValue, out _); Refresh(); });
+            start.clicked += () => { PsdCommonAssetPreviewServer.Start(settings.ResolvePreviewServerPort()); Refresh(); };
+            stop.clicked += () => { PsdCommonAssetPreviewServer.Stop(); Refresh(); };
+            open.clicked += () => Application.OpenURL(PsdCommonAssetPreviewServer.GetLocalAddress());
+            Refresh(); return section;
         }
 
         private static VisualElement CreateCommonNamingSection(PsdLayoutProjectSettings settings)

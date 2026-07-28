@@ -49,6 +49,8 @@ The following fields are existing-node references and therefore must use `node:<
 
 Asset paths, output verification paths, new semantic names, state/member names, and wrapper IDs are not node references. Keep their existing schema below. Never invent a node ID, derive one from a GameObject name, or emit a raw pre-apply hierarchy path in an existing-node reference. If the intended object cannot be proven from the supplied snapshot, omit that operation and report the ambiguity in the review.
 
+Every plan-owned ID, including `wrappers[].id`, extraction `id`, and state `id`, must be lower snake_case matching `^[a-z][a-z0-9_]*$`. Use `screen_root`, `day_markers`, or `task_in_progress`; do not use PascalCase, kebab-case, spaces, brackets, or an `@` prefix. The `@` prefix is reserved only for a reference to an earlier wrapper, for example `@screen_root`.
+
 Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, then writes a temporary internal version 1 runner plan. The AI must never emit that internal plan.
 
 ## Internal Runner Plan (Version 1)
@@ -89,6 +91,8 @@ All asset paths are project-relative paths beginning with `Assets/`. `prefabName
 ### Operations
 
 `wrappers` are created in order. `parent` and every `source` path refer to the pre-apply Prefab tree, including the Prefab root name. Prefix a previously created wrapper ID with `@` when it is the parent or target.
+
+Every wrapper `id` must be lower snake_case matching `^[a-z][a-z0-9_]*$`; `screen_root` is valid, while `[Screen]`, `ScreenRoot`, `screen-root`, and `@screen_root` are invalid IDs. Use the `@` prefix only when referencing a previously created wrapper.
 
 An `@` reference names only a wrapper root: it must be exactly `@wrapperId`, never `@wrapperId/Child`. Existing nodes must always use their original, full pre-apply Prefab path in `moves.source`, `renames.target`, and `emptyContainerRemovals.source`, even when the operation later moves that node into a wrapper. `tightBounds.target` may use an exact wrapper-root reference or an existing pre-apply path. The renderer resolves existing nodes before it creates wrappers and applies moves, so post-move paths are not valid plan inputs.
 
@@ -166,17 +170,17 @@ Use inner-to-outer order so nested groups are tightened before their parents. Wh
 }
 ```
 
-`parent`, at least two unique `sources`, `mode`, and `reason` are required. Use `skip` only with a concrete preservation or safety reason. For every other mode, `extractionId` must reference exactly one matching extraction, and the declared sources must cover that extraction exactly. Valid modes are `component`, `state`, `variant`, and `stateful`.
+`parent`, at least two unique `sources`, `mode`, and `reason` are required. Use `skip` only with a concrete preservation or safety reason. For every other mode, `extractionId` must reference exactly one matching extraction, and the declared sources must cover that extraction exactly. Valid modes are `component`, `state`, `variant`, and `stateful`. In a Unity AI chat plan, every snapshot candidate decision must also include its exact `candidateId`; a candidate marked `requiresExtraction: true` cannot use `skip`.
 
 ## Optional Component Extraction
 
-The `componentExtractions`, `stateComponentExtractions`, `variantComponentExtractions`, and `statefulComponentExtractions` fields are allowed only in a separate plan that the user explicitly approved. They may create a reusable component under `Prefab/Common`, but do not change the rule that the main target Prefab is saved in place at `prefabAssetPath`. Do not include them unless the reviewed request explicitly calls for a reusable, state, variant, or stateful component.
+The `componentExtractions`, `stateComponentExtractions`, `variantComponentExtractions`, and `statefulComponentExtractions` fields may appear together with wrappers, moves, renames, and tight bounds in the one plan the user explicitly approves. They may create reusable components directly under the target Prefab's sibling `Common` directory, but do not change the rule that the main target Prefab is saved in place at `prefabAssetPath`. Do not include them unless the reviewed request explicitly calls for a reusable, state, variant, or stateful component.
 
 ### Shared Component Extraction
 
-Run extraction in a separate plan after hierarchy cleanup. Each entry creates one shared nested Prefab from `template` and replaces every `instances` entry with an instance of that asset. The template must be included in `instances`.
+Each entry creates one shared nested Prefab from `template` and replaces every `instances` entry with an instance of that asset. The template must be included in `instances`. The runner captures every approved source before hierarchy moves, so non-overlapping extractions can be reviewed and applied together with hierarchy cleanup.
 
-Use `scripts/find_prefab_component_candidates.py` only to discover candidate families. Its report requires matching recursive signatures and a common parent, but cannot prove absence of external serialized references. The Unity apply pass is authoritative for that check.
+Use `scripts/find_prefab_component_candidates.py` only to discover candidate families. It reports matching recursive signatures and high-confidence same-parent numbered families with matching anchors and pivot; numbered candidates may differ in `sizeDelta` or state structure and therefore recommend `stateful`. The report cannot prove absence of external serialized references. The Unity apply pass is authoritative for that check.
 
 ```json
 {
@@ -184,7 +188,7 @@ Use `scripts/find_prefab_component_candidates.py` only to discover candidate fam
     {
       "id": "content_card",
       "template": "RewardPanel/[Content]/[ContentCard_1]",
-      "assetPath": "Assets/UI/Components/ContentCard.prefab",
+      "assetPath": "Assets/UI/Prefab/Common/ContentCard.prefab",
       "instances": [
         "RewardPanel/[Content]/[ContentCard_1]",
         "RewardPanel/[Content]/[ContentCard_2]",
@@ -197,7 +201,7 @@ Use `scripts/find_prefab_component_candidates.py` only to discover candidate fam
 
 Use this only when all listed units have the same recursive component/child signature. Sprite, text, color, active state, and RectTransform differences become nested-instance overrides. The runner rejects source units with nested Prefabs or external serialized references, refuses to overwrite an existing component asset, preserves RectTransform world corners, and verifies every final instance points to `assetPath`.
 
-The component asset root is named from the output filename (for example `ContentCard.prefab` has a `ContentCard` root); every original instance name is preserved as an instance override. A plan may contain multiple families only when none of their instance paths overlap or nest. `componentExtractions` cannot be combined with `wrappers`, `moves`, `renames`, or `tightBounds`; first complete the hierarchy plan, then extract the approved families in a second plan.
+The component asset root is named from the output filename (for example `ContentCard.prefab` has a `ContentCard` root); every original instance name is preserved as an instance override. Every component `assetPath` must be a PascalCase `.prefab` directly under the target Prefab's sibling `Common` directory. A plan may contain multiple families and extraction modes only when no source or instance paths overlap or nest.
 
 ### Stateful Component Extraction
 
@@ -209,7 +213,7 @@ Use `stateComponentExtractions` when several **direct sibling roots occupy one v
     {
       "id": "inventory_item",
       "template": "InventoryPanelView/[ItemStates]/Item_01",
-      "assetPath": "Assets/UI/Components/InventoryItem.prefab",
+      "assetPath": "Assets/UI/Prefab/Common/InventoryItem.prefab",
       "defaultState": "available",
       "states": [
         { "id": "locked", "source": "InventoryPanelView/[ItemStates]/Item_01", "name": "[Locked]" },
@@ -223,7 +227,7 @@ Use `stateComponentExtractions` when several **direct sibling roots occupy one v
 
 All `states[].source` paths must be direct siblings of `template`; `template` must be one of them. The generated root uses the output file name, such as `InventoryItem`, and contains a `[States]` child with the state names in the supplied order. Only `defaultState` is active in the saved component; branch selection at runtime remains outside this skill.
 
-State branches may have different recursive signatures, but the sources must be visually overlapping and semantically mutually exclusive. Do not use this for simultaneously visible list entries. `stateComponentExtractions` cannot be combined with `componentExtractions`, `wrappers`, `moves`, `renames`, or `tightBounds`; use a separate plan. It rejects nested source Prefabs, external serialized references, source-path overlap, and existing output assets. A state extraction adds the component root and its `[States]` container to the final hierarchy, so update optional node/component counts in `verify` by two for each extracted state component.
+State branches may have different recursive signatures, but the sources must be visually overlapping and semantically mutually exclusive. Do not use this for simultaneously visible list entries. It rejects nested source Prefabs, external serialized references, source-path overlap, and existing output assets. A state extraction adds the component root and its `[States]` container to the final hierarchy, so update optional node/component counts in `verify` by two for each extracted state component.
 
 ### Variant List Component Extraction
 
@@ -254,7 +258,7 @@ Use `variantComponentExtractions` when several rows are visible at different lis
 }
 ```
 
-`states[].source` must be direct siblings of `template`; every state source must appear exactly once in `instances`. The output root has direct `[Common]` and `[States]` children. Move only members proven common to every state into `[Common]`; leave it empty if no such proof exists. The runner normalizes each state root to the component origin, preserves each instance's original list position, and activates exactly `instances[].state`. `variantComponentExtractions` cannot be combined with the other extraction modes or hierarchy changes.
+`states[].source` must be direct siblings of `template`; every state source must appear exactly once in `instances`. The output root has direct `[Common]` and `[States]` children. Move only members proven common to every state into `[Common]`; leave it empty if no such proof exists. The runner normalizes each state root to the component origin, preserves each instance's original list position, and activates exactly `instances[].state`. It can be combined with other non-overlapping extraction modes and hierarchy changes in the reviewed plan.
 
 ### Stateful Repeated Component Extraction
 
@@ -315,7 +319,7 @@ Use `statefulComponentExtractions` for repeated items that contain real shared c
 }
 ```
 
-`common.members` specifies the reusable `[Common]` contract. Each state specifies its branch members. Each instance maps all its direct members using `commonSourceNames` and `stateSourceNames`; the runner rejects an unmapped or duplicated child. This mode is exclusive with every other extraction mode and hierarchy operation. It rejects nested Prefabs, external references, incomplete member mapping, and an existing output asset.
+`common.members` specifies the reusable `[Common]` contract. Each state specifies its branch members. A state may use an empty `members` array only for an explicit all-common state: every direct child of each instance using that state must be covered by `commonSourceNames`, and its `stateSourceNames` must be `[]`. An empty branch never permits an unmapped child or an invented placeholder state. Each instance otherwise maps all its direct members using `commonSourceNames` and `stateSourceNames`; the runner rejects an unmapped or duplicated child. During version 2 Unity-chat conversion only, an incomplete, duplicated, or invalid Common/State instance list can be rebuilt from the authoritative snapshot when the opposite list is a complete observed mapping or the instance is the reviewed source of that contract. The missing side is the ordered direct-child complement, and the final counts must exactly equal `common.members` plus the selected state's `members`. This conversion cannot invent a member or bypass a structural mismatch. Direct version 1 runner plans still require both complete explicit lists. Stateful extraction can be combined with other non-overlapping extraction modes and hierarchy operations. It rejects nested Prefabs, external references, incomplete member mapping, and an existing output asset.
 
 ## Private Asset Renames
 

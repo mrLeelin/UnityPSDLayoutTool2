@@ -12,6 +12,7 @@ from typing import Any
 
 GUID_RE = re.compile(r"^[0-9a-f]{32}$")
 VIEW_RE = re.compile(r"^[A-Z][A-Za-z0-9]*View$")
+COMPONENT_PREFAB_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 
 
 def fail(message: str) -> None:
@@ -39,11 +40,26 @@ def asset_path(value: Any, label: str) -> str:
     return path
 
 
+def component_prefab_asset_path(value: Any, label: str, prefab_path: str) -> str:
+    path = asset_path(value, label)
+    expected_directory = PurePosixPath(prefab_path).parent / "Common"
+    path_object = PurePosixPath(path)
+    if path_object.parent != expected_directory:
+        fail(f"{label} must be directly under {expected_directory.as_posix()}")
+    if path_object.suffix != ".prefab":
+        fail(f"{label} must end with .prefab")
+    if not COMPONENT_PREFAB_NAME_RE.match(path_object.stem):
+        fail(f"{label} filename must be PascalCase")
+    return path
+
+
 def csharp(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
 def csharp_string_array(values: list[str]) -> str:
+    if not values:
+        return "new string[0]"
     return "new string[] { " + ", ".join(csharp(value) for value in values) + " }"
 
 
@@ -77,6 +93,8 @@ def validate_wrapper_reference(
 
 
 def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
+    if mode not in {"apply", "preflight", "verify", "reapply"}:
+        fail(f"unsupported render mode: {mode}")
     if raw.get("version") != 1:
         fail("version must be 1")
 
@@ -90,6 +108,14 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         fail("output.mode must be in_place; this cleanup never creates a copy or .cleaned.prefab")
     if output_path != prefab_path:
         fail("in_place output.assetPath must exactly equal prefabAssetPath")
+    component_owner_prefab_path = prefab_path
+    if mode == "reapply" and raw.get("replaySourcePrefabAssetPath") is not None:
+        component_owner_prefab_path = asset_path(
+            raw.get("replaySourcePrefabAssetPath"),
+            "replaySourcePrefabAssetPath",
+        )
+        if not component_owner_prefab_path.endswith(".prefab"):
+            fail("replaySourcePrefabAssetPath must end with .prefab")
 
     prefab_name = require_string(raw.get("prefabName"), "prefabName")
     wrappers = require_list(raw.get("wrappers", []), "wrappers")
@@ -113,12 +139,6 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
 
     if (texture_renames or atlas_renames) and not VIEW_RE.match(prefab_name):
         fail("prefabName must be PascalCase and end with View when renaming private assets")
-    if (component_extractions or state_component_extractions or variant_component_extractions or stateful_component_extractions) and (wrappers or moves or renames or empty_container_removals or tight_bounds):
-        fail("component extraction must run as a standalone plan after hierarchy cleanup")
-    extraction_modes = sum(bool(entries) for entries in (component_extractions, state_component_extractions, variant_component_extractions, stateful_component_extractions))
-    if extraction_modes > 1:
-        fail("componentExtractions, stateComponentExtractions, variantComponentExtractions, and statefulComponentExtractions must run in separate plans")
-
     wrapper_ids: set[str] = set()
     for index, wrapper in enumerate(wrappers):
         wrapper_id = require_string(wrapper.get("id"), f"wrappers[{index}].id")
@@ -209,9 +229,9 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
             fail(f"duplicate component extraction id: {extraction_id}")
         extraction_ids.add(extraction_id)
         template = require_string(extraction.get("template"), f"componentExtractions[{index}].template")
-        component_asset_path = asset_path(extraction.get("assetPath"), f"componentExtractions[{index}].assetPath")
-        if not component_asset_path.endswith(".prefab"):
-            fail(f"componentExtractions[{index}].assetPath must end with .prefab")
+        component_asset_path = component_prefab_asset_path(
+            extraction.get("assetPath"), f"componentExtractions[{index}].assetPath", component_owner_prefab_path
+        )
         if component_asset_path in extraction_asset_paths:
             fail(f"duplicate component extraction assetPath: {component_asset_path}")
         if component_asset_path in {prefab_path, output_path}:
@@ -248,9 +268,9 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         template_parent = template.rsplit("/", 1)[0] if "/" in template else ""
         if not template_parent:
             fail(f"stateComponentExtractions[{index}].template must not be the Prefab root")
-        component_asset_path = asset_path(extraction.get("assetPath"), f"stateComponentExtractions[{index}].assetPath")
-        if not component_asset_path.endswith(".prefab"):
-            fail(f"stateComponentExtractions[{index}].assetPath must end with .prefab")
+        component_asset_path = component_prefab_asset_path(
+            extraction.get("assetPath"), f"stateComponentExtractions[{index}].assetPath", component_owner_prefab_path
+        )
         if component_asset_path in extraction_asset_paths:
             fail(f"duplicate component extraction assetPath: {component_asset_path}")
         if component_asset_path in {prefab_path, output_path}:
@@ -299,9 +319,9 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         template_parent = template.rsplit("/", 1)[0] if "/" in template else ""
         if not template_parent:
             fail(f"{label}.template must not be the Prefab root")
-        component_asset_path = asset_path(extraction.get("assetPath"), f"{label}.assetPath")
-        if not component_asset_path.endswith(".prefab"):
-            fail(f"{label}.assetPath must end with .prefab")
+        component_asset_path = component_prefab_asset_path(
+            extraction.get("assetPath"), f"{label}.assetPath", component_owner_prefab_path
+        )
         if component_asset_path in extraction_asset_paths:
             fail(f"duplicate component extraction assetPath: {component_asset_path}")
         if component_asset_path in {prefab_path, output_path}:
@@ -379,9 +399,9 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         template_parent = template.rsplit("/", 1)[0] if "/" in template else ""
         if not template_parent:
             fail(f"{label}.template must not be the Prefab root")
-        component_asset_path = asset_path(extraction.get("assetPath"), f"{label}.assetPath")
-        if not component_asset_path.endswith(".prefab"):
-            fail(f"{label}.assetPath must end with .prefab")
+        component_asset_path = component_prefab_asset_path(
+            extraction.get("assetPath"), f"{label}.assetPath", component_owner_prefab_path
+        )
         if component_asset_path in extraction_asset_paths:
             fail(f"duplicate component extraction assetPath: {component_asset_path}")
         if component_asset_path in {prefab_path, output_path}:
@@ -437,8 +457,6 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
             if not (name.startswith("[") and name.endswith("]")):
                 fail(f"{state_label}.name must be a bracketed structural state name")
             state_members = require_list(state.get("members"), f"{state_label}.members")
-            if not state_members:
-                fail(f"{state_label}.members must not be empty")
             source_names, _ = normalize_members(state_members, f"{state_label}.members")
             if set(source_names).intersection(common_source_names):
                 fail(f"{state_label}.members overlap common members")
@@ -701,11 +719,11 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
     for path in verify.get("absentPaths", []):
         lines.append(f"    AssertPathAbsent(reopened, {csharp(path)});")
     for index, item in enumerate(verify.get("directChildren", [])):
-        expected_children = ", ".join(csharp(child) for child in item["children"])
+        expected_children = csharp_string_array(item["children"])
         lines.extend(
             [
                 f"    var directChildrenNode{index} = FindByPath(reopened, {csharp(item['path'])}).transform;",
-                f"    AssertDirectChildren(directChildrenNode{index}, new[] {{ {expected_children} }}, {csharp(item['path'])});",
+                f"    AssertDirectChildren(directChildrenNode{index}, {expected_children}, {csharp(item['path'])});",
             ]
         )
     for index, item in enumerate(verify.get("tightBounds", [])):
@@ -730,7 +748,7 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
 
     for extraction in plan["state_component_extractions"]:
         target_path = state_component_target_path(extraction)
-        state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
+        state_names = csharp_string_array([state["name"] for state in extraction["states"]])
         default_state = next(state for state in extraction["states"] if state["id"] == extraction["defaultState"])
         lines.extend(
             [
@@ -740,13 +758,13 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
                 f"    AssertNestedPrefabInstance(stateComponentInstance_{extraction['id']}, {csharp(extraction['assetPath'])});",
                 f"    var statesContainer_{extraction['id']} = stateComponentInstance_{extraction['id']}.transform.Find(\"[States]\");",
                 f"    if (statesContainer_{extraction['id']} == null) throw new InvalidOperationException(\"State component has no [States] container: \" + stateComponentInstance_{extraction['id']}.name);",
-                f"    AssertDirectChildren(statesContainer_{extraction['id']}, new[] {{ {state_names} }}, {csharp(target_path + '/[States]')});",
+                f"    AssertDirectChildren(statesContainer_{extraction['id']}, {state_names}, {csharp(target_path + '/[States]')});",
                 f"    AssertExclusiveActiveState(statesContainer_{extraction['id']}, {csharp(default_state['name'])}, {csharp(target_path)});",
             ]
         )
 
     for extraction in plan["variant_component_extractions"]:
-        state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
+        state_names = csharp_string_array([state["name"] for state in extraction["states"]])
         lines.extend(
             [
                 f"    var variantComponentAsset_{extraction['id']} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])});",
@@ -754,7 +772,7 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
                 f"    var variantCommon_{extraction['id']} = variantComponentAsset_{extraction['id']}.transform.Find(\"[Common]\");",
                 f"    var variantStates_{extraction['id']} = variantComponentAsset_{extraction['id']}.transform.Find(\"[States]\");",
                 f"    if (variantCommon_{extraction['id']} == null || variantStates_{extraction['id']} == null) throw new InvalidOperationException(\"Variant component must contain [Common] and [States]: \" + variantComponentAsset_{extraction['id']}.name);",
-                f"    AssertDirectChildren(variantStates_{extraction['id']}, new[] {{ {state_names} }}, {csharp(extraction['assetPath'] + '/[States]')});",
+                f"    AssertDirectChildren(variantStates_{extraction['id']}, {state_names}, {csharp(extraction['assetPath'] + '/[States]')});",
             ]
         )
         for instance_index, instance in enumerate(extraction["instances"]):
@@ -769,8 +787,8 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
             )
 
     for extraction in plan["stateful_component_extractions"]:
-        common_target_names = ", ".join(csharp(member["name"]) for member in extraction["common"]["members"])
-        state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
+        common_target_names = csharp_string_array([member["name"] for member in extraction["common"]["members"]])
+        state_names = csharp_string_array([state["name"] for state in extraction["states"]])
         lines.extend(
             [
                 f"    var statefulComponentAsset_{extraction['id']} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])});",
@@ -778,13 +796,13 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
                 f"    var statefulCommon_{extraction['id']} = statefulComponentAsset_{extraction['id']}.transform.Find(\"[Common]\");",
                 f"    var statefulStates_{extraction['id']} = statefulComponentAsset_{extraction['id']}.transform.Find(\"[States]\");",
                 f"    if (statefulCommon_{extraction['id']} == null || statefulStates_{extraction['id']} == null) throw new InvalidOperationException(\"Stateful component must contain [Common] and [States]: \" + statefulComponentAsset_{extraction['id']}.name);",
-                f"    AssertDirectChildren(statefulCommon_{extraction['id']}, new[] {{ {common_target_names} }}, {csharp(extraction['assetPath'] + '/[Common]')});",
-                f"    AssertDirectChildren(statefulStates_{extraction['id']}, new[] {{ {state_names} }}, {csharp(extraction['assetPath'] + '/[States]')});",
+                f"    AssertDirectChildren(statefulCommon_{extraction['id']}, {common_target_names}, {csharp(extraction['assetPath'] + '/[Common]')});",
+                f"    AssertDirectChildren(statefulStates_{extraction['id']}, {state_names}, {csharp(extraction['assetPath'] + '/[States]')});",
             ]
         )
         for state_index, state in enumerate(extraction["states"]):
-            member_names = ", ".join(csharp(member["name"]) for member in state["members"])
-            lines.append(f"    AssertDirectChildren(statefulStates_{extraction['id']}.GetChild({state_index}), new[] {{ {member_names} }}, {csharp(extraction['assetPath'] + '/[States]/' + state['name'])});")
+            member_names = csharp_string_array([member["name"] for member in state["members"]])
+            lines.append(f"    AssertDirectChildren(statefulStates_{extraction['id']}.GetChild({state_index}), {member_names}, {csharp(extraction['assetPath'] + '/[States]/' + state['name'])});")
         state_names_by_id = {state["id"]: state["name"] for state in extraction["states"]}
         for instance_index, instance in enumerate(extraction["instances"]):
             instance_path = instance["source"].rsplit("/", 1)[0] + "/" + instance["name"]
@@ -825,57 +843,6 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
 
 def emit_preflight(plan: dict[str, Any]) -> list[str]:
     lines = [
-        "string PlanPath(Transform node)",
-        "{",
-        "    var segments = new List<string>();",
-        "    for (var current = node; current != null; current = current.parent)",
-        "    {",
-        "        var segment = current.name;",
-        "        if (current.parent != null)",
-        "        {",
-        "            var occurrence = 0;",
-        "            for (var siblingIndex = 0; siblingIndex < current.parent.childCount; siblingIndex++)",
-        "            {",
-        "                var sibling = current.parent.GetChild(siblingIndex);",
-        "                if (sibling.name != current.name) continue;",
-        "                if (sibling == current) break;",
-        "                occurrence++;",
-        "            }",
-        "            if (occurrence > 0) segment += \"#\" + occurrence;",
-        "        }",
-        "        segments.Add(segment);",
-        "    }",
-        "    segments.Reverse();",
-        "    return string.Join(\"/\", segments.ToArray());",
-        "}",
-        "",
-        "string FindCandidateSourcePaths(GameObject root, string path)",
-        "{",
-        "    var requestedName = path.Substring(path.LastIndexOf('/') + 1);",
-        "    var duplicateMarker = requestedName.LastIndexOf('#');",
-        "    if (duplicateMarker > 0) requestedName = requestedName.Substring(0, duplicateMarker);",
-        "    var candidates = new List<string>();",
-        "    foreach (var node in root.GetComponentsInChildren<Transform>(true))",
-        "    {",
-        "        if (node.name.Length < 3) continue;",
-        "        if (node.name.IndexOf(requestedName, StringComparison.OrdinalIgnoreCase) < 0 && requestedName.IndexOf(node.name, StringComparison.OrdinalIgnoreCase) < 0) continue;",
-        "        candidates.Add(PlanPath(node));",
-        "        if (candidates.Count >= 5) break;",
-        "    }",
-        "    return string.Join(\", \", candidates.ToArray());",
-        "}",
-        "",
-        "void AssertPlanPath(GameObject root, string operation, string path)",
-        "{",
-        "    try { FindByPath(root, path); }",
-        "    catch (InvalidOperationException)",
-        "    {",
-        "        var candidates = FindCandidateSourcePaths(root, path);",
-        "        var hint = string.IsNullOrEmpty(candidates) ? string.Empty : \" Candidate source paths: \" + candidates;",
-        "        throw new InvalidOperationException(\"Plan source path was not found for \" + operation + \": \" + path + hint);",
-        "    }",
-        "}",
-        "",
         "if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null) throw new InvalidOperationException(\"Prefab did not load: \" + prefabPath);",
         "if (!string.Equals(outputPath, prefabPath, StringComparison.Ordinal)) throw new InvalidOperationException(\"Cleanup must save only the exact target Prefab in place.\");",
     ]
@@ -891,14 +858,15 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
             ]
         )
 
-    for extraction in plan["component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
-    for extraction in plan["state_component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"State component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
-    for extraction in plan["variant_component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Variant component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
-    for extraction in plan["stateful_component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Stateful component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+    for label, extractions in (
+        ("Component", plan["component_extractions"]),
+        ("State component", plan["state_component_extractions"]),
+        ("Variant component", plan["variant_component_extractions"]),
+        ("Stateful component", plan["stateful_component_extractions"]),
+    ):
+        for extraction in extractions:
+            asset = csharp(extraction["assetPath"])
+            lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({asset}) != null) throw new InvalidOperationException(\"{label} Prefab target already exists: \" + {asset});")
 
     lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
 
@@ -1072,6 +1040,57 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "        current = next;",
         "    }",
         "    return current.gameObject;",
+        "}",
+        "",
+        "string PlanPath(Transform node)",
+        "{",
+        "    var segments = new List<string>();",
+        "    for (var current = node; current != null; current = current.parent)",
+        "    {",
+        "        var segment = current.name;",
+        "        if (current.parent != null)",
+        "        {",
+        "            var occurrence = 0;",
+        "            for (var siblingIndex = 0; siblingIndex < current.parent.childCount; siblingIndex++)",
+        "            {",
+        "                var sibling = current.parent.GetChild(siblingIndex);",
+        "                if (sibling.name != current.name) continue;",
+        "                if (sibling == current) break;",
+        "                occurrence++;",
+        "            }",
+        "            if (occurrence > 0) segment += \"#\" + occurrence;",
+        "        }",
+        "        segments.Add(segment);",
+        "    }",
+        "    segments.Reverse();",
+        "    return string.Join(\"/\", segments.ToArray());",
+        "}",
+        "",
+        "string FindCandidateSourcePaths(GameObject root, string path)",
+        "{",
+        "    var requestedName = path.Substring(path.LastIndexOf('/') + 1);",
+        "    var duplicateMarker = requestedName.LastIndexOf('#');",
+        "    if (duplicateMarker > 0) requestedName = requestedName.Substring(0, duplicateMarker);",
+        "    var candidates = new List<string>();",
+        "    foreach (var node in root.GetComponentsInChildren<Transform>(true))",
+        "    {",
+        "        if (node.name.Length < 3) continue;",
+        "        if (node.name.IndexOf(requestedName, StringComparison.OrdinalIgnoreCase) < 0 && requestedName.IndexOf(node.name, StringComparison.OrdinalIgnoreCase) < 0) continue;",
+        "        candidates.Add(PlanPath(node));",
+        "        if (candidates.Count >= 8) break;",
+        "    }",
+        "    return string.Join(\", \", candidates.ToArray());",
+        "}",
+        "",
+        "void AssertPlanPath(GameObject root, string operation, string path)",
+        "{",
+        "    try { FindByPath(root, path); }",
+        "    catch (InvalidOperationException)",
+        "    {",
+        "        var candidates = FindCandidateSourcePaths(root, path);",
+        "        var hint = string.IsNullOrEmpty(candidates) ? string.Empty : \" Candidate source paths: \" + candidates;",
+        "        throw new InvalidOperationException(\"Plan source path was not found for \" + operation + \": \" + path + hint);",
+        "    }",
         "}",
         "",
         "bool PathExists(GameObject root, string path)",
@@ -1384,6 +1403,13 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    finally { Object.DestroyImmediate(clone); }",
         "}",
         "",
+        "GameObject LoadExistingComponentPrefab(string assetPath)",
+        "{",
+        "    var componentAsset = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);",
+        "    if (componentAsset == null) throw new InvalidOperationException(\"Reusable component Prefab did not load: \" + assetPath);",
+        "    return componentAsset;",
+        "}",
+        "",
         "void ReplaceWithComponentInstance(Transform source, GameObject componentAsset)",
         "{",
         "    var parent = source.parent; if (parent == null) throw new InvalidOperationException(\"Cannot replace the Prefab root with a nested component instance\");",
@@ -1563,6 +1589,53 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    if (!string.Equals(actualGuid, expectedGuid, StringComparison.Ordinal)) throw new InvalidOperationException(\"GUID invariant failed for \" + assetPath);",
         "}",
         "",
+        "Dictionary<Object, Object> RefreshRenamedAsset(string sourcePath, string targetPath, string expectedTargetGuid)",
+        "{",
+        "    AssertGuid(targetPath, expectedTargetGuid);",
+        "    var sourceObjects = AssetDatabase.LoadAllAssetsAtPath(sourcePath).Where(value => value != null).ToArray();",
+        "    if (sourceObjects.Length == 0) throw new InvalidOperationException(\"Replay source asset did not load: \" + sourcePath);",
+        "    var sourceImporter = AssetImporter.GetAtPath(sourcePath); var targetImporter = AssetImporter.GetAtPath(targetPath);",
+        "    if (sourceImporter == null || targetImporter == null || sourceImporter.GetType() != targetImporter.GetType()) throw new InvalidOperationException(\"Replay asset importer types do not match: \" + sourcePath + \" => \" + targetPath);",
+        "    var projectRoot = Directory.GetParent(Application.dataPath);",
+        "    if (projectRoot == null) throw new InvalidOperationException(\"Unity project root could not be resolved\");",
+        "    var sourceFullPath = Path.GetFullPath(Path.Combine(projectRoot.FullName, sourcePath.Replace('/', Path.DirectorySeparatorChar)));",
+        "    var targetFullPath = Path.GetFullPath(Path.Combine(projectRoot.FullName, targetPath.Replace('/', Path.DirectorySeparatorChar)));",
+        "    var projectPrefix = projectRoot.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;",
+        "    if (!sourceFullPath.StartsWith(projectPrefix, StringComparison.OrdinalIgnoreCase) || !targetFullPath.StartsWith(projectPrefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException(\"Replay asset path escaped the Unity project\");",
+        "    File.Copy(sourceFullPath, targetFullPath, true);",
+        "    EditorUtility.CopySerialized(sourceImporter, targetImporter);",
+        "    targetImporter.SaveAndReimport();",
+        "    AssertGuid(targetPath, expectedTargetGuid);",
+        "    var targetObjects = AssetDatabase.LoadAllAssetsAtPath(targetPath).Where(value => value != null).ToArray();",
+        "    var mapping = new Dictionary<Object, Object>();",
+        "    foreach (var sourceObject in sourceObjects)",
+        "    {",
+        "        var exactMatches = targetObjects.Where(value => value.GetType() == sourceObject.GetType() && string.Equals(value.name, sourceObject.name, StringComparison.Ordinal)).ToArray();",
+        "        var typeMatches = targetObjects.Where(value => value.GetType() == sourceObject.GetType()).ToArray();",
+        "        var targetObject = exactMatches.Length == 1 ? exactMatches[0] : typeMatches.Length == 1 ? typeMatches[0] : null;",
+        "        if (targetObject == null) throw new InvalidOperationException(\"Could not map replay asset object while preserving GUID: \" + sourcePath + \" :: \" + sourceObject.GetType().FullName + \"/\" + sourceObject.name);",
+        "        mapping[sourceObject] = targetObject;",
+        "    }",
+        "    return mapping;",
+        "}",
+        "",
+        "void RemapAssetReferences(GameObject root, Dictionary<Object, Object> mapping)",
+        "{",
+        "    foreach (var component in root.GetComponentsInChildren<Component>(true))",
+        "    {",
+        "        if (component == null) continue;",
+        "        var serialized = new SerializedObject(component); var property = serialized.GetIterator(); var enterChildren = true; var changed = false;",
+        "        while (property.Next(enterChildren))",
+        "        {",
+        "            enterChildren = false;",
+        "            if (property.propertyType != SerializedPropertyType.ObjectReference || property.objectReferenceValue == null) continue;",
+        "            if (!mapping.TryGetValue(property.objectReferenceValue, out var replacement)) continue;",
+        "            property.objectReferenceValue = replacement; changed = true;",
+        "        }",
+        "        if (changed) serialized.ApplyModifiedPropertiesWithoutUndo();",
+        "    }",
+        "}",
+        "",
         "void CollectInvalidNames(Transform node, List<string> invalidNames)",
         "{",
         "    if (IsNonSemanticObjectName(node.name)) invalidNames.Add(TransformPath(node));",
@@ -1596,23 +1669,119 @@ def render(plan: dict[str, Any], mode: str) -> str:
     for index, rename in enumerate(all_assets):
         source = rename["from"]
         target = final_asset_path(source, rename["toName"])
-        lines.extend(
-            [
-                f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(source)}) == null) throw new InvalidOperationException(\"Source asset did not load: \" + {csharp(source)});",
-                f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(target)}) != null) throw new InvalidOperationException(\"Rename target already exists: \" + {csharp(target)});",
-                f"AssertGuid({csharp(source)}, {csharp(rename['expectedGuid'])});",
-            ]
+        lines.append(
+            f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(source)}) == null) throw new InvalidOperationException(\"Source asset did not load: \" + {csharp(source)});"
         )
-    for extraction in plan["component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
-    for extraction in plan["state_component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"State component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
-    for extraction in plan["variant_component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Variant component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
-    for extraction in plan["stateful_component_extractions"]:
-        lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(extraction['assetPath'])}) != null) throw new InvalidOperationException(\"Stateful component Prefab target already exists: \" + {csharp(extraction['assetPath'])});")
+        if mode == "reapply":
+            lines.extend(
+                [
+                    f"var replayAssetAlreadyRenamed{index} = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(target)}) != null;",
+                    f"if (replayAssetAlreadyRenamed{index}) AssertGuid({csharp(target)}, {csharp(rename['expectedGuid'])}); else AssertGuid({csharp(source)}, {csharp(rename['expectedGuid'])});",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({csharp(target)}) != null) throw new InvalidOperationException(\"Rename target already exists: \" + {csharp(target)});",
+                    f"AssertGuid({csharp(source)}, {csharp(rename['expectedGuid'])});",
+                ]
+            )
+    for label, extractions in (
+        ("Component", plan["component_extractions"]),
+        ("State component", plan["state_component_extractions"]),
+        ("Variant component", plan["variant_component_extractions"]),
+        ("Stateful component", plan["stateful_component_extractions"]),
+    ):
+        for extraction in extractions:
+            asset = csharp(extraction["assetPath"])
+            if mode != "reapply":
+                lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({asset}) != null) throw new InvalidOperationException(\"{label} Prefab target already exists: \" + {asset});")
 
     lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
+
+    if mode == "reapply":
+        def assert_replay_path(operation: str, path: str) -> None:
+            lines.append(
+                f"    AssertPlanPath(root, {csharp(operation)}, {csharp(path)});"
+            )
+
+        for index, wrapper in enumerate(plan["wrappers"]):
+            if not wrapper["parent"].startswith("@"):
+                assert_replay_path(f"wrappers[{index}].parent", wrapper["parent"])
+        for index, move in enumerate(plan["moves"]):
+            assert_replay_path(f"moves[{index}].source", move["source"])
+            if not move["destination"].startswith("@"):
+                assert_replay_path(f"moves[{index}].destination", move["destination"])
+        for index, rename in enumerate(plan["renames"]):
+            if not rename["target"].startswith("@"):
+                assert_replay_path(f"renames[{index}].target", rename["target"])
+        for index, removal in enumerate(plan["empty_container_removals"]):
+            assert_replay_path(
+                f"emptyContainerRemovals[{index}].source", removal["source"]
+            )
+        for index, tight_bound in enumerate(plan["tight_bounds"]):
+            if not tight_bound["target"].startswith("@"):
+                assert_replay_path(f"tightBounds[{index}].target", tight_bound["target"])
+        for index, decision in enumerate(plan["component_family_decisions"]):
+            assert_replay_path(
+                f"componentFamilyDecisions[{index}].parent", decision["parent"]
+            )
+            for source_index, source in enumerate(decision["sources"]):
+                assert_replay_path(
+                    f"componentFamilyDecisions[{index}].sources[{source_index}]",
+                    source,
+                )
+        for index, extraction in enumerate(plan["component_extractions"]):
+            assert_replay_path(
+                f"componentExtractions[{index}].template", extraction["template"]
+            )
+            for instance_index, instance in enumerate(extraction["instances"]):
+                assert_replay_path(
+                    f"componentExtractions[{index}].instances[{instance_index}]",
+                    instance,
+                )
+        for index, extraction in enumerate(plan["state_component_extractions"]):
+            assert_replay_path(
+                f"stateComponentExtractions[{index}].template", extraction["template"]
+            )
+            for state_index, state in enumerate(extraction["states"]):
+                assert_replay_path(
+                    f"stateComponentExtractions[{index}].states[{state_index}].source",
+                    state["source"],
+                )
+        for index, extraction in enumerate(plan["variant_component_extractions"]):
+            assert_replay_path(
+                f"variantComponentExtractions[{index}].template", extraction["template"]
+            )
+            for state_index, state in enumerate(extraction["states"]):
+                assert_replay_path(
+                    f"variantComponentExtractions[{index}].states[{state_index}].source",
+                    state["source"],
+                )
+            for instance_index, instance in enumerate(extraction["instances"]):
+                assert_replay_path(
+                    f"variantComponentExtractions[{index}].instances[{instance_index}].source",
+                    instance["source"],
+                )
+        for index, extraction in enumerate(plan["stateful_component_extractions"]):
+            assert_replay_path(
+                f"statefulComponentExtractions[{index}].template", extraction["template"]
+            )
+            assert_replay_path(
+                f"statefulComponentExtractions[{index}].common.source",
+                extraction["common"]["source"],
+            )
+            for state_index, state in enumerate(extraction["states"]):
+                assert_replay_path(
+                    f"statefulComponentExtractions[{index}].states[{state_index}].source",
+                    state["source"],
+                )
+            for instance_index, instance in enumerate(extraction["instances"]):
+                assert_replay_path(
+                    f"statefulComponentExtractions[{index}].instances[{instance_index}].source",
+                    instance["source"],
+                )
+
     lines.extend(
         [
             "    var excludedCornerNodes = new HashSet<Transform>();",
@@ -1747,7 +1916,10 @@ def render(plan: dict[str, Any], mode: str) -> str:
                 ]
             )
         component_asset_var = f"componentAsset{extraction_index}"
-        lines.append(f"    var {component_asset_var} = CreateComponentPrefab({template_var}, {csharp(extraction['assetPath'])});")
+        if mode == "reapply":
+            lines.append(f"    var {component_asset_var} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])}) ?? CreateComponentPrefab({template_var}, {csharp(extraction['assetPath'])});")
+        else:
+            lines.append(f"    var {component_asset_var} = CreateComponentPrefab({template_var}, {csharp(extraction['assetPath'])});")
         for instance_var in instance_vars:
             lines.append(f"    ReplaceWithComponentInstance({instance_var}, {component_asset_var});")
     for extraction_index, extraction in enumerate(plan["state_component_extractions"]):
@@ -1763,7 +1935,10 @@ def render(plan: dict[str, Any], mode: str) -> str:
                 ]
             )
         component_asset_var = f"stateComponentAsset{extraction_index}"
-        lines.append(f"    var {component_asset_var} = CreateStateComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
+        if mode == "reapply":
+            lines.append(f"    var {component_asset_var} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])}) ?? CreateStateComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
+        else:
+            lines.append(f"    var {component_asset_var} = CreateStateComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
         lines.append(f"    ReplaceStateSourcesWithComponent({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {component_asset_var});")
     for extraction_index, extraction in enumerate(plan["variant_component_extractions"]):
         template_var, source_vars, instance_vars = variant_extraction_vars[extraction_index]
@@ -1778,19 +1953,28 @@ def render(plan: dict[str, Any], mode: str) -> str:
                 ]
             )
         component_asset_var = f"variantComponentAsset{extraction_index}"
-        lines.append(f"    var {component_asset_var} = CreateVariantComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
+        if mode == "reapply":
+            lines.append(f"    var {component_asset_var} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])}) ?? CreateVariantComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
+        else:
+            lines.append(f"    var {component_asset_var} = CreateVariantComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
         state_names_by_id = {state["id"]: state["name"] for state in extraction["states"]}
         for instance, instance_var in zip(extraction["instances"], instance_vars):
             lines.append(f"    ReplaceVariantSourceWithComponent({instance_var}, {csharp(instance['name'])}, {csharp(state_names_by_id[instance['state']])}, {component_asset_var});")
     for extraction_index, extraction in enumerate(plan["stateful_component_extractions"]):
         template_var, common_source_var, state_source_vars, instance_vars = stateful_extraction_vars[extraction_index]
         default_state_index = next(index for index, state in enumerate(extraction["states"]) if state["id"] == extraction["defaultState"])
-        common_source_names = ", ".join(csharp(member["sourceName"]) for member in extraction["common"]["members"])
-        common_target_names = ", ".join(csharp(member["name"]) for member in extraction["common"]["members"])
+        common_source_names = [member["sourceName"] for member in extraction["common"]["members"]]
+        common_target_names = [member["name"] for member in extraction["common"]["members"]]
         state_names = ", ".join(csharp(state["name"]) for state in extraction["states"])
         state_source_array = ", ".join(state_source_vars)
-        state_member_source_arrays = ", ".join("new[] { " + ", ".join(csharp(member["sourceName"]) for member in state["members"]) + " }" for state in extraction["states"])
-        state_member_target_arrays = ", ".join("new[] { " + ", ".join(csharp(member["name"]) for member in state["members"]) + " }" for state in extraction["states"])
+        state_member_source_arrays = ", ".join(
+            csharp_string_array([member["sourceName"] for member in state["members"]])
+            for state in extraction["states"]
+        )
+        state_member_target_arrays = ", ".join(
+            csharp_string_array([member["name"] for member in state["members"]])
+            for state in extraction["states"]
+        )
         for instance_var in instance_vars:
             lines.extend(
                 [
@@ -1799,18 +1983,34 @@ def render(plan: dict[str, Any], mode: str) -> str:
                 ]
             )
         component_asset_var = f"statefulComponentAsset{extraction_index}"
-        lines.append(
-            f"    var {component_asset_var} = CreateStatefulComponentPrefab({template_var}, {common_source_var}, new[] {{ {common_source_names} }}, new[] {{ {common_target_names} }}, new[] {{ {state_source_array} }}, new[] {{ {state_names} }}, new[] {{ {state_member_source_arrays} }}, new[] {{ {state_member_target_arrays} }}, {default_state_index}, {csharp(extraction['assetPath'])});"
-        )
+        if mode == "reapply":
+            lines.append(
+                f"    var {component_asset_var} = AssetDatabase.LoadAssetAtPath<GameObject>({csharp(extraction['assetPath'])}) ?? CreateStatefulComponentPrefab({template_var}, {common_source_var}, {csharp_string_array(common_source_names)}, {csharp_string_array(common_target_names)}, new[] {{ {state_source_array} }}, new[] {{ {state_names} }}, new[] {{ {state_member_source_arrays} }}, new[] {{ {state_member_target_arrays} }}, {default_state_index}, {csharp(extraction['assetPath'])});"
+            )
+        else:
+            lines.append(
+                f"    var {component_asset_var} = CreateStatefulComponentPrefab({template_var}, {common_source_var}, {csharp_string_array(common_source_names)}, {csharp_string_array(common_target_names)}, new[] {{ {state_source_array} }}, new[] {{ {state_names} }}, new[] {{ {state_member_source_arrays} }}, new[] {{ {state_member_target_arrays} }}, {default_state_index}, {csharp(extraction['assetPath'])});"
+            )
         state_by_id = {state["id"]: state for state in extraction["states"]}
         for instance, instance_var in zip(extraction["instances"], instance_vars):
             state = state_by_id[instance["state"]]
-            instance_common_names = ", ".join(csharp(name) for name in instance["commonSourceNames"])
-            instance_state_names = ", ".join(csharp(name) for name in instance["stateSourceNames"])
-            state_target_names = ", ".join(csharp(member["name"]) for member in state["members"])
+            instance_common_names = csharp_string_array(instance["commonSourceNames"])
+            instance_state_names = csharp_string_array(instance["stateSourceNames"])
+            state_target_names = csharp_string_array([member["name"] for member in state["members"]])
             lines.append(
-                f"    ReplaceStatefulSourceWithComponent({instance_var}, {csharp(instance['name'])}, {csharp(state['name'])}, new[] {{ {instance_common_names} }}, new[] {{ {common_target_names} }}, new[] {{ {instance_state_names} }}, new[] {{ {state_target_names} }}, {component_asset_var});"
+                f"    ReplaceStatefulSourceWithComponent({instance_var}, {csharp(instance['name'])}, {csharp(state['name'])}, {instance_common_names}, {csharp_string_array(common_target_names)}, {instance_state_names}, {state_target_names}, {component_asset_var});"
             )
+
+    if mode == "reapply" and all_assets:
+        lines.append("    var replayAssetReferenceMap = new Dictionary<Object, Object>();")
+        for index, rename in enumerate(all_assets):
+            source = rename["from"]
+            target = final_asset_path(source, rename["toName"])
+            lines.append(f"    if (replayAssetAlreadyRenamed{index})")
+            lines.append("    {")
+            lines.append(f"        foreach (var pair in RefreshRenamedAsset({csharp(source)}, {csharp(target)}, {csharp(rename['expectedGuid'])})) replayAssetReferenceMap[pair.Key] = pair.Value;")
+            lines.append("    }")
+        lines.append("    RemapAssetReferences(root, replayAssetReferenceMap);")
 
     lines.extend(
         [
@@ -1821,7 +2021,48 @@ def render(plan: dict[str, Any], mode: str) -> str:
             "        for (var index = 0; index < 4; index++) maxWorldCornerDelta = Mathf.Max(maxWorldCornerDelta, Vector3.Distance(pair.Value[index], afterCorners[index]));",
             "    }",
             "    if (maxWorldCornerDelta > 0.01f) throw new InvalidOperationException(\"World-corner invariant failed: \" + maxWorldCornerDelta);",
-            "    if (PrefabUtility.SaveAsPrefabAsset(root, outputPath) == null) throw new InvalidOperationException(\"Prefab save failed: \" + outputPath);",
+        ]
+    )
+
+    if mode != "reapply" and all_assets:
+        lines.extend(
+            [
+                "    var completedAssetRenames = new List<KeyValuePair<string, string>>();",
+                "    try",
+                "    {",
+            ]
+        )
+        for index, rename in enumerate(all_assets):
+            source = rename["from"]
+            target = final_asset_path(source, rename["toName"])
+            lines.extend(
+                [
+                    f"        var renameError{index} = AssetDatabase.RenameAsset({csharp(source)}, {csharp(rename['toName'])});",
+                    f"        if (!string.IsNullOrEmpty(renameError{index})) throw new InvalidOperationException(\"Asset rename failed: \" + renameError{index});",
+                    f"        completedAssetRenames.Add(new KeyValuePair<string, string>({csharp(source)}, {csharp(target)}));",
+                ]
+            )
+        lines.extend(
+            [
+                "        if (PrefabUtility.SaveAsPrefabAsset(root, outputPath) == null) throw new InvalidOperationException(\"Prefab save failed: \" + outputPath);",
+                "    }",
+                "    catch",
+                "    {",
+                "        for (var rollbackIndex = completedAssetRenames.Count - 1; rollbackIndex >= 0; rollbackIndex--)",
+                "        {",
+                "            var pair = completedAssetRenames[rollbackIndex];",
+                "            var rollbackError = AssetDatabase.RenameAsset(pair.Value, Path.GetFileNameWithoutExtension(pair.Key));",
+                "            if (!string.IsNullOrEmpty(rollbackError)) Debug.LogError(\"Asset rename rollback failed: \" + rollbackError);",
+                "        }",
+                "        throw;",
+                "    }",
+            ]
+        )
+    else:
+        lines.append("    if (PrefabUtility.SaveAsPrefabAsset(root, outputPath) == null) throw new InvalidOperationException(\"Prefab save failed: \" + outputPath);")
+
+    lines.extend(
+        [
             "}",
             "finally",
             "{",
@@ -1831,12 +2072,20 @@ def render(plan: dict[str, Any], mode: str) -> str:
     )
 
     for index, rename in enumerate(all_assets):
-        lines.extend(
-            [
-                f"var renameError{index} = AssetDatabase.RenameAsset({csharp(rename['from'])}, {csharp(rename['toName'])});",
-                f"if (!string.IsNullOrEmpty(renameError{index})) throw new InvalidOperationException(\"Asset rename failed: \" + renameError{index});",
-            ]
-        )
+        if mode == "reapply":
+            lines.extend(
+                [
+                    f"if (replayAssetAlreadyRenamed{index})",
+                    "{",
+                    f"    if (!AssetDatabase.DeleteAsset({csharp(rename['from'])})) throw new InvalidOperationException(\"Could not delete replay source asset after remapping: \" + {csharp(rename['from'])});",
+                    "}",
+                    "else",
+                    "{",
+                    f"    var replayRenameError{index} = AssetDatabase.RenameAsset({csharp(rename['from'])}, {csharp(rename['toName'])});",
+                    f"    if (!string.IsNullOrEmpty(replayRenameError{index})) throw new InvalidOperationException(\"Replay asset rename failed: \" + replayRenameError{index});",
+                    "}",
+                ]
+            )
     lines.extend(["AssetDatabase.SaveAssets();", "AssetDatabase.Refresh();", ""])
     lines.extend(emit_verification(plan, mode))
     return "\n".join(lines) + "\n"
@@ -1965,7 +2214,7 @@ def render_snapshot(prefab_path: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path)
-    parser.add_argument("--mode", required=True, choices=("apply", "preflight", "verify", "snapshot"))
+    parser.add_argument("--mode", required=True, choices=("apply", "preflight", "verify", "reapply", "snapshot"))
     parser.add_argument("--prefab-path")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -1976,7 +2225,7 @@ def main() -> int:
             args.output.write_text(render_snapshot(asset_path(args.prefab_path, "prefabPath")), encoding="utf-8")
         else:
             if args.plan is None:
-                fail("--plan is required for apply, preflight, and verify modes")
+                fail("--plan is required for apply, preflight, verify, and reapply modes")
             raw = json.loads(args.plan.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 fail("plan root must be an object")

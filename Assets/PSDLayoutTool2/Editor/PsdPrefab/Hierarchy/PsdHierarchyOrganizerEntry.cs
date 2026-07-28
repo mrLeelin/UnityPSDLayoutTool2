@@ -29,6 +29,8 @@ namespace PsdLayoutTool2
                     psdAssetPath,
                     outputMode,
                     outputFolderName,
+                    PsdImporter.FixedOutputPath,
+                    PsdImporter.PrefabOutputPath,
                     prefabMode,
                     out targetPrefabPath))
             {

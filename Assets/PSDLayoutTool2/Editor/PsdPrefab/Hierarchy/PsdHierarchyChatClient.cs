@@ -102,6 +102,46 @@ namespace PsdLayoutTool2
         internal readonly string content;
     }
 
+    internal sealed class PsdHierarchyComponentFamilyCandidate
+    {
+        internal PsdHierarchyComponentFamilyCandidate(
+            string id,
+            string suggestedAssetName,
+            string parent,
+            IReadOnlyList<string> sources,
+            bool requiresExtraction,
+            string recommendedMode)
+        {
+            this.id = id ?? string.Empty;
+            this.suggestedAssetName = suggestedAssetName ?? string.Empty;
+            this.parent = parent ?? string.Empty;
+            this.sources = sources ?? Array.Empty<string>();
+            this.requiresExtraction = requiresExtraction;
+            this.recommendedMode = recommendedMode ?? string.Empty;
+        }
+
+        internal readonly string id;
+        internal readonly string suggestedAssetName;
+        internal readonly string parent;
+        internal readonly IReadOnlyList<string> sources;
+        internal readonly bool requiresExtraction;
+        internal readonly string recommendedMode;
+    }
+
+    internal readonly struct PsdHierarchySnapshotChild
+    {
+        internal PsdHierarchySnapshotChild(string path, string name, int siblingIndex)
+        {
+            this.path = path ?? string.Empty;
+            this.name = name ?? string.Empty;
+            this.siblingIndex = siblingIndex;
+        }
+
+        internal readonly string path;
+        internal readonly string name;
+        internal readonly int siblingIndex;
+    }
+
     internal sealed class PsdHierarchyChatContext
     {
         internal PsdHierarchyChatContext(
@@ -127,6 +167,8 @@ namespace PsdLayoutTool2
             this.hierarchySnapshotFingerprint = hierarchySnapshotFingerprint ?? string.Empty;
             this.hierarchySnapshotFullPath = hierarchySnapshotFullPath ?? string.Empty;
             nodePathsById = ParseNodePaths(this.hierarchySnapshotJson);
+            directChildrenByPath = ParseDirectChildren(this.hierarchySnapshotJson);
+            componentFamilyCandidates = ParseComponentFamilyCandidates(this.hierarchySnapshotJson);
         }
 
         internal readonly string projectRoot;
@@ -139,11 +181,20 @@ namespace PsdLayoutTool2
         internal readonly string hierarchySnapshotJson;
         internal readonly string hierarchySnapshotFingerprint;
         internal readonly string hierarchySnapshotFullPath;
+        internal readonly IReadOnlyList<PsdHierarchyComponentFamilyCandidate> componentFamilyCandidates;
         private readonly Dictionary<string, string> nodePathsById;
+        private readonly Dictionary<string, IReadOnlyList<PsdHierarchySnapshotChild>> directChildrenByPath;
 
         internal bool TryGetNodePath(string nodeId, out string path)
         {
             return nodePathsById.TryGetValue(nodeId ?? string.Empty, out path);
+        }
+
+        internal bool TryGetDirectChildren(
+            string parentPath,
+            out IReadOnlyList<PsdHierarchySnapshotChild> children)
+        {
+            return directChildrenByPath.TryGetValue(parentPath ?? string.Empty, out children);
         }
 
         internal string BuildInstructions()
@@ -159,9 +210,11 @@ namespace PsdLayoutTool2
             builder.AppendLine("The user will inspect that reply. When the user replies with an explicit confirmation, the Unity chat window validates the JSON and directly runs the approved plan through Unity Editor APIs. Do not ask for an additional confirmation, output-mode choice, or manual script command.");
             builder.AppendLine("The only allowed output mode is in_place: output.assetPath must exactly equal the supplied target Prefab path.");
             builder.AppendLine("Every reference to an existing Prefab node must use node:<id> from the authoritative snapshot. Never write a raw hierarchy path in wrappers, moves, renames, removals, tight bounds, component-family decisions, or extraction contracts.");
+            builder.AppendLine(PsdHierarchyChatClient.PlanIdentifierContract);
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
             builder.AppendLine("Do not propose, create, copy, or offer a .cleaned.prefab or any other replacement Prefab. Any later approved cleanup must target the supplied Prefab in place while preserving visual layout, generated assets, bindings, and unrelated components.");
-            builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Do not silently omit a repeated component family; use componentFamilyDecisions for every candidate.");
+            builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Each componentFamilyDecision for a supplied candidate must copy its candidateId, parent, and complete sources exactly. Candidates marked requiresExtraction:true must use component, state, variant, or stateful mode; skip is forbidden for them. Do not silently omit a repeated component family.");
+            builder.AppendLine("Every extracted assetPath must be a new PascalCase .prefab directly under the target Prefab's sibling Common directory. Multiple non-overlapping component families and hierarchy cleanup operations are intentionally supported in one reviewed plan.");
             builder.AppendLine("Return an auditable analysis summary, not private chain-of-thought. In Simplified Chinese, use exactly these sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence.");
             builder.AppendLine("Source PSD: " + sourcePsdAssetPath);
             builder.AppendLine("Target Prefab: " + targetPrefabAssetPath);
@@ -215,6 +268,129 @@ namespace PsdLayoutTool2
             }
 
             return paths;
+        }
+
+        private static Dictionary<string, IReadOnlyList<PsdHierarchySnapshotChild>> ParseDirectChildren(
+            string snapshotJson)
+        {
+            var result = new Dictionary<string, IReadOnlyList<PsdHierarchySnapshotChild>>(StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(snapshotJson))
+            {
+                return result;
+            }
+
+            try
+            {
+                JObject snapshot = JObject.Parse(snapshotJson);
+                if (!(snapshot["nodes"] is JArray nodes))
+                {
+                    return result;
+                }
+
+                var nodesById = nodes
+                    .OfType<JObject>()
+                    .Where(node => !string.IsNullOrWhiteSpace(node.Value<string>("id")))
+                    .ToDictionary(node => node.Value<string>("id"), StringComparer.Ordinal);
+                var childrenByParentPath = new Dictionary<string, List<PsdHierarchySnapshotChild>>(StringComparer.Ordinal);
+                foreach (JObject node in nodesById.Values)
+                {
+                    string parentId = node.Value<string>("parentId");
+                    if (string.IsNullOrWhiteSpace(parentId) ||
+                        !nodesById.TryGetValue(parentId, out JObject parent))
+                    {
+                        continue;
+                    }
+
+                    string parentPath = parent.Value<string>("path");
+                    string path = node.Value<string>("path");
+                    string name = node.Value<string>("name");
+                    if (string.IsNullOrWhiteSpace(parentPath) || string.IsNullOrWhiteSpace(path) ||
+                        string.IsNullOrWhiteSpace(name))
+                    {
+                        continue;
+                    }
+
+                    if (!childrenByParentPath.TryGetValue(parentPath, out List<PsdHierarchySnapshotChild> children))
+                    {
+                        children = new List<PsdHierarchySnapshotChild>();
+                        childrenByParentPath.Add(parentPath, children);
+                    }
+
+                    children.Add(new PsdHierarchySnapshotChild(
+                        path,
+                        name,
+                        node.Value<int?>("siblingIndex") ?? int.MaxValue));
+                }
+
+                foreach (KeyValuePair<string, List<PsdHierarchySnapshotChild>> entry in childrenByParentPath)
+                {
+                    result.Add(
+                        entry.Key,
+                        entry.Value
+                            .OrderBy(child => child.siblingIndex)
+                            .ThenBy(child => child.path, StringComparer.Ordinal)
+                            .ToArray());
+                }
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                // Invalid snapshots are rejected by the context builder.
+            }
+
+            return result;
+        }
+
+        private static IReadOnlyList<PsdHierarchyComponentFamilyCandidate> ParseComponentFamilyCandidates(
+            string snapshotJson)
+        {
+            var candidates = new List<PsdHierarchyComponentFamilyCandidate>();
+            if (string.IsNullOrWhiteSpace(snapshotJson))
+            {
+                return candidates;
+            }
+
+            try
+            {
+                JObject snapshot = JObject.Parse(snapshotJson);
+                if (!(snapshot["componentFamilyCandidates"] is JArray entries))
+                {
+                    return candidates;
+                }
+
+                foreach (JObject entry in entries.OfType<JObject>())
+                {
+                    string id = entry.Value<string>("id");
+                    string parent = entry.Value<string>("parent");
+                    if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(parent) ||
+                        !(entry["sources"] is JArray sourceTokens))
+                    {
+                        continue;
+                    }
+
+                    string[] sources = sourceTokens
+                        .Values<string>()
+                        .Where(source => !string.IsNullOrWhiteSpace(source))
+                        .ToArray();
+                    if (sources.Length < 2)
+                    {
+                        continue;
+                    }
+
+                    candidates.Add(new PsdHierarchyComponentFamilyCandidate(
+                        id,
+                        entry.Value<string>("suggestedAssetName"),
+                        parent,
+                        sources,
+                        entry.Value<bool?>("requiresExtraction") ?? false,
+                        entry.Value<string>("recommendedMode")));
+                }
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                // Invalid snapshots are rejected by the context builder.
+            }
+
+            return candidates;
         }
     }
 
@@ -318,6 +494,7 @@ namespace PsdLayoutTool2
                 var nodes = new JArray();
                 int nodeIndex = 0;
                 AppendSnapshotNode(root.transform, string.Empty, nodes, ref nodeIndex);
+                JArray componentFamilyCandidates = BuildComponentFamilyCandidates(nodes);
                 var snapshot = new JObject
                 {
                     ["schemaVersion"] = 1,
@@ -325,6 +502,7 @@ namespace PsdLayoutTool2
                     ["fingerprint"] = fingerprint,
                     ["nodeReferenceSyntax"] = "node:<id>",
                     ["nodes"] = nodes,
+                    ["componentFamilyCandidates"] = componentFamilyCandidates,
                 };
                 snapshotJson = snapshot.ToString(Formatting.None);
 
@@ -420,6 +598,330 @@ namespace PsdLayoutTool2
             {
                 AppendSnapshotNode(node.GetChild(childIndex), id, nodes, ref nodeIndex);
             }
+        }
+
+        // This report is part of the authoritative snapshot, not an AI guess.
+        internal static JArray BuildComponentFamilyCandidates(JArray nodes)
+        {
+            var nodeById = nodes
+                .OfType<JObject>()
+                .Where(node => !string.IsNullOrWhiteSpace(node.Value<string>("id")))
+                .ToDictionary(node => node.Value<string>("id"), StringComparer.Ordinal);
+            var childrenByParentId = new Dictionary<string, List<JObject>>(StringComparer.Ordinal);
+            foreach (JObject node in nodeById.Values)
+            {
+                string parentId = node.Value<string>("parentId");
+                if (string.IsNullOrWhiteSpace(parentId))
+                {
+                    continue;
+                }
+
+                if (!childrenByParentId.TryGetValue(parentId, out List<JObject> children))
+                {
+                    children = new List<JObject>();
+                    childrenByParentId.Add(parentId, children);
+                }
+
+                children.Add(node);
+            }
+
+            var candidates = new JArray();
+            var emittedSourceSets = new HashSet<string>(StringComparer.Ordinal);
+            int candidateIndex = 1;
+            foreach (KeyValuePair<string, List<JObject>> parent in childrenByParentId.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                if (!nodeById.TryGetValue(parent.Key, out JObject parentNode))
+                {
+                    continue;
+                }
+
+                var groups = new Dictionary<string, List<JObject>>(StringComparer.Ordinal);
+                var bareIndexChildren = new List<JObject>();
+                foreach (JObject child in parent.Value)
+                {
+                    if (child.Value<int?>("childCount") <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (!TryGetRepeatedFamilyStem(child.Value<string>("name"), out string stem))
+                    {
+                        if (TryGetBareRepeatedIndex(child.Value<string>("name"), out int bareIndex))
+                        {
+                            bareIndexChildren.Add(child);
+                        }
+
+                        continue;
+                    }
+
+                    if (!groups.TryGetValue(stem, out List<JObject> group))
+                    {
+                        group = new List<JObject>();
+                        groups.Add(stem, group);
+                    }
+
+                    group.Add(child);
+                }
+
+                foreach (JObject bareChild in bareIndexChildren)
+                {
+                    TryGetBareRepeatedIndex(bareChild.Value<string>("name"), out int bareIndex);
+                    List<KeyValuePair<string, List<JObject>>> eligibleGroups = groups
+                        .Where(pair => pair.Value.Count >= 2)
+                        .Where(pair => !ContainsNestedPrefab(bareChild.Value<string>("id"), nodeById))
+                        .Where(pair => !pair.Value.Any(node =>
+                            TryGetRepeatedFamilyIndex(node.Value<string>("name"), out int index) &&
+                            index == bareIndex))
+                        .Where(pair => HasConsistentRectTransformFrame(pair.Value.Concat(new[] { bareChild }).ToList()))
+                        .ToList();
+                    if (eligibleGroups.Count == 1)
+                    {
+                        eligibleGroups[0].Value.Add(bareChild);
+                    }
+                }
+
+                foreach (KeyValuePair<string, List<JObject>> groupEntry in groups.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                {
+                    List<JObject> group = groupEntry.Value
+                        .OrderBy(node => node.Value<int?>("siblingIndex") ?? int.MaxValue)
+                        .ToList();
+                    if (group.Count < 3 || !HasConsistentRectTransformFrame(group) ||
+                        group.Any(node => ContainsNestedPrefab(node.Value<string>("id"), nodeById)))
+                    {
+                        continue;
+                    }
+
+                    string[] sources = group.Select(node => "node:" + node.Value<string>("id")).ToArray();
+                    string sourceSetKey = string.Join("|", sources);
+                    if (!emittedSourceSets.Add(sourceSetKey))
+                    {
+                        continue;
+                    }
+
+                    bool identicalStructure = group
+                        .Select(node => BuildStructureSignature(node.Value<string>("id"), nodeById, childrenByParentId))
+                        .Distinct(StringComparer.Ordinal)
+                        .Count() == 1;
+                    bool hasCommonDirectChild = HasCommonDirectChildName(group, childrenByParentId);
+                    bool requiresExtraction = identicalStructure || hasCommonDirectChild;
+                    string suggestedAssetName = ToSuggestedAssetName(groupEntry.Key);
+                    candidates.Add(new JObject
+                    {
+                        ["id"] = "family_" + candidateIndex.ToString("D3"),
+                        ["kind"] = "numbered_repeated",
+                        ["parent"] = "node:" + parentNode.Value<string>("id"),
+                        ["sources"] = new JArray(sources),
+                        ["suggestedAssetName"] = suggestedAssetName,
+                        ["instanceCount"] = sources.Length,
+                        ["recommendedMode"] = identicalStructure ? "component" : hasCommonDirectChild ? "stateful" : "variant",
+                        ["requiresExtraction"] = requiresExtraction,
+                        ["evidence"] = new JArray(
+                            "same-parent numbered family",
+                            "matching RectTransform anchors and pivot; per-instance size is retained as an override",
+                            identicalStructure
+                                ? "matching recursive structure"
+                                : hasCommonDirectChild
+                                    ? "different child structures require explicit state mapping"
+                                    : "no common direct-child member; variant or manual review is required"),
+                    });
+                    candidateIndex++;
+                }
+            }
+
+            return candidates;
+        }
+
+        private static bool HasCommonDirectChildName(
+            IReadOnlyList<JObject> group,
+            IReadOnlyDictionary<string, List<JObject>> childrenByParentId)
+        {
+            HashSet<string> commonNames = null;
+            foreach (JObject node in group ?? Array.Empty<JObject>())
+            {
+                string nodeId = node.Value<string>("id");
+                var names = new HashSet<string>(
+                    childrenByParentId.TryGetValue(nodeId, out List<JObject> children)
+                        ? children.Select(child => child.Value<string>("name"))
+                        : Enumerable.Empty<string>(),
+                    StringComparer.Ordinal);
+                if (commonNames == null)
+                {
+                    commonNames = names;
+                }
+                else
+                {
+                    commonNames.IntersectWith(names);
+                }
+
+                if (commonNames.Count == 0)
+                {
+                    return false;
+                }
+            }
+
+            return commonNames != null && commonNames.Count > 0;
+        }
+
+        private static bool TryGetRepeatedFamilyStem(string name, out string stem)
+        {
+            return TryGetRepeatedFamilyParts(name, out stem, out int ignoredIndex);
+        }
+
+        private static bool TryGetRepeatedFamilyIndex(string name, out int index)
+        {
+            return TryGetRepeatedFamilyParts(name, out string ignoredStem, out index);
+        }
+
+        private static bool TryGetRepeatedFamilyParts(string name, out string stem, out int index)
+        {
+            stem = string.Empty;
+            index = 0;
+            string value = (name ?? string.Empty).Trim().Trim('[', ']');
+            int digitsStart = value.Length;
+            while (digitsStart > 0 && char.IsDigit(value[digitsStart - 1]))
+            {
+                digitsStart--;
+            }
+
+            if (digitsStart == value.Length || digitsStart == 0)
+            {
+                return false;
+            }
+
+            if (!int.TryParse(value.Substring(digitsStart), out index))
+            {
+                return false;
+            }
+
+            int stemEnd = digitsStart;
+            while (stemEnd > 0 && (value[stemEnd - 1] == '_' || value[stemEnd - 1] == '-' || value[stemEnd - 1] == ' '))
+            {
+                stemEnd--;
+            }
+
+            string candidate = value.Substring(0, stemEnd);
+            if (string.IsNullOrWhiteSpace(candidate) || !char.IsLetter(candidate[0]) ||
+                candidate.Any(character => !char.IsLetterOrDigit(character)))
+            {
+                return false;
+            }
+
+            stem = candidate;
+            return true;
+        }
+
+        private static bool TryGetBareRepeatedIndex(string name, out int index)
+        {
+            index = 0;
+            string value = (name ?? string.Empty).Trim().Trim('[', ']');
+            return value.Length > 0 && value.All(char.IsDigit) && int.TryParse(value, out index);
+        }
+
+        private static string ToSuggestedAssetName(string stem)
+        {
+            if (string.IsNullOrEmpty(stem))
+            {
+                return "ReusableItem";
+            }
+
+            return char.ToUpperInvariant(stem[0]) + stem.Substring(1);
+        }
+
+        private static bool HasConsistentRectTransformFrame(IReadOnlyList<JObject> nodes)
+        {
+            if (nodes == null || nodes.Count < 2)
+            {
+                return false;
+            }
+
+            JObject baseline = nodes[0]["rect"] as JObject;
+            if (baseline == null)
+            {
+                return false;
+            }
+
+            foreach (JObject node in nodes.Skip(1))
+            {
+                JObject rect = node["rect"] as JObject;
+                if (rect == null ||
+                    !VectorEquals(baseline["anchorMin"] as JArray, rect["anchorMin"] as JArray) ||
+                    !VectorEquals(baseline["anchorMax"] as JArray, rect["anchorMax"] as JArray) ||
+                    !VectorEquals(baseline["pivot"] as JArray, rect["pivot"] as JArray))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool VectorEquals(JArray left, JArray right)
+        {
+            if (left == null || right == null || left.Count != right.Count || left.Count == 0)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < left.Count; index++)
+            {
+                if (left[index].Type != JTokenType.Float && left[index].Type != JTokenType.Integer ||
+                    right[index].Type != JTokenType.Float && right[index].Type != JTokenType.Integer ||
+                    Math.Abs(left[index].Value<float>() - right[index].Value<float>()) > 0.01f)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool ContainsNestedPrefab(string sourceId, IReadOnlyDictionary<string, JObject> nodeById)
+        {
+            foreach (JObject node in nodeById.Values)
+            {
+                if (string.IsNullOrWhiteSpace(node.Value<string>("nestedPrefabAssetPath")))
+                {
+                    continue;
+                }
+
+                for (JObject current = node; current != null;)
+                {
+                    string currentId = current.Value<string>("id");
+                    if (string.Equals(currentId, sourceId, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+
+                    string parentId = current.Value<string>("parentId");
+                    current = !string.IsNullOrWhiteSpace(parentId) && nodeById.TryGetValue(parentId, out JObject parent)
+                        ? parent
+                        : null;
+                }
+            }
+
+            return false;
+        }
+
+        private static string BuildStructureSignature(
+            string nodeId,
+            IReadOnlyDictionary<string, JObject> nodeById,
+            IReadOnlyDictionary<string, List<JObject>> childrenByParentId)
+        {
+            if (!nodeById.TryGetValue(nodeId, out JObject node))
+            {
+                return string.Empty;
+            }
+
+            string components = string.Join(",", (node["components"] as JArray)?.Values<string>() ?? Enumerable.Empty<string>());
+            if (!childrenByParentId.TryGetValue(nodeId, out List<JObject> children) || children.Count == 0)
+            {
+                return "(" + components + ")";
+            }
+
+            string childSignatures = string.Join(",", children
+                .OrderBy(child => child.Value<int?>("siblingIndex") ?? int.MaxValue)
+                .Select(child => BuildStructureSignature(child.Value<string>("id"), nodeById, childrenByParentId)));
+            return "(" + components + "[" + childSignatures + "])";
         }
 
         private static string ReadDisplayedText(Transform node)
@@ -659,6 +1161,8 @@ namespace PsdLayoutTool2
             "\"emptyContainerRemovals\", \"tightBounds\", \"textureRenames\", \"spriteAtlasRenames\", " +
             "\"componentFamilyDecisions\", \"componentExtractions\", \"stateComponentExtractions\", " +
             "\"variantComponentExtractions\", \"statefulComponentExtractions\", \"verify\"";
+        internal const string PlanIdentifierContract =
+            "Every wrappers[].id must use lower snake_case matching [a-z][a-z0-9_]*; examples: screen, screen_root, day_markers. Do not use uppercase, hyphens, spaces, brackets, or @ in an id. The @ prefix is only for a later reference such as @screen_root. Apply the same lower snake_case rule to all extraction IDs and state IDs.";
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
             "1. 结合 PSD 与 Prefab 的完整层级、节点几何、组件、同级顺序和重复结构，说明当前结构的主要问题。\n" +
@@ -678,14 +1182,86 @@ namespace PsdLayoutTool2
 
         internal static string BuildJsonOnlyPlanRepairPrompt(string validationError)
         {
+            return BuildJsonOnlyPlanRepairPrompt(validationError, null);
+        }
+
+        internal static string BuildJsonOnlyPlanRepairPrompt(
+            string validationError,
+            PsdHierarchyChatContext context)
+        {
             string error = string.IsNullOrWhiteSpace(validationError)
                 ? "The plan was incomplete or failed execution-plan validation."
                 : validationError.Trim();
-            return
-                "The previously returned plan failed Unity execution-plan validation:\n" + error + "\n" +
-                "Return exactly one complete UTF-8 JSON plan in one fenced ```json code block. Do not output prose, headings, explanations, diffs, or Markdown outside that code block. This must be a full replacement plan, not a patch.\n" +
-                "Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.\n" +
-                "A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.";
+            var builder = new StringBuilder();
+            builder.AppendLine("The previously returned plan failed Unity execution-plan validation:");
+            builder.AppendLine(error);
+            builder.AppendLine("Return exactly one complete UTF-8 JSON plan in one fenced ```json code block. Do not output prose, headings, explanations, diffs, or Markdown outside that code block. This must be a full replacement plan, not a patch.");
+            builder.AppendLine("Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.");
+            builder.AppendLine(PlanIdentifierContract);
+            builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.");
+            builder.AppendLine("For every statefulComponentExtractions instance, commonSourceNames and stateSourceNames together must cover all direct children exactly once. commonSourceNames must contain one observed direct-child name for every common.members entry; stateSourceNames must do the same for the selected states[].members entry. When one side is complete, derive the other as the ordered direct-child complement. Re-read the authoritative snapshot instead of guessing or dropping a member.");
+            builder.AppendLine("Enforce this exact equation for every stateful instance: directChildCount == common.members.Count + selectedState.members.Count. If it fails, rebuild common.members, the affected states[].members, and every corresponding instance mapping; changing only commonSourceNames or stateSourceNames cannot repair a contract-count mismatch. Never place the same observed source child in both Common and the selected state.");
+
+            AppendRequiredComponentFamilyRepairContract(builder, context);
+            return builder.ToString();
+        }
+
+        private static void AppendRequiredComponentFamilyRepairContract(
+            StringBuilder builder,
+            PsdHierarchyChatContext context)
+        {
+            PsdHierarchyComponentFamilyCandidate[] requiredCandidates = context?.componentFamilyCandidates?
+                .Where(candidate => candidate.requiresExtraction)
+                .ToArray() ?? Array.Empty<PsdHierarchyComponentFamilyCandidate>();
+            if (requiredCandidates.Length == 0)
+            {
+                return;
+            }
+
+            builder.AppendLine("The following are authoritative mandatory component-family records. For EVERY record, include exactly one componentFamilyDecisions entry that copies candidateId, parent, and sources exactly and in the listed order. mode must not be skip. Use the recommendedMode unless the supplied snapshot proves another executable extraction mode. Each decision must name a lower_snake_case extractionId, and exactly one matching entry with that id must appear in componentExtractions, stateComponentExtractions, variantComponentExtractions, or statefulComponentExtractions. Do not omit, merge, shrink, reorder, or replace any source list. Do not echo this list outside your replacement JSON plan.");
+            var records = new JArray(requiredCandidates.Select(candidate => new JObject
+            {
+                ["candidateId"] = candidate.id,
+                ["suggestedAssetName"] = candidate.suggestedAssetName,
+                ["recommendedMode"] = candidate.recommendedMode,
+                ["parent"] = candidate.parent,
+                ["sources"] = new JArray(candidate.sources),
+                ["sourceStructures"] = BuildRequiredCandidateSourceStructures(context, candidate),
+            }));
+            builder.AppendLine("===== BEGIN REQUIRED COMPONENT FAMILIES =====");
+            builder.AppendLine(records.ToString(Formatting.None));
+            builder.AppendLine("===== END REQUIRED COMPONENT FAMILIES =====");
+        }
+
+        private static JArray BuildRequiredCandidateSourceStructures(
+            PsdHierarchyChatContext context,
+            PsdHierarchyComponentFamilyCandidate candidate)
+        {
+            var structures = new JArray();
+            foreach (string source in candidate.sources)
+            {
+                string nodeId = source != null && source.StartsWith("node:", StringComparison.Ordinal)
+                    ? source.Substring("node:".Length)
+                    : string.Empty;
+                if (string.IsNullOrEmpty(nodeId) ||
+                    !context.TryGetNodePath(nodeId, out string sourcePath) ||
+                    !context.TryGetDirectChildren(
+                        sourcePath,
+                        out IReadOnlyList<PsdHierarchySnapshotChild> directChildren))
+                {
+                    throw new InvalidDataException(
+                        "Cannot build authoritative repair context for mandatory component family " +
+                        candidate.id + ": source " + source + " has no direct-child evidence in the snapshot.");
+                }
+
+                structures.Add(new JObject
+                {
+                    ["source"] = source,
+                    ["directChildren"] = new JArray(directChildren.Select(child => child.name)),
+                });
+            }
+
+            return structures;
         }
 
         internal static string BuildClaudeDirectPrompt(
@@ -723,7 +1299,9 @@ namespace PsdLayoutTool2
             builder.AppendLine("Do not use legacy field names such as wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. The main Prefab output must be in_place at the exact target path.");
             builder.AppendLine("Use version 2 and copy snapshotFingerprint exactly from the authoritative snapshot.");
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every reference to an existing node must use node:<id> from the authoritative snapshot. Never emit a raw hierarchy path or invent a node ID.");
+            builder.AppendLine(PlanIdentifierContract);
             builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract. Do not silently omit a repeated component family; use componentFamilyDecisions for every candidate.");
+            builder.AppendLine("For every stateful instance, commonSourceNames plus stateSourceNames must cover every direct child exactly once. Map commonSourceNames in common.members order and stateSourceNames in the selected states[].members order. If one side is complete, derive the other from the authoritative ordered direct-child complement; do not omit repeated members.");
             builder.AppendLine("The executable plan-format file is authoritative. Follow its field names and object shapes exactly.");
             builder.AppendLine("Do not claim that a local asset was changed.");
             builder.AppendLine("User request:");
@@ -934,9 +1512,9 @@ namespace PsdLayoutTool2
                         directClaudeExecutable,
                         "--print --output-format json --permission-mode dontAsk --safe-mode " +
                         "--tools Read --add-dir " + QuoteProcessArgument(workingDirectory) +
-                        sessionArguments + " -- " + QuoteProcessArgument(prompt),
+                        sessionArguments,
                         workingDirectory,
-                        false);
+                        true);
                 }
             }
 

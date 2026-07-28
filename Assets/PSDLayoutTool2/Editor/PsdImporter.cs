@@ -35,7 +35,12 @@
             /// <summary>
             /// Save generated files into a subfolder under the Assets root.
             /// </summary>
-            AssetsRoot
+            AssetsRoot,
+
+            /// <summary>
+            /// Allow generated asset types to use independently configured output folders.
+            /// </summary>
+            FixedPath
         }
 
         /// <summary>
@@ -51,7 +56,12 @@
             /// <summary>
             /// Save the prefab inside the generated output folder.
             /// </summary>
-            InsideOutputFolder
+            InsideOutputFolder,
+
+            /// <summary>
+            /// Save the prefab into the explicitly configured Assets folder.
+            /// </summary>
+            CustomPath
         }
 
         public enum SpriteAtlasVersion
@@ -359,6 +369,10 @@
             UseTextMeshPro = true;
             OutputMode = OutputDirectoryMode.PsdDirectory;
             OutputFolderName = string.Empty;
+            FixedOutputPath = string.Empty;
+            AtlasOutputPath = string.Empty;
+            TextureOutputPath = string.Empty;
+            PrefabOutputPath = string.Empty;
             PrefabMode = PrefabOutputMode.SiblingToOutputFolder;
             AtlasVersion = SpriteAtlasVersion.V1;
             ScaleToTargetCanvas = false;
@@ -442,6 +456,29 @@
         public static string OutputFolderName { get; set; }
 
         /// <summary>
+        /// Retained for serialized-settings compatibility. Generated output no longer uses a shared fixed root.
+        /// </summary>
+        public static string FixedOutputPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the generated atlas folder path under Assets.
+        /// Empty means the conventional Atlas folder under the generated root.
+        /// </summary>
+        public static string AtlasOutputPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the generated texture folder path under Assets.
+        /// Empty means the conventional Texture folder under the generated root.
+        /// </summary>
+        public static string TextureOutputPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the generated Prefab folder path under Assets.
+        /// Empty means the conventional Prefab folder under the generated root.
+        /// </summary>
+        public static string PrefabOutputPath { get; set; }
+
+        /// <summary>
         /// Gets or sets where the prefab is generated.
         /// </summary>
         public static PrefabOutputMode PrefabMode { get; set; }
@@ -469,10 +506,31 @@
             PrefabOutputMode prefabMode,
             out string prefabAssetPath)
         {
+            return TryResolveGeneratedPrefabPath(
+                psdAssetPath,
+                outputMode,
+                outputFolderName,
+                string.Empty,
+                prefabMode,
+                string.Empty,
+                out prefabAssetPath);
+        }
+
+        public static bool TryResolveGeneratedPrefabPath(
+            string psdAssetPath,
+            OutputDirectoryMode outputMode,
+            string outputFolderName,
+            string fixedOutputPath,
+            PrefabOutputMode prefabMode,
+            string prefabOutputPath,
+            out string prefabAssetPath)
+        {
             if (!PsdGeneratedPrefabPathResolver.TryResolve(
                     psdAssetPath,
                     outputMode,
                     outputFolderName,
+                    fixedOutputPath,
+                    prefabOutputPath,
                     prefabMode,
                     out prefabAssetPath))
             {
@@ -579,7 +637,13 @@
             string prefabPath;
             if (string.IsNullOrEmpty(sourceGuid) ||
                 !PsdGeneratedPrefabPathResolver.TryResolve(
-                    normalizedAssetPath, OutputMode, OutputFolderName, PrefabMode, out prefabPath))
+                    normalizedAssetPath,
+                    OutputMode,
+                    OutputFolderName,
+                    FixedOutputPath,
+                    PrefabOutputPath,
+                    PrefabMode,
+                    out prefabPath))
             {
                 failureReason = "Cannot resolve the PSD identity or configured Prefab output path.";
                 return false;
@@ -607,7 +671,13 @@
             string prefabPath;
             if (string.IsNullOrEmpty(sourceGuid) ||
                 !PsdGeneratedPrefabPathResolver.TryResolve(
-                    normalizedAssetPath, OutputMode, OutputFolderName, PrefabMode, out prefabPath))
+                    normalizedAssetPath,
+                    OutputMode,
+                    OutputFolderName,
+                    FixedOutputPath,
+                    PrefabOutputPath,
+                    PrefabMode,
+                    out prefabPath))
                 return false;
 
             string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
@@ -712,6 +782,7 @@
                         normalizedAssetPath,
                         OutputMode,
                         OutputFolderName,
+                        FixedOutputPath,
                         out outputRelativePath))
                 {
                     throw new InvalidOperationException("Cannot resolve the generated output path for PSD asset: " + normalizedAssetPath);
@@ -725,6 +796,10 @@
                         normalizedAssetPath,
                         OutputMode,
                         OutputFolderName,
+                        FixedOutputPath,
+                        AtlasOutputPath,
+                        TextureOutputPath,
+                        PrefabOutputPath,
                         out atlasRelativePath,
                         out textureRelativePath,
                         out prefabFolderRelativePath))
@@ -738,6 +813,8 @@
                         normalizedAssetPath,
                         OutputMode,
                         OutputFolderName,
+                        FixedOutputPath,
+                        PrefabOutputPath,
                         PrefabMode,
                         out prefabRelativePath))
                 {
@@ -757,11 +834,16 @@
                 // stale-file deletion. A known Profile with a missing target is
                 // an error, never permission to fall back to whole-tree save.
                 PsdHierarchyProfile boundHierarchyProfile = null;
+                PsdHierarchyCleanupReplayProfile boundCleanupReplayProfile = null;
+                string sourceGuid = string.Empty;
                 if (CreatePrefab && !string.IsNullOrEmpty(prefabRelativePath))
                 {
-                    string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+                    sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
                     boundHierarchyProfile = ResolveHierarchyProfileBeforePrefabImport(
                         sourceGuid, prefabRelativePath, UseUnityUI);
+                    boundCleanupReplayProfile = PsdHierarchyCleanupReplayProfile.Load(
+                        prefabRelativePath,
+                        sourceGuid);
                 }
 
                 var conversionContext = new PsdPrefabConversionContext
@@ -802,8 +884,34 @@
                     tree,
                     outputRelativePath,
                     outputFullPath,
+                    textureRelativePath,
                     prefabRelativePath,
                     hasVisibleRuntimeObjects);
+                var protectedCleanupReplayPaths = new HashSet<string>(
+                    StringComparer.OrdinalIgnoreCase);
+                if (boundCleanupReplayProfile != null)
+                {
+                    if (!boundCleanupReplayProfile.TryGetProtectedRenameTargets(
+                            sourceGuid,
+                            prefabRelativePath,
+                            out IReadOnlyList<string> protectedAssetPaths,
+                            out string protectedAssetError))
+                        throw new InvalidOperationException(
+                            "Cleanup replay asset protection could not be verified: " +
+                            protectedAssetError);
+                    foreach (string protectedAssetPath in protectedAssetPaths)
+                    {
+                        string protectedFullPath = NormalizePath(Path.Combine(
+                            GetFullProjectPath(),
+                            protectedAssetPath.Replace('/', Path.DirectorySeparatorChar)));
+                        protectedCleanupReplayPaths.Add(protectedFullPath);
+                        conflictAnalysis.DeletedPaths.RemoveAll(path =>
+                            string.Equals(
+                                NormalizePath(path),
+                                protectedFullPath,
+                                StringComparison.OrdinalIgnoreCase));
+                    }
+                }
                 PsdLogger.Info(
                     "Conflict analysis: hasExistingTargets=" + conflictAnalysis.HasExistingTargets +
                     ", sameName=" + conflictAnalysis.SameNamePaths.Count +
@@ -885,12 +993,17 @@
 
                 if (effectiveSelection != null)
                 {
+                    effectiveSelection.PathsToDelete.ExceptWith(protectedCleanupReplayPaths);
                     if (boundHierarchyProfile != null &&
                         effectiveSelection.PathsToDelete.Contains(NormalizePath(conflictAnalysis.PrefabFullPath)))
                         throw new InvalidOperationException(
                             "Cannot delete a Prefab that is bound to an incremental hierarchy Profile.");
                     PsdLogger.Step("Delete selected stale files: " + effectiveSelection.PathsToDelete.Count);
-                    DeleteSelectedFiles(effectiveSelection.PathsToDelete, outputFullPath, conflictAnalysis.PrefabFullPath);
+                    DeleteSelectedFiles(
+                        effectiveSelection.PathsToDelete,
+                        outputFullPath,
+                        textureRelativePath,
+                        conflictAnalysis.PrefabFullPath);
                 }
 
                 rootPsdGameObject = null;
@@ -949,7 +1062,18 @@
                     {
                         PsdLogger.Step("Save prefab: " + prefabRelativePath);
                         EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "保存 Prefab...", 0.95f);
-                        if (!TrySaveIncrementalHierarchyPrefab(
+                        bool replayStaged = PsdHierarchyCleanupReplayCoordinator.TryStageAndSchedule(
+                            normalizedAssetPath,
+                            prefabRelativePath,
+                            importRootGameObject,
+                            out string replayStageError);
+                        if (!replayStaged && !string.IsNullOrEmpty(replayStageError))
+                        {
+                            throw new InvalidOperationException(
+                                "Cleanup replay could not be staged; the existing organized Prefab was kept unchanged. " +
+                                replayStageError);
+                        }
+                        if (!replayStaged && !TrySaveIncrementalHierarchyPrefab(
                                 normalizedAssetPath,
                                 sourceModel,
                                 conversionPlan.changes,
@@ -979,6 +1103,10 @@
                 PsdLogger.Step("Refresh AssetDatabase");
                 EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "刷新 AssetDatabase...", 0.98f);
                 AssetDatabase.ImportAsset(outputRelativePath, ImportAssetOptions.ForceSynchronousImport);
+                if (!string.Equals(outputRelativePath, textureRelativePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    AssetDatabase.ImportAsset(textureRelativePath, ImportAssetOptions.ForceSynchronousImport);
+                }
                 FinalizeRedundantTextureCleanup(prefabRelativePath);
                 if (CreatePrefab)
                 {
@@ -1027,6 +1155,7 @@
             List<Layer> tree,
             string outputRelativePath,
             string outputFullPath,
+            string textureRelativePath,
             string prefabRelativePath,
             bool hasVisibleRuntimeObjects)
         {
@@ -1049,9 +1178,19 @@
                 analysis.PrefabFullPath,
                 hasVisibleRuntimeObjects);
             HashSet<string> existingGeneratedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (analysis.HasExistingOutputDirectory)
+            HashSet<string> generatedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                string[] existingFiles = Directory.GetFiles(outputFullPath, "*.*", SearchOption.AllDirectories);
+                NormalizePath(outputFullPath),
+                NormalizePath(Path.Combine(GetFullProjectPath(), textureRelativePath.Replace('/', Path.DirectorySeparatorChar)))
+            };
+            foreach (string generatedDirectory in generatedDirectories)
+            {
+                if (!Directory.Exists(generatedDirectory))
+                {
+                    continue;
+                }
+
+                string[] existingFiles = Directory.GetFiles(generatedDirectory, "*.*", SearchOption.AllDirectories);
                 foreach (string existingFile in existingFiles)
                 {
                     string extension = Path.GetExtension(existingFile);
@@ -1183,7 +1322,11 @@
         /// <param name="pathsToDelete">Files selected for deletion.</param>
         /// <param name="outputFullPath">Import output root path.</param>
         /// <param name="prefabFullPath">Resolved prefab full path, if any.</param>
-        private static void DeleteSelectedFiles(HashSet<string> pathsToDelete, string outputFullPath, string prefabFullPath)
+        private static void DeleteSelectedFiles(
+            HashSet<string> pathsToDelete,
+            string outputFullPath,
+            string textureRelativePath,
+            string prefabFullPath)
         {
             if (pathsToDelete == null || pathsToDelete.Count == 0)
             {
@@ -1191,12 +1334,16 @@
             }
 
             string normalizedRoot = NormalizePath(outputFullPath).TrimEnd('/');
+            string normalizedTextureRoot = NormalizePath(Path.Combine(
+                GetFullProjectPath(),
+                textureRelativePath.Replace('/', Path.DirectorySeparatorChar))).TrimEnd('/');
             string normalizedPrefabPath = string.IsNullOrEmpty(prefabFullPath) ? string.Empty : NormalizePath(prefabFullPath);
 
             foreach (string selectedPath in pathsToDelete)
             {
                 string normalizedPath = NormalizePath(selectedPath);
                 if (!IsPathInsideDirectory(normalizedPath, normalizedRoot) &&
+                    !IsPathInsideDirectory(normalizedPath, normalizedTextureRoot) &&
                     !string.Equals(normalizedPath, normalizedPrefabPath, StringComparison.OrdinalIgnoreCase))
                 {
                     PsdLogger.Warning("Skip deleting path outside generated targets: " + normalizedPath);
@@ -1210,6 +1357,18 @@
             if (Directory.Exists(outputFullPath))
             {
                 DeleteEmptySubDirectories(outputFullPath);
+            }
+
+            string textureDirectory = Path.Combine(
+                GetFullProjectPath(),
+                textureRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (Directory.Exists(textureDirectory) &&
+                !string.Equals(
+                    NormalizePath(textureDirectory),
+                    NormalizePath(outputFullPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                DeleteEmptySubDirectories(textureDirectory);
             }
         }
 
@@ -3947,9 +4106,21 @@
 
         private static string GetTextureOutputPath(string outputRootDirectory, Layer layer)
         {
-            string textureDirectory = Path.Combine(outputRootDirectory, "Texture");
+            string textureDirectory = ResolveTextureOutputDirectory(outputRootDirectory);
             string textureName = GetTextureBaseName(layer) + "_" + layer.Id + ".png";
             return Path.Combine(textureDirectory, textureName);
+        }
+
+        private static string ResolveTextureOutputDirectory(string outputRootDirectory)
+        {
+            if (!string.IsNullOrEmpty(TextureOutputPath))
+            {
+                return Path.Combine(
+                    GetFullProjectPath(),
+                    TextureOutputPath.Replace('/', Path.DirectorySeparatorChar));
+            }
+
+            return Path.Combine(outputRootDirectory, "Texture");
         }
 
         private static void FinalizeRedundantTextureCleanup(string prefabRelativePath)
@@ -4755,6 +4926,10 @@
         {
             OutputMode = settings.outputMode;
             OutputFolderName = settings.outputFolderName;
+            FixedOutputPath = settings.fixedOutputPath;
+            AtlasOutputPath = settings.atlasOutputPath;
+            TextureOutputPath = settings.textureOutputPath;
+            PrefabOutputPath = settings.prefabOutputPath;
             PrefabMode = settings.prefabMode;
             AtlasVersion = settings.spriteAtlasVersion;
         }
@@ -5436,7 +5611,7 @@
 
             try
             {
-                string textureDirectory = Path.Combine(currentOutputRootDirectory, "Texture");
+                string textureDirectory = ResolveTextureOutputDirectory(currentOutputRootDirectory);
                 string file = Path.Combine(
                     textureDirectory,
                     GetTextureBaseName(layer) + "_" + layer.Id + "__MergedFallback.png");

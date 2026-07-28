@@ -14,6 +14,8 @@ param(
 
     [switch]$Preflight,
 
+    [switch]$Reapply,
+
     [string]$PythonPath = "python"
 )
 
@@ -48,8 +50,9 @@ if ($ApplyConfirmed) { $selectedModes++ }
 if ($VerifyOnly) { $selectedModes++ }
 if ($CompileOnly) { $selectedModes++ }
 if ($Preflight) { $selectedModes++ }
+if ($Reapply) { $selectedModes++ }
 if ($selectedModes -ne 1) {
-    throw "Choose exactly one mode: -ApplyConfirmed, -VerifyOnly, -CompileOnly, or -Preflight."
+    throw "Choose exactly one mode: -ApplyConfirmed, -VerifyOnly, -CompileOnly, -Preflight, or -Reapply."
 }
 
 $ProjectPath = [System.IO.Path]::GetFullPath($ProjectPath)
@@ -91,6 +94,8 @@ if ($ApplyConfirmed) {
     $mode = "apply"
 } elseif ($Preflight) {
     $mode = "preflight"
+} elseif ($Reapply) {
+    $mode = "reapply"
 } else {
     $mode = "verify"
 }
@@ -122,6 +127,9 @@ try {
         }
         if ($Preflight) {
             throw "Unity preflight failed: $failureDetail"
+        }
+        if ($Reapply) {
+            throw "Unity reapply failed: $failureDetail"
         }
         throw "Unity verification failed: $failureDetail"
     }

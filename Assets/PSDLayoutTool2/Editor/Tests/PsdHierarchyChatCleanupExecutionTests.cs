@@ -206,6 +206,268 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanRejectsOmittedMandatoryComponentFamily()
+        {
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext(),
+                CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(error, Does.Contain("family_001").And.Contain("TaskItem"));
+        }
+
+        [Test]
+        public void VersionTwoPlanRejectsSkipForMandatoryComponentFamily()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "not needed",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(error, Does.Contain("不能使用 skip"));
+        }
+
+        [Test]
+        public void VersionTwoPlanAcceptsMandatoryExtractionAndStripsCandidateMetadataForTheRunner()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "component",
+                    ["extractionId"] = "task_item",
+                    ["reason"] = "Same repeated component family.",
+                },
+            };
+            plan["componentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "task_item",
+                    ["template"] = "node:n000003",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                    ["instances"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["componentFamilyDecisions"][0]["candidateId"], Is.Null);
+            Assert.That(
+                runnerPlan["componentExtractions"][0]["template"].Value<string>(),
+                Is.EqualTo("Root/TaskList/[TaskItem_1]"));
+        }
+
+        [Test]
+        public void VersionTwoPlanCompletesMissingCommonAndSelectedStateMembersFromTheSnapshot()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["renames"] = new JArray
+            {
+                new JObject { ["target"] = "node:n000004", ["name"] = "DayText" },
+                new JObject { ["target"] = "node:n000005", ["name"] = "LockIcon" },
+            };
+            plan["statefulComponentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "day_card",
+                    ["template"] = "node:n000002",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/DayCard.prefab",
+                    ["common"] = new JObject
+                    {
+                        ["source"] = "node:n000002",
+                        ["members"] = new JArray
+                        {
+                            new JObject { ["sourceName"] = "DayLabel", ["name"] = "DayLabel" },
+                        },
+                    },
+                    ["states"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "locked",
+                            ["source"] = "node:n000002",
+                            ["name"] = "[Locked]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "Background", ["name"] = "Background" },
+                                new JObject { ["sourceName"] = "Lock", ["name"] = "Lock" },
+                            },
+                        },
+                        new JObject
+                        {
+                            ["id"] = "available",
+                            ["source"] = "node:n000006",
+                            ["name"] = "[Available]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "AvailableBackground", ["name"] = "Background" },
+                            },
+                        },
+                    },
+                    ["defaultState"] = "available",
+                    ["instances"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["source"] = "node:n000002",
+                            ["name"] = "[DayCard_1]",
+                            ["state"] = "locked",
+                            ["commonSourceNames"] = new JArray(),
+                            ["stateSourceNames"] = new JArray("Background", "Lock"),
+                        },
+                        new JObject
+                        {
+                            ["source"] = "node:n000006",
+                            ["name"] = "[DayCard_2]",
+                            ["state"] = "available",
+                            ["commonSourceNames"] = new JArray("AvailableLabel"),
+                            ["stateSourceNames"] = new JArray(),
+                        },
+                    },
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateStatefulSnapshotContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(
+                runnerPlan["statefulComponentExtractions"][0]["instances"][0]["stateSourceNames"]
+                    .Values<string>(),
+                Is.EqualTo(new[] { "Background", "LockIcon" }));
+            Assert.That(
+                runnerPlan["statefulComponentExtractions"][0]["instances"][0]["commonSourceNames"]
+                    .Values<string>(),
+                Is.EqualTo(new[] { "DayText" }));
+            Assert.That(
+                runnerPlan["statefulComponentExtractions"][0]["instances"][1]["stateSourceNames"]
+                    .Values<string>(),
+                Is.EqualTo(new[] { "AvailableBackground" }));
+            Assert.That(
+                runnerPlan["statefulComponentExtractions"][0]["common"]["members"][0]["sourceName"]
+                    .Value<string>(),
+                Is.EqualTo("DayText"));
+            Assert.That(
+                runnerPlan["statefulComponentExtractions"][0]["states"][0]["members"][1]["sourceName"]
+                    .Value<string>(),
+                Is.EqualTo("LockIcon"));
+        }
+
+        [Test]
+        public void VersionTwoPlanRejectsEmptyStatefulCommonBeforeRunnerPreflight()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["statefulComponentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "day_card",
+                    ["template"] = "node:n000002",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/DayCard.prefab",
+                    ["common"] = new JObject
+                    {
+                        ["source"] = "node:n000002",
+                        ["members"] = new JArray(),
+                    },
+                    ["states"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "locked",
+                            ["source"] = "node:n000002",
+                            ["name"] = "[Locked]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "Background", ["name"] = "Background" },
+                                new JObject { ["sourceName"] = "DayLabel", ["name"] = "DayLabel" },
+                                new JObject { ["sourceName"] = "Lock", ["name"] = "Lock" },
+                            },
+                        },
+                        new JObject
+                        {
+                            ["id"] = "available",
+                            ["source"] = "node:n000006",
+                            ["name"] = "[Available]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "AvailableBackground", ["name"] = "Background" },
+                                new JObject { ["sourceName"] = "AvailableLabel", ["name"] = "DayLabel" },
+                            },
+                        },
+                    },
+                    ["defaultState"] = "available",
+                    ["instances"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["source"] = "node:n000002",
+                            ["name"] = "[DayCard_1]",
+                            ["state"] = "locked",
+                            ["commonSourceNames"] = new JArray(),
+                            ["stateSourceNames"] = new JArray("Background", "DayLabel", "Lock"),
+                        },
+                        new JObject
+                        {
+                            ["source"] = "node:n000006",
+                            ["name"] = "[DayCard_2]",
+                            ["state"] = "available",
+                            ["commonSourceNames"] = new JArray(),
+                            ["stateSourceNames"] = new JArray("AvailableBackground", "AvailableLabel"),
+                        },
+                    },
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateStatefulSnapshotContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(error, Does.Contain("common.members").And.Contain("must not be empty"));
+        }
+
+        [Test]
         public void ActualSnapshotNodeIdsResolveToObservedPrefabPaths()
         {
             const string sourcePsd = "Assets/PSDLayoutTool2/TestData/跳格子切图.psd";
@@ -257,6 +519,59 @@ namespace PsdLayoutTool2.Tests
                 "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
                 "{\"id\":\"n000001\",\"path\":\"Root/Group\"}," +
                 "{\"id\":\"n000002\",\"path\":\"Root/Group/15K\"}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateRequiredCandidateContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root\"}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/TaskList\"}," +
+                "{\"id\":\"n000003\",\"path\":\"Root/TaskList/[TaskItem_1]\"}," +
+                "{\"id\":\"n000004\",\"path\":\"Root/TaskList/[TaskItem_2]\"}," +
+                "{\"id\":\"n000005\",\"path\":\"Root/TaskList/[TaskItem_3]\"}]," +
+                "\"componentFamilyCandidates\":[{" +
+                "\"id\":\"family_001\",\"suggestedAssetName\":\"TaskItem\"," +
+                "\"parent\":\"node:n000002\",\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\"]," +
+                "\"requiresExtraction\":true}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateStatefulSnapshotContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root/Cards\",\"name\":\"Cards\",\"parentId\":\"\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/Cards/[DayCard_1]\",\"name\":\"[DayCard_1]\",\"parentId\":\"n000001\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000003\",\"path\":\"Root/Cards/[DayCard_1]/Background\",\"name\":\"Background\",\"parentId\":\"n000002\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000004\",\"path\":\"Root/Cards/[DayCard_1]/DayLabel\",\"name\":\"DayLabel\",\"parentId\":\"n000002\",\"siblingIndex\":1}," +
+                "{\"id\":\"n000005\",\"path\":\"Root/Cards/[DayCard_1]/Lock\",\"name\":\"Lock\",\"parentId\":\"n000002\",\"siblingIndex\":2}," +
+                "{\"id\":\"n000006\",\"path\":\"Root/Cards/[DayCard_2]\",\"name\":\"[DayCard_2]\",\"parentId\":\"n000001\",\"siblingIndex\":1}," +
+                "{\"id\":\"n000007\",\"path\":\"Root/Cards/[DayCard_2]/AvailableBackground\",\"name\":\"AvailableBackground\",\"parentId\":\"n000006\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000008\",\"path\":\"Root/Cards/[DayCard_2]/AvailableLabel\",\"name\":\"AvailableLabel\",\"parentId\":\"n000006\",\"siblingIndex\":1}]}";
             return new PsdHierarchyChatContext(
                 "E:/Project/Demo/monsterhunter",
                 "Assets/UI/Source.psd",

@@ -1,5 +1,6 @@
 namespace PsdLayoutTool2.Tests
 {
+    using System.IO;
     using NUnit.Framework;
     using UnityEditor;
     using UnityEditor.U2D;
@@ -142,6 +143,76 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(resolved, Is.True);
             Assert.That(resolvedPath, Is.EqualTo("Assets/UI 空格/中文 文件/Prefab/中文 文件.prefab"));
+        }
+
+        [Test]
+        public void FixedModeIgnoresLegacyRootAndUsesIndependentContentFolders()
+        {
+            string prefabPath;
+            bool resolved = PsdGeneratedPrefabPathResolver.TryResolve(
+                PsdAssetPath,
+                PsdImporter.OutputDirectoryMode.FixedPath,
+                string.Empty,
+                "Assets/UI/Generated",
+                "Assets/UI/Prefabs",
+                PsdImporter.PrefabOutputMode.InsideOutputFolder,
+                out prefabPath);
+
+            Assert.That(resolved, Is.True);
+            Assert.That(
+                prefabPath,
+                Is.EqualTo("Assets/UI/Prefabs/" + Path.GetFileNameWithoutExtension(PsdAssetPath) + ".prefab"));
+
+            string outputRoot;
+            resolved = PsdGeneratedPrefabPathResolver.TryResolveOutputRoot(
+                PsdAssetPath,
+                PsdImporter.OutputDirectoryMode.FixedPath,
+                string.Empty,
+                "Assets/UI/LegacyGenerated",
+                out outputRoot);
+
+            Assert.That(resolved, Is.True);
+            Assert.That(
+                outputRoot,
+                Is.EqualTo("Assets/PSDLayoutTool2/Editor/Tests/PathResolverTemp/Example"));
+
+            string atlasPath;
+            string texturePath;
+            string prefabFolderPath;
+            resolved = PsdGeneratedPrefabPathResolver.TryResolveContentFolders(
+                PsdAssetPath,
+                PsdImporter.OutputDirectoryMode.FixedPath,
+                string.Empty,
+                "Assets/UI/Generated",
+                "Assets/UI/Atlases",
+                "Assets/UI/Textures",
+                "Assets/UI/Prefabs",
+                out atlasPath,
+                out texturePath,
+                out prefabFolderPath);
+
+            Assert.That(resolved, Is.True);
+            Assert.That(atlasPath, Is.EqualTo("Assets/UI/Atlases"));
+            Assert.That(texturePath, Is.EqualTo("Assets/UI/Textures"));
+            Assert.That(prefabFolderPath, Is.EqualTo("Assets/UI/Prefabs"));
+        }
+
+        [TestCase("Outside/UI")]
+        [TestCase("Assets/../Outside")]
+        public void CustomOutputFoldersMustStayInsideAssets(string invalidPath)
+        {
+            string resolvedPath;
+            bool resolved = PsdGeneratedPrefabPathResolver.TryResolve(
+                PsdAssetPath,
+                PsdImporter.OutputDirectoryMode.FixedPath,
+                string.Empty,
+                string.Empty,
+                invalidPath,
+                PsdImporter.PrefabOutputMode.InsideOutputFolder,
+                out resolvedPath);
+
+            Assert.That(resolved, Is.False);
+            Assert.That(resolvedPath, Is.Empty);
         }
     }
 
