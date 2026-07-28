@@ -74,7 +74,6 @@ namespace PsdLayoutTool2
         {
             PsdLayoutProjectSettings settings = GetOrCreate();
             Selection.activeObject = settings;
-            EditorGUIUtility.PingObject(settings);
             PsdLayoutProjectSettingsWindow.Open(settings);
             return settings;
         }

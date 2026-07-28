@@ -1,0 +1,13 @@
+.psd-settings-window {
+    flex-grow: 1;
+    background-color: rgb(15, 18, 21);
+}
+
+.psd-settings-window__host,
+.psd-settings-window__scroll {
+    flex-grow: 1;
+}
+
+.psd-settings-window__scroll .unity-scroll-view__content-container {
+    padding: 6px;
+}
