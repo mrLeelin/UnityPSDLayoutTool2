@@ -279,6 +279,44 @@ namespace PsdLayoutTool2
                 GetProfilePath(prefabPath, sourceGuid));
         }
 
+        /// <summary>
+        /// Reports whether this exact PSD and Prefab pair has a replay Profile
+        /// that can preserve the organized Prefab hierarchy during an update.
+        /// </summary>
+        internal static bool CanReplayIncrementalUpdate(
+            string sourceGuid,
+            string prefabPath,
+            out string reason)
+        {
+            reason = string.Empty;
+            string normalizedSourceGuid = (sourceGuid ?? string.Empty).Trim();
+            string normalizedTarget = NormalizeAssetPath(prefabPath);
+            if (string.IsNullOrEmpty(normalizedSourceGuid))
+            {
+                reason = "Source PSD GUID is required.";
+                return false;
+            }
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(normalizedTarget) == null)
+            {
+                reason = "The cleanup replay Profile target Prefab is missing or cannot be loaded.";
+                return false;
+            }
+
+            PsdHierarchyCleanupReplayProfile profile = Load(normalizedTarget, normalizedSourceGuid);
+            if (profile == null)
+            {
+                reason = "No cleanup replay Profile exists for this PSD and Prefab.";
+                return false;
+            }
+
+            return profile.TryBuildReplayPlans(
+                normalizedSourceGuid,
+                normalizedTarget,
+                normalizedTarget,
+                out _,
+                out reason);
+        }
+
         internal static bool IsMissingTargetRecoveryEligible(string prefabPath, string sourceGuid)
         {
             PsdHierarchyCleanupReplayProfile profile = Load(prefabPath, sourceGuid);

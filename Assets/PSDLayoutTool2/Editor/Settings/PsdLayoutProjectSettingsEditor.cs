@@ -15,6 +15,7 @@ namespace PsdLayoutTool2
         private const string AiSectionName = "psd-project-settings-ai";
         private const string CleanupExecutionSectionName = "psd-project-settings-cleanup-execution";
         private const string OutputSectionName = "psd-project-settings-output";
+        private const string UiComponentSectionName = "psd-project-settings-ui-components";
         private const string FontSectionName = "psd-project-settings-font";
         private const string CommonNamingSectionName = "psd-project-settings-common-naming";
         private const string FixedOutputContentName = "psd-project-settings-fixed-output";
@@ -47,6 +48,7 @@ namespace PsdLayoutTool2
             root.Add(CreateHierarchyAiSection(settings));
             root.Add(CreateHierarchyCleanupExecutionSection(settings));
             root.Add(CreateOutputSection(settings));
+            root.Add(CreateUiComponentSection(settings));
             root.Add(CreateFontSection(settings));
             root.Add(CreatePreviewServerSection(settings));
             root.Add(CreateCommonNamingSection(settings));
@@ -567,6 +569,135 @@ namespace PsdLayoutTool2
             {
                 AddPathField();
             }
+        }
+
+        private static VisualElement CreateUiComponentSection(PsdLayoutProjectSettings settings)
+        {
+            VisualElement section = CreateSection(UiComponentSectionName, "UI 组件类型");
+            PsdLayoutProjectUiComponentSnapshot snapshot = settings.ResolveUiComponentSettings();
+            string imageTypeName = snapshot.imageComponentType.FullName;
+            string buttonTypeName = snapshot.buttonComponentType.FullName;
+            section.Add(new HelpBox(
+                "填写生成节点要挂载的组件类名。可填写完整命名空间，或填写唯一的类名；Image 和 Button 类型必须分别继承 UnityEngine.UI.Image、UnityEngine.UI.Button。",
+                HelpBoxMessageType.Info));
+
+            var validationBox = CreateHiddenErrorBox();
+            TextField imageField = null;
+            TextField buttonField = null;
+
+            void ApplyTypes(string imageType, string buttonType)
+            {
+                if (!settings.TrySetUiComponentTypes(imageType, buttonType, out string error))
+                {
+                    if (!string.IsNullOrEmpty(error))
+                    {
+                        ShowError(validationBox, error);
+                    }
+
+                    return;
+                }
+
+                ReplaceSection(section, CreateUiComponentSection(settings));
+            }
+
+            imageField = CreateFuzzyComponentTypeField(
+                section,
+                "Image 组件类型",
+                imageTypeName,
+                "psd-project-settings-image-component-type",
+                "例如 Game.UI.CustomImage。留空时使用 UnityEngine.UI.Image。",
+                typeof(UnityEngine.UI.Image),
+                value => ApplyTypes(value, buttonField.value));
+            buttonField = CreateFuzzyComponentTypeField(
+                section,
+                "Button 组件类型",
+                buttonTypeName,
+                "psd-project-settings-button-component-type",
+                "例如 Game.UI.CustomButton。留空时使用 UnityEngine.UI.Button。",
+                typeof(UnityEngine.UI.Button),
+                value => ApplyTypes(imageField.value, value));
+            section.Add(validationBox);
+            return section;
+        }
+
+        private static TextField CreateFuzzyComponentTypeField(
+            VisualElement parent,
+            string label,
+            string value,
+            string name,
+            string tooltip,
+            Type expectedBaseType,
+            Action<string> onCommitted)
+        {
+            var field = new TextField(label)
+            {
+                value = value,
+                name = name,
+                tooltip = tooltip,
+                isDelayed = false,
+            };
+            var suggestions = new VisualElement();
+            suggestions.style.display = DisplayStyle.None;
+            suggestions.style.maxHeight = 144;
+            suggestions.style.overflow = Overflow.Hidden;
+            suggestions.style.marginLeft = 8;
+            suggestions.style.marginTop = -2;
+            suggestions.style.marginBottom = 4;
+            suggestions.style.borderLeftWidth = 1;
+            suggestions.style.borderRightWidth = 1;
+            suggestions.style.borderTopWidth = 1;
+            suggestions.style.borderBottomWidth = 1;
+            suggestions.style.borderLeftColor = new Color(0.25f, 0.35f, 0.5f, 1f);
+            suggestions.style.borderRightColor = new Color(0.25f, 0.35f, 0.5f, 1f);
+            suggestions.style.borderTopColor = new Color(0.25f, 0.35f, 0.5f, 1f);
+            suggestions.style.borderBottomColor = new Color(0.25f, 0.35f, 0.5f, 1f);
+
+            void RefreshSuggestions(string query)
+            {
+                suggestions.Clear();
+                List<string> matches = PsdLayoutProjectUiComponentSettings.FindComponentTypeNames(
+                    expectedBaseType,
+                    query,
+                    12);
+                if (matches.Count == 0)
+                {
+                    suggestions.style.display = DisplayStyle.None;
+                    return;
+                }
+
+                foreach (string match in matches)
+                {
+                    var option = new Button(() =>
+                    {
+                        field.SetValueWithoutNotify(match);
+                        onCommitted(match);
+                    })
+                    {
+                        text = match,
+                        tooltip = match,
+                    };
+                    option.style.unityTextAlign = TextAnchor.MiddleLeft;
+                    option.style.fontSize = 10;
+                    option.style.height = 21;
+                    option.style.marginLeft = 0;
+                    option.style.marginRight = 0;
+                    suggestions.Add(option);
+                }
+
+                suggestions.style.display = DisplayStyle.Flex;
+            }
+
+            field.RegisterValueChangedCallback(change => RefreshSuggestions(change.newValue));
+            field.RegisterCallback<FocusInEvent>(_ => RefreshSuggestions(field.value));
+            field.RegisterCallback<FocusOutEvent>(_ =>
+                suggestions.schedule.Execute(() =>
+                {
+                    suggestions.style.display = DisplayStyle.None;
+                    onCommitted(field.value);
+                }).ExecuteLater(120));
+            parent.Add(field);
+            parent.Add(suggestions);
+            return field;
         }
 
         private static VisualElement CreateFontSection(PsdLayoutProjectSettings settings)

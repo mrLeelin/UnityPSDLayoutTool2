@@ -165,6 +165,36 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void PersistedProfileIsAvailableForIncrementalReplay()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
+            EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
+            AssetDatabase.CreateAsset(profile, profilePath);
+            AssetDatabase.SaveAssetIfDirty(profile);
+
+            Assert.That(PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                SourceGuid, TargetPath, out string reason), Is.True, reason);
+        }
+
+        [Test]
+        public void IncrementalReplayRequiresAnExactlyBoundProfile()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
+            EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
+            AssetDatabase.CreateAsset(profile, profilePath);
+            AssetDatabase.SaveAssetIfDirty(profile);
+
+            Assert.That(PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                "ffffffffffffffffffffffffffffffff", TargetPath, out string mismatchedReason), Is.False);
+            Assert.That(mismatchedReason, Is.Not.Empty);
+            Assert.That(PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                SourceGuid, TestFolder + "/Other.prefab", out string missingReason), Is.False);
+            Assert.That(missingReason, Is.Not.Empty);
+        }
+
+        [Test]
         public void ProfilePathIsGenericAndTargetSpecific()
         {
             string first = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);

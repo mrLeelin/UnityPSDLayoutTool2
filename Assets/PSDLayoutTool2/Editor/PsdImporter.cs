@@ -64,6 +64,24 @@
             CustomPath
         }
 
+        /// <summary>
+        /// Controls whether a Prefab import replaces the generated candidate or
+        /// preserves an existing AI-organized hierarchy through a stored Profile.
+        /// </summary>
+        public enum PrefabImportMode
+        {
+            FullGenerate,
+            IncrementalUpdate
+        }
+
+        internal enum PrefabSaveRoute
+        {
+            FullCandidateSave,
+            CleanupReplay,
+            HierarchyMerge,
+            Rejected
+        }
+
         public enum SpriteAtlasVersion
         {
             V1,
@@ -90,6 +108,9 @@
         /// </summary>
         private static GameObject currentGroupGameObject;
 
+        private static Type uiImageComponentType = typeof(Image);
+        private static Type uiButtonComponentType = typeof(Button);
+
         /// <summary>
         /// The current UI layout context used to place child RectTransforms.
         /// </summary>
@@ -114,6 +135,7 @@
         /// of truth for future incremental updates.
         /// </summary>
         private static Dictionary<Layer, Vector4> currentAutomaticNineSliceBordersByLayer;
+
         private static HashSet<Layer> currentAutomaticNineSliceBordersInTargetCoordinates;
 
         /// <summary>
@@ -187,31 +209,32 @@
         /// <summary>
         /// Reserved DOS device names that cannot be used as generated file or folder names on Windows.
         /// </summary>
-        private static readonly HashSet<string> ReservedGeneratedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "CON",
-            "PRN",
-            "AUX",
-            "NUL",
-            "COM1",
-            "COM2",
-            "COM3",
-            "COM4",
-            "COM5",
-            "COM6",
-            "COM7",
-            "COM8",
-            "COM9",
-            "LPT1",
-            "LPT2",
-            "LPT3",
-            "LPT4",
-            "LPT5",
-            "LPT6",
-            "LPT7",
-            "LPT8",
-            "LPT9"
-        };
+        private static readonly HashSet<string> ReservedGeneratedNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "CON",
+                "PRN",
+                "AUX",
+                "NUL",
+                "COM1",
+                "COM2",
+                "COM3",
+                "COM4",
+                "COM5",
+                "COM6",
+                "COM7",
+                "COM8",
+                "COM9",
+                "LPT1",
+                "LPT2",
+                "LPT3",
+                "LPT4",
+                "LPT5",
+                "LPT6",
+                "LPT7",
+                "LPT8",
+                "LPT9"
+            };
 
         /// <summary>
         /// Parses the PSD authoring tag in the order left, top, right, bottom.
@@ -550,6 +573,8 @@
         /// </summary>
         private static bool CreatePrefab { get; set; }
 
+        private static PrefabImportMode prefabImportMode = PrefabImportMode.FullGenerate;
+
         /// <summary>
         /// Gets or sets the size (in pixels) of the entire PSD canvas.
         /// </summary>
@@ -588,6 +613,7 @@
         {
             LayoutInScene = false;
             CreatePrefab = false;
+            prefabImportMode = PrefabImportMode.FullGenerate;
             Import(assetPath);
         }
 
@@ -599,6 +625,7 @@
         {
             LayoutInScene = true;
             CreatePrefab = false;
+            prefabImportMode = PrefabImportMode.FullGenerate;
             Import(assetPath);
         }
 
@@ -608,8 +635,70 @@
         /// <param name="assetPath">The path of to the .psd file relative to the project.</param>
         public static void GeneratePrefab(string assetPath)
         {
+            StartPrefabImport(assetPath, PrefabImportMode.FullGenerate);
+        }
+
+        /// <summary>
+        /// Updates a generated Prefab only when an exact hierarchy-preservation
+        /// Profile exists. This path never falls back to a whole-Prefab save.
+        /// </summary>
+        public static void UpdatePrefabIncrementally(string assetPath)
+        {
+            if (!IsIncrementalPrefabUpdateAvailable(assetPath))
+                throw new InvalidOperationException(
+                    "Incremental Prefab update requires a valid hierarchy or cleanup replay Profile.");
+
+            StartPrefabImport(assetPath, PrefabImportMode.IncrementalUpdate);
+        }
+
+        /// <summary>
+        /// Reports whether the Inspector should offer the hierarchy-preserving
+        /// incremental update action for this PSD.
+        /// </summary>
+        public static bool IsIncrementalPrefabUpdateAvailable(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+
+            string normalizedAssetPath = assetPath.Replace('\\', '/');
+            string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+            string prefabPath;
+            if (string.IsNullOrEmpty(sourceGuid) ||
+                !PsdGeneratedPrefabPathResolver.TryResolve(
+                    normalizedAssetPath,
+                    OutputMode,
+                    OutputFolderName,
+                    FixedOutputPath,
+                    PrefabOutputPath,
+                    PrefabMode,
+                    out prefabPath))
+                return false;
+
+            if (PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                    sourceGuid, prefabPath, out _))
+                return true;
+
+            return TryResolveApplicableHierarchyProfile(sourceGuid, prefabPath, out _);
+        }
+
+        internal static PrefabSaveRoute ResolvePrefabSaveRoute(
+            PrefabImportMode importMode,
+            bool hasCleanupReplayProfile,
+            bool hasHierarchyProfile)
+        {
+            if (importMode == PrefabImportMode.FullGenerate)
+                return PrefabSaveRoute.FullCandidateSave;
+            if (hasCleanupReplayProfile)
+                return PrefabSaveRoute.CleanupReplay;
+            if (hasHierarchyProfile)
+                return PrefabSaveRoute.HierarchyMerge;
+            return PrefabSaveRoute.Rejected;
+        }
+
+        private static void StartPrefabImport(string assetPath, PrefabImportMode importMode)
+        {
             LayoutInScene = false;
             CreatePrefab = true;
+            prefabImportMode = importMode;
             Import(assetPath);
         }
 
@@ -718,7 +807,10 @@
         {
             if (CreatePrefab)
             {
-                return UseUnityUI ? "Generate Prefab (Unity UI)" : "Generate Prefab (Scene Objects)";
+                string action = prefabImportMode == PrefabImportMode.IncrementalUpdate
+                    ? "Incremental Update Prefab"
+                    : "Full Generate Prefab";
+                return UseUnityUI ? action + " (Unity UI)" : action + " (Scene Objects)";
             }
 
             if (LayoutInScene)
@@ -767,7 +859,9 @@
                 ApplyProjectFontSettings(projectFontSettings);
                 LogProjectFontSettingsWarnings(projectFontSettings);
                 ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
-                currentTmpFontFallbacksByPsdName = new Dictionary<string, TMP_FontAsset>(StringComparer.OrdinalIgnoreCase);
+                ApplyProjectUiComponentSettings(PsdLayoutProjectSettings.instance.ResolveUiComponentSettings());
+                currentTmpFontFallbacksByPsdName =
+                    new Dictionary<string, TMP_FontAsset>(StringComparer.OrdinalIgnoreCase);
                 currentPngPathByContentHash = new Dictionary<string, string>(StringComparer.Ordinal);
                 currentTextureReuseIndex = new PsdTextureReuseIndex();
                 currentPendingRedundantTexturePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -811,10 +905,12 @@
                         FixedOutputPath,
                         out outputRelativePath))
                 {
-                    throw new InvalidOperationException("Cannot resolve the generated output path for PSD asset: " + normalizedAssetPath);
+                    throw new InvalidOperationException("Cannot resolve the generated output path for PSD asset: " +
+                                                        normalizedAssetPath);
                 }
 
-                string outputFullPath = Path.Combine(GetFullProjectPath(), outputRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                string outputFullPath = Path.Combine(GetFullProjectPath(),
+                    outputRelativePath.Replace('/', Path.DirectorySeparatorChar));
                 string atlasRelativePath;
                 string textureRelativePath;
                 string prefabFolderRelativePath;
@@ -830,7 +926,8 @@
                         out textureRelativePath,
                         out prefabFolderRelativePath))
                 {
-                    throw new InvalidOperationException("Cannot resolve generated content folders for PSD asset: " + normalizedAssetPath);
+                    throw new InvalidOperationException("Cannot resolve generated content folders for PSD asset: " +
+                                                        normalizedAssetPath);
                 }
 
                 string prefabRelativePath = string.Empty;
@@ -844,8 +941,10 @@
                         PrefabMode,
                         out prefabRelativePath))
                 {
-                    throw new InvalidOperationException("Cannot resolve the generated Prefab path for PSD asset: " + normalizedAssetPath);
+                    throw new InvalidOperationException("Cannot resolve the generated Prefab path for PSD asset: " +
+                                                        normalizedAssetPath);
                 }
+
                 PsdLogger.Info("Output relative path: " + outputRelativePath);
                 PsdLogger.Info("Output full path: " + outputFullPath);
                 PsdLogger.Info("Atlas folder: " + atlasRelativePath);
@@ -862,14 +961,29 @@
                 PsdHierarchyProfile boundHierarchyProfile = null;
                 PsdHierarchyCleanupReplayProfile boundCleanupReplayProfile = null;
                 string sourceGuid = string.Empty;
+                PrefabSaveRoute prefabSaveRoute = PrefabSaveRoute.FullCandidateSave;
                 if (CreatePrefab && !string.IsNullOrEmpty(prefabRelativePath))
                 {
                     sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
-                    boundHierarchyProfile = ResolveHierarchyProfileBeforePrefabImport(
-                        sourceGuid, prefabRelativePath, UseUnityUI);
-                    boundCleanupReplayProfile = PsdHierarchyCleanupReplayProfile.Load(
-                        prefabRelativePath,
-                        sourceGuid);
+                    bool hasCleanupReplayProfile =
+                        prefabImportMode == PrefabImportMode.IncrementalUpdate &&
+                        PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                            sourceGuid, prefabRelativePath, out _);
+                    bool hasHierarchyProfile =
+                        prefabImportMode == PrefabImportMode.IncrementalUpdate &&
+                        TryResolveApplicableHierarchyProfile(
+                            sourceGuid, prefabRelativePath, out boundHierarchyProfile);
+                    prefabSaveRoute = ResolvePrefabSaveRoute(
+                        prefabImportMode, hasCleanupReplayProfile, hasHierarchyProfile);
+                    if (prefabSaveRoute == PrefabSaveRoute.Rejected)
+                        throw new InvalidOperationException(
+                            "Incremental Prefab update requires a valid hierarchy or cleanup replay Profile.");
+
+                    if (prefabSaveRoute == PrefabSaveRoute.CleanupReplay)
+                    {
+                        boundCleanupReplayProfile = PsdHierarchyCleanupReplayProfile.Load(
+                            prefabRelativePath, sourceGuid);
+                    }
                 }
 
                 var conversionContext = new PsdPrefabConversionContext
@@ -879,7 +993,8 @@
                         ? boundHierarchyProfile.BuildPreviousDocument()
                         : null
                 };
-                PsdPrefabConversionPlan conversionPlan = new PsdPrefabConversionPipeline().CreatePlan(conversionContext);
+                PsdPrefabConversionPlan conversionPlan =
+                    new PsdPrefabConversionPipeline().CreatePlan(conversionContext);
                 PsdLogger.Info(
                     "Conversion plan created. nodes=" + sourceModel.nodes.Count +
                     ", added=" + conversionPlan.Count(PsdPrefabChangeKind.Added) +
@@ -903,7 +1018,8 @@
                 currentLayerInfos = BuildLayerImportInfoMap(tree);
                 ValidateCommonLibraryReferences(tree);
                 bool hasVisibleRuntimeObjects = HasVisibleRuntimeContent(tree);
-                PsdLogger.Info("Layer tree root count=" + tree.Count + ", hasVisibleRuntimeObjects=" + hasVisibleRuntimeObjects);
+                PsdLogger.Info("Layer tree root count=" + tree.Count + ", hasVisibleRuntimeObjects=" +
+                               hasVisibleRuntimeObjects);
 
                 PsdLogger.Step("Analyze existing generated targets");
                 ImportConflictAnalysis conflictAnalysis = AnalyzeImportConflicts(
@@ -938,6 +1054,7 @@
                                 StringComparison.OrdinalIgnoreCase));
                     }
                 }
+
                 PsdLogger.Info(
                     "Conflict analysis: hasExistingTargets=" + conflictAnalysis.HasExistingTargets +
                     ", sameName=" + conflictAnalysis.SameNamePaths.Count +
@@ -1040,13 +1157,13 @@
                     if (UseUnityUI)
                     {
                         PsdLogger.Step("Create or resolve Unity UI root");
-                        CreateUIEventSystem();
                         Canvas targetCanvas = ResolveTargetCanvas();
                         if (targetCanvas != null)
                         {
                             UseTargetCanvasCoordinates = true;
                             TargetCanvasSize = GetTargetCanvasRectSize(targetCanvas);
-                            PsdLogger.Info("Using target canvas: " + GetHierarchyPath(targetCanvas.transform) + ", size=" + TargetCanvasSize);
+                            PsdLogger.Info("Using target canvas: " + GetHierarchyPath(targetCanvas.transform) +
+                                           ", size=" + TargetCanvasSize);
                             rootPsdGameObject = new GameObject(PsdName, typeof(RectTransform));
                             RectTransform rootRect = rootPsdGameObject.GetComponent<RectTransform>();
                             rootRect.SetParent(targetCanvas.transform, false);
@@ -1085,35 +1202,43 @@
                     {
                         PsdLogger.Step("Save prefab: " + prefabRelativePath);
                         EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "保存 Prefab...", 0.95f);
-                        bool replayStaged = PsdHierarchyCleanupReplayCoordinator.TryStageAndSchedule(
-                            normalizedAssetPath,
-                            prefabRelativePath,
-                            importRootGameObject,
-                            out string replayStageError);
-                        if (!replayStaged && !string.IsNullOrEmpty(replayStageError))
+                        switch (prefabSaveRoute)
                         {
-                            throw new InvalidOperationException(
-                                "Cleanup replay could not be staged; the existing organized Prefab was kept unchanged. " +
-                                replayStageError);
-                        }
-                        if (!replayStaged && !TrySaveIncrementalHierarchyPrefab(
-                                normalizedAssetPath,
-                                sourceModel,
-                                conversionPlan.changes,
-                                prefabRelativePath,
-                                importRootGameObject,
-                                CaptureGeneratedUiNodeRegistry()))
-                        {
-                            // Absence of a hierarchy Profile deliberately keeps
-                            // the established importer behavior. Once a valid
-                            // Profile exists, failures are never downgraded to
-                            // this destructive whole-candidate save path.
-                            PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath);
+                            case PrefabSaveRoute.FullCandidateSave:
+                                PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath);
+                                break;
+                            case PrefabSaveRoute.CleanupReplay:
+                                if (!PsdHierarchyCleanupReplayCoordinator.TryStageAndSchedule(
+                                        normalizedAssetPath,
+                                        prefabRelativePath,
+                                        importRootGameObject,
+                                        out string replayStageError))
+                                    throw new InvalidOperationException(
+                                        "Cleanup replay could not be staged; the existing organized Prefab was kept unchanged. " +
+                                        (string.IsNullOrEmpty(replayStageError)
+                                            ? "No valid replay Profile was found."
+                                            : replayStageError));
+                                break;
+                            case PrefabSaveRoute.HierarchyMerge:
+                                if (!TrySaveIncrementalHierarchyPrefab(
+                                        normalizedAssetPath,
+                                        sourceModel,
+                                        conversionPlan.changes,
+                                        prefabRelativePath,
+                                        importRootGameObject,
+                                        CaptureGeneratedUiNodeRegistry()))
+                                    throw new InvalidOperationException(
+                                        "Hierarchy Profile incremental update could not be applied; the existing organized Prefab was kept unchanged.");
+                                break;
+                            default:
+                                throw new InvalidOperationException(
+                                    "Incremental Prefab update requires a valid hierarchy or cleanup replay Profile.");
                         }
                     }
                     else
                     {
-                        PsdLogger.Info("Skip prefab save because overwrite selection does not allow it: " + prefabRelativePath);
+                        PsdLogger.Info("Skip prefab save because overwrite selection does not allow it: " +
+                                       prefabRelativePath);
                     }
 
                     if (!LayoutInScene && importRootGameObject != null)
@@ -1130,6 +1255,7 @@
                 {
                     AssetDatabase.ImportAsset(textureRelativePath, ImportAssetOptions.ForceSynchronousImport);
                 }
+
                 FinalizeRedundantTextureCleanup(prefabRelativePath);
                 if (CreatePrefab)
                 {
@@ -1193,7 +1319,8 @@
             }
 
             analysis.HasExistingOutputDirectory = Directory.Exists(outputFullPath);
-            analysis.HasExistingPrefab = !string.IsNullOrEmpty(analysis.PrefabFullPath) && File.Exists(analysis.PrefabFullPath);
+            analysis.HasExistingPrefab =
+                !string.IsNullOrEmpty(analysis.PrefabFullPath) && File.Exists(analysis.PrefabFullPath);
 
             HashSet<string> generatedAssetPaths = CollectExpectedGeneratedAssetPaths(
                 tree,
@@ -1204,7 +1331,8 @@
             HashSet<string> generatedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 NormalizePath(outputFullPath),
-                NormalizePath(Path.Combine(GetFullProjectPath(), textureRelativePath.Replace('/', Path.DirectorySeparatorChar)))
+                NormalizePath(Path.Combine(GetFullProjectPath(),
+                    textureRelativePath.Replace('/', Path.DirectorySeparatorChar)))
             };
             foreach (string generatedDirectory in generatedDirectories)
             {
@@ -1364,6 +1492,7 @@
                     if (string.IsNullOrEmpty(guid) || !AssetDatabase.IsValidFolder(next))
                         throw new InvalidOperationException("Could not create output folder: " + next);
                 }
+
                 current = next;
             }
         }
@@ -1389,7 +1518,8 @@
             string normalizedTextureRoot = NormalizePath(Path.Combine(
                 GetFullProjectPath(),
                 textureRelativePath.Replace('/', Path.DirectorySeparatorChar))).TrimEnd('/');
-            string normalizedPrefabPath = string.IsNullOrEmpty(prefabFullPath) ? string.Empty : NormalizePath(prefabFullPath);
+            string normalizedPrefabPath =
+                string.IsNullOrEmpty(prefabFullPath) ? string.Empty : NormalizePath(prefabFullPath);
 
             foreach (string selectedPath in pathsToDelete)
             {
@@ -1442,7 +1572,7 @@
             }
 
             bool canOverwrite = selectedUpdatePathsForCurrentImport != null &&
-                selectedUpdatePathsForCurrentImport.Contains(NormalizePath(filePath));
+                                selectedUpdatePathsForCurrentImport.Contains(NormalizePath(filePath));
             if (!canOverwrite)
             {
                 PsdLogger.Info("Skip existing generated file because it was not selected for update: " + filePath);
@@ -1636,7 +1766,8 @@
                 string childDirectory = Path.Combine(currentDirectory, GetOutputFolderName(layer));
                 for (int i = layer.Children.Count - 1; i >= 0; i--)
                 {
-                    CollectExpectedGeneratedAssetPathsForLayer(layer.Children[i], outputRootDirectory, childDirectory, result);
+                    CollectExpectedGeneratedAssetPathsForLayer(layer.Children[i], outputRootDirectory, childDirectory,
+                        result);
                 }
 
                 if ((LayoutInScene || CreatePrefab) &&
@@ -1703,6 +1834,28 @@
                     "Hierarchy Profile incremental import is unsupported in Scene Objects mode. " +
                     "Switch back to Unity UI mode before importing this PSD: " + profilePath);
             return profile;
+        }
+
+        private static bool TryResolveApplicableHierarchyProfile(
+            string sourceGuid,
+            string prefabPath,
+            out PsdHierarchyProfile profile)
+        {
+            profile = null;
+            if (!UseUnityUI) return false;
+
+            try
+            {
+                profile = ResolveHierarchyProfileBeforePrefabImport(sourceGuid, prefabPath, true);
+                return profile != null &&
+                       profile.CheckSchema().canApply &&
+                       string.Equals(profile.sourcePsdGuid, sourceGuid, StringComparison.Ordinal);
+            }
+            catch (InvalidOperationException)
+            {
+                profile = null;
+                return false;
+            }
         }
 
         /// <summary>
@@ -1779,7 +1932,8 @@
                         catch (PsdHierarchyPlanValidationException exception)
                         {
                             throw new InvalidOperationException(
-                                "Geometry-only reuse failed deterministic hierarchy validation. Generate a new Prefab before importing again.", exception);
+                                "Geometry-only reuse failed deterministic hierarchy validation. Generate a new Prefab before importing again.",
+                                exception);
                         }
                     }
                     else
@@ -1792,7 +1946,8 @@
                         {
                             throw new InvalidOperationException(
                                 "The persisted hierarchy Profile no longer passes deterministic validation " +
-                                "against the current PSD and Prefab. Generate a new Prefab before importing again.", exception);
+                                "against the current PSD and Prefab. Generate a new Prefab before importing again.",
+                                exception);
                         }
                     }
                 }
@@ -1809,6 +1964,7 @@
                     importerValueSyncStableIds.UnionWith(reconciliation.contentOnlyStableIds);
                     importerValueSyncStableIds.UnionWith(reconciliation.geometryValidationStableIds);
                 }
+
                 PsdPrefabIncrementalMergeResult merge = PsdPrefabIncrementalMerge.Merge(
                     prefabPath, existingContents, candidateRoot, candidateRegistry, working,
                     persisted != null
@@ -1854,6 +2010,7 @@
                     confidence = 1d
                 });
             }
+
             foreach (PsdHierarchyProfileRename source in profile.renames ?? new List<PsdHierarchyProfileRename>())
             {
                 plan.renames.Add(new PsdHierarchyPlanRename
@@ -1864,6 +2021,7 @@
                     confidence = 1d
                 });
             }
+
             return plan;
         }
 
@@ -1910,7 +2068,8 @@
             PsdLogger.Info("PSD file size: " + FormatFileSize(fileInfo.Length));
             if (fileInfo.Length > int.MaxValue)
             {
-                PsdLogger.Warning("PSD file is larger than 2 GB; this parser uses 32-bit lengths and may not support it.");
+                PsdLogger.Warning(
+                    "PSD file is larger than 2 GB; this parser uses 32-bit lengths and may not support it.");
             }
 
             using (FileStream stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
@@ -1946,7 +2105,8 @@
 
                 if (version != 1)
                 {
-                    PsdLogger.Warning("Unsupported PSD version: " + version + ". PSB/large document files use version 2 and are not supported.");
+                    PsdLogger.Warning("Unsupported PSD version: " + version +
+                                      ". PSB/large document files use version 2 and are not supported.");
                 }
 
                 if (depth != 1 && depth != 8 && depth != 16)
@@ -2150,7 +2310,8 @@
             foreach (Layer child in info.Layer.Children)
             {
                 LayerImportInfo childInfo;
-                if (!infoMap.TryGetValue(child, out childInfo) || childInfo == null || !childInfo.EffectiveVisible || !childInfo.HasLayoutRect)
+                if (!infoMap.TryGetValue(child, out childInfo) || childInfo == null || !childInfo.EffectiveVisible ||
+                    !childInfo.HasLayoutRect)
                 {
                     continue;
                 }
@@ -2201,7 +2362,8 @@
         /// </summary>
         /// <param name="siblings">Sibling layers.</param>
         /// <param name="infoMap">Layer metadata map.</param>
-        private static void AssignUniqueSelfNamesRecursively(List<Layer> siblings, Dictionary<Layer, LayerImportInfo> infoMap)
+        private static void AssignUniqueSelfNamesRecursively(List<Layer> siblings,
+            Dictionary<Layer, LayerImportInfo> infoMap)
         {
             if (siblings == null || siblings.Count == 0)
             {
@@ -2226,7 +2388,8 @@
         /// </summary>
         /// <param name="siblings">Sibling layers that share one output directory scope.</param>
         /// <param name="infoMap">Layer metadata map.</param>
-        private static void AssignUniqueTextureNamesForScope(List<Layer> siblings, Dictionary<Layer, LayerImportInfo> infoMap)
+        private static void AssignUniqueTextureNamesForScope(List<Layer> siblings,
+            Dictionary<Layer, LayerImportInfo> infoMap)
         {
             if (siblings == null || siblings.Count == 0)
             {
@@ -2256,7 +2419,8 @@
         /// <param name="siblings">Sibling layers in the current scope.</param>
         /// <param name="infoMap">Layer metadata map.</param>
         /// <returns>Ordered file emitters for the current directory.</returns>
-        private static List<LayerImportInfo> CollectFileEmittersForScope(List<Layer> siblings, Dictionary<Layer, LayerImportInfo> infoMap)
+        private static List<LayerImportInfo> CollectFileEmittersForScope(List<Layer> siblings,
+            Dictionary<Layer, LayerImportInfo> infoMap)
         {
             List<LayerImportInfo> emitters = new List<LayerImportInfo>();
 
@@ -2338,7 +2502,8 @@
 
             if (info.Parent != null && info.Parent.IsButtonGroup)
             {
-                return SanitizeStableName(GetButtonChildBaseName(info.Layer), info.Layer.IsTextLayer ? "Text" : "Layer");
+                return SanitizeStableName(GetButtonChildBaseName(info.Layer),
+                    info.Layer.IsTextLayer ? "Text" : "Layer");
             }
 
             return SanitizeStableName(info.Layer.Name, info.IsFolderLike ? "Folder" : "Layer");
@@ -2696,7 +2861,9 @@
             StringBuilder builder = new StringBuilder(trimmedName.Length);
             foreach (char currentChar in trimmedName)
             {
-                builder.Append(InvalidGeneratedNameChars.Contains(currentChar) || char.IsControl(currentChar) ? '_' : currentChar);
+                builder.Append(InvalidGeneratedNameChars.Contains(currentChar) || char.IsControl(currentChar)
+                    ? '_'
+                    : currentChar);
             }
 
             string sanitized = builder.ToString().Trim().TrimEnd('.');
@@ -2787,9 +2954,9 @@
         private static bool IsButtonChildHandledByRuntime(LayerImportInfo childInfo)
         {
             return childInfo != null &&
-                childInfo.EffectiveVisible &&
-                childInfo.ButtonRole != ButtonChildRole.None &&
-                !childInfo.Layer.IsTextLayer;
+                   childInfo.EffectiveVisible &&
+                   childInfo.ButtonRole != ButtonChildRole.None &&
+                   !childInfo.Layer.IsTextLayer;
         }
 
         /// <summary>
@@ -2964,7 +3131,8 @@
             LayerImportInfo info = GetLayerInfo(layer);
             if (info != null && !string.IsNullOrEmpty(info.UniqueTextureName))
             {
-                return SanitizeStableName(info.UniqueTextureName, layer != null && layer.IsTextLayer ? "Text" : "Layer");
+                return SanitizeStableName(info.UniqueTextureName,
+                    layer != null && layer.IsTextLayer ? "Text" : "Layer");
             }
 
             if (info != null && !string.IsNullOrEmpty(info.UniqueSelfName))
@@ -3034,10 +3202,7 @@
             /// </summary>
             public bool HasExistingTargets
             {
-                get
-                {
-                    return HasExistingOutputDirectory || HasExistingPrefab;
-                }
+                get { return HasExistingOutputDirectory || HasExistingPrefab; }
             }
 
             /// <summary>
@@ -3045,10 +3210,7 @@
             /// </summary>
             public bool HasSelectableEntries
             {
-                get
-                {
-                    return SameNamePaths.Count > 0 || DeletedPaths.Count > 0;
-                }
+                get { return SameNamePaths.Count > 0 || DeletedPaths.Count > 0; }
             }
         }
 
@@ -3575,8 +3737,8 @@
         private static bool IsEndGroup(Layer layer)
         {
             return layer.Name.Contains("</Layer set>") ||
-                layer.Name.Contains("</Layer group>") ||
-                (layer.Name == " copy" && layer.Rect.height == 0);
+                   layer.Name.Contains("</Layer group>") ||
+                   (layer.Name == " copy" && layer.Rect.height == 0);
         }
 
         /// <summary>
@@ -3618,14 +3780,16 @@
                 return "<null layer>";
             }
 
-            string name = string.IsNullOrEmpty(layer.Name) ? "<unnamed>" : layer.Name.Replace('\r', ' ').Replace('\n', ' ');
+            string name = string.IsNullOrEmpty(layer.Name)
+                ? "<unnamed>"
+                : layer.Name.Replace('\r', ' ').Replace('\n', ' ');
             Rect rect = layer.Rect;
             return "\"" + name + "\"" +
-                " rect=(" + rect.x + "," + rect.y + "," + rect.width + "x" + rect.height + ")" +
-                " children=" + layer.Children.Count +
-                " text=" + layer.IsTextLayer +
-                " visible=" + layer.Visible +
-                " opacity=" + layer.Opacity;
+                   " rect=(" + rect.x + "," + rect.y + "," + rect.width + "x" + rect.height + ")" +
+                   " children=" + layer.Children.Count +
+                   " text=" + layer.IsTextLayer +
+                   " visible=" + layer.Visible +
+                   " opacity=" + layer.Opacity;
         }
 
         #region Layer Exporting Methods
@@ -3644,6 +3808,7 @@
                     count += CountAllLayers(layer.Children);
                 }
             }
+
             return count;
         }
 
@@ -3958,7 +4123,8 @@
             LayerImportInfo info = GetLayerInfo(layer);
             if (info == null)
             {
-                PsdLogger.Warning("Skip texture-only layer because no import info was found: " + DescribeLayerForLog(layer));
+                PsdLogger.Warning("Skip texture-only layer because no import info was found: " +
+                                  DescribeLayerForLog(layer));
                 return;
             }
 
@@ -4005,12 +4171,14 @@
         {
             string file = string.Empty;
 
-            if (layer.Children.Count == 0 && layer.Rect.width > 0 && layer.Rect.height > 0 && (!layer.IsTextLayer || allowTextLayer))
+            if (layer.Children.Count == 0 && layer.Rect.width > 0 && layer.Rect.height > 0 &&
+                (!layer.IsTextLayer || allowTextLayer))
             {
                 file = GetTextureOutputPath(currentOutputRootDirectory, layer);
                 if (!ShouldOverwriteExistingGeneratedFile(file))
                 {
-                    PsdLogger.Info("Skip PNG write by overwrite selection: " + file + " | " + DescribeLayerForLog(layer));
+                    PsdLogger.Info(
+                        "Skip PNG write by overwrite selection: " + file + " | " + DescribeLayerForLog(layer));
                     return file;
                 }
 
@@ -4019,7 +4187,8 @@
                 Texture2D texture = ImageDecoder.DecodeImage(layer);
                 if (texture == null)
                 {
-                    PsdLogger.Warning("Skip PNG because the PSD layer could not be decoded: " + DescribeLayerForLog(layer));
+                    PsdLogger.Warning("Skip PNG because the PSD layer could not be decoded: " +
+                                      DescribeLayerForLog(layer));
                     return string.Empty;
                 }
 
@@ -4028,7 +4197,8 @@
                     byte[] png = texture.EncodeToPNG();
                     if (png == null || png.Length == 0)
                     {
-                        PsdLogger.Warning("Skip PNG because Unity could not encode the PSD layer: " + DescribeLayerForLog(layer));
+                        PsdLogger.Warning("Skip PNG because Unity could not encode the PSD layer: " +
+                                          DescribeLayerForLog(layer));
                         return string.Empty;
                     }
 
@@ -4102,7 +4272,8 @@
 
                     if (png == null || png.Length == 0)
                     {
-                        PsdLogger.Warning("Skip PNG because the processed PSD layer produced no encoded bytes: " + DescribeLayerForLog(layer));
+                        PsdLogger.Warning("Skip PNG because the processed PSD layer produced no encoded bytes: " +
+                                          DescribeLayerForLog(layer));
                         return string.Empty;
                     }
 
@@ -4134,6 +4305,7 @@
                         {
                             currentPendingRedundantTexturePaths.Add(file);
                         }
+
                         return existingFile;
                     }
 
@@ -4157,7 +4329,8 @@
             }
             else
             {
-                PsdLogger.Info("Skip PNG for non-exportable layer: " + DescribeLayerForLog(layer) + ", allowTextLayer=" + allowTextLayer);
+                PsdLogger.Info("Skip PNG for non-exportable layer: " + DescribeLayerForLog(layer) +
+                               ", allowTextLayer=" + allowTextLayer);
             }
 
             return file;
@@ -4195,7 +4368,8 @@
                 GameObject savedPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabRelativePath);
                 if (savedPrefab == null)
                 {
-                    PsdLogger.Warning("Keep redundant PNGs because the generated Prefab could not be reloaded: " + prefabRelativePath);
+                    PsdLogger.Warning("Keep redundant PNGs because the generated Prefab could not be reloaded: " +
+                                      prefabRelativePath);
                     return;
                 }
 
@@ -4212,7 +4386,8 @@
                 string assetPath = ToProjectAssetPath(redundantPath);
                 if (string.IsNullOrEmpty(assetPath) || prefabDependencies.Contains(assetPath))
                 {
-                    PsdLogger.Warning("Keep redundant PNG because the saved Prefab still references it: " + redundantPath);
+                    PsdLogger.Warning("Keep redundant PNG because the saved Prefab still references it: " +
+                                      redundantPath);
                     continue;
                 }
 
@@ -4248,10 +4423,10 @@
             }
 
             return "nine:" +
-                border.x.ToString("0.###", CultureInfo.InvariantCulture) + "," +
-                border.y.ToString("0.###", CultureInfo.InvariantCulture) + "," +
-                border.z.ToString("0.###", CultureInfo.InvariantCulture) + "," +
-                border.w.ToString("0.###", CultureInfo.InvariantCulture);
+                   border.x.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+                   border.y.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+                   border.z.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+                   border.w.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
         private static string ComputePngContentHash(byte[] png)
@@ -4395,7 +4570,8 @@
 
                 if (layer != null && layer.Id != 0U)
                 {
-                    textureImporter.userData = PsdNineSliceAssetState.WriteLayerIdentity(textureImporter.userData, layer.Id);
+                    textureImporter.userData =
+                        PsdNineSliceAssetState.WriteLayerIdentity(textureImporter.userData, layer.Id);
                 }
 
                 Vector4 nineSliceBorder;
@@ -4403,7 +4579,8 @@
                 int generatedHeight;
                 textureImporter.GetSourceTextureWidthAndHeight(out generatedWidth, out generatedHeight);
                 if (TryGetNineSliceBorder(layer, out nineSliceBorder) &&
-                    IsNineSliceBorderValidForGeneratedTexture(generatedWidth, generatedHeight, nineSliceBorder, relativePathToSprite))
+                    IsNineSliceBorderValidForGeneratedTexture(generatedWidth, generatedHeight, nineSliceBorder,
+                        relativePathToSprite))
                 {
                     Vector4 canvasBorder = IsAutomaticNineSliceBorderInTargetCoordinates(layer)
                         ? nineSliceBorder
@@ -4487,7 +4664,8 @@
 
                 try
                 {
-                    Font font = Font.CreateDynamicFontFromOSFont(fontName, Mathf.Max(1, Mathf.CeilToInt(layer.FontSize)));
+                    Font font = Font.CreateDynamicFontFromOSFont(fontName,
+                        Mathf.Max(1, Mathf.CeilToInt(layer.FontSize)));
                     if (font != null)
                     {
                         return font;
@@ -4512,7 +4690,8 @@
 
             string normalized = fontName.Trim().Replace("-", " ").Replace("_", " ");
             normalized = Regex.Replace(normalized, "\\s+", " ");
-            normalized = Regex.Replace(normalized, "\\s+(Regular|Normal|Book|系|标准|Std)$", string.Empty, RegexOptions.IgnoreCase);
+            normalized = Regex.Replace(normalized, "\\s+(Regular|Normal|Book|系|标准|Std)$", string.Empty,
+                RegexOptions.IgnoreCase);
             return normalized;
         }
 
@@ -4651,7 +4830,8 @@
             else
             {
                 RuntimeAnimatorController existingController =
-                    AssetDatabase.LoadAssetAtPath(controllerPath, typeof(RuntimeAnimatorController)) as RuntimeAnimatorController;
+                    AssetDatabase.LoadAssetAtPath(controllerPath, typeof(RuntimeAnimatorController)) as
+                        RuntimeAnimatorController;
                 if (existingController != null)
                 {
                     runtimeController = existingController;
@@ -4740,7 +4920,8 @@
                 return clip;
             }
 
-            AnimationClip existingClip = AssetDatabase.LoadAssetAtPath(clipPath, typeof(AnimationClip)) as AnimationClip;
+            AnimationClip existingClip =
+                AssetDatabase.LoadAssetAtPath(clipPath, typeof(AnimationClip)) as AnimationClip;
             if (existingClip != null)
             {
                 return existingClip;
@@ -4752,37 +4933,28 @@
         #endregion
 
         #region Unity UI
-        /// <summary>
-        /// Creates the Unity UI event system game object that handles all input.
-        /// </summary>
-        private static void CreateUIEventSystem()
-        {
-            if (!GameObject.Find("EventSystem"))
-            {
-                GameObject gameObject = new GameObject("EventSystem");
-                gameObject.AddComponent<EventSystem>();
-                gameObject.AddComponent<StandaloneInputModule>();
-            }
-        }
 
         /// <summary>
         /// Creates a Unity UI <see cref="Canvas"/>.
         /// </summary>
         private static void CreateUICanvas()
         {
-            Canvas = new GameObject(PsdName);
+            Canvas = new GameObject(PsdName,typeof(RectTransform));
 
-            Canvas canvas = Canvas.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.WorldSpace;
-
+            
             RectTransform transform = Canvas.GetComponent<RectTransform>();
             transform.sizeDelta = CanvasSize;
+            
+            /*
+            Canvas canvas = Canvas.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
 
             CanvasScaler scaler = Canvas.AddComponent<CanvasScaler>();
             scaler.dynamicPixelsPerUnit = PixelsToUnits;
             scaler.referencePixelsPerUnit = PixelsToUnits;
 
             Canvas.AddComponent<GraphicRaycaster>();
+            */
         }
 
         /// <summary>
@@ -4802,7 +4974,7 @@
             ApplyLayerUILayout(uiTransform, layer, preset);
             RegisterGeneratedUiNode(layer, uiTransform);
 
-            Image uiImage = uiObject.AddComponent<Image>();
+            Image uiImage = AddConfiguredImageComponent(uiObject);
             uiImage.sprite = CreateSprite(layer);
             ApplyImageLayoutBehavior(uiImage, preset);
             ApplyNineSliceImageBehavior(uiImage, layer);
@@ -4887,7 +5059,8 @@
 
             if (textUI.font == null)
             {
-                PsdLogger.Warning("No TMP font asset is configured and Unity has no default TMP font. layer=" + GetRuntimeObjectName(layer));
+                PsdLogger.Warning("No TMP font asset is configured and Unity has no default TMP font. layer=" +
+                                  GetRuntimeObjectName(layer));
             }
             else
             {
@@ -4993,6 +5166,34 @@
             AtlasVersion = settings.spriteAtlasVersion;
         }
 
+        internal static void ApplyProjectUiComponentSettings(PsdLayoutProjectUiComponentSnapshot settings)
+        {
+            uiImageComponentType = settings.imageComponentType ?? typeof(Image);
+            uiButtonComponentType = settings.buttonComponentType ?? typeof(Button);
+        }
+
+        internal static Image AddConfiguredImageComponent(GameObject gameObject)
+        {
+            Image image = gameObject.AddComponent(uiImageComponentType) as Image;
+            if (image == null)
+            {
+                throw new InvalidOperationException("Configured Image component must inherit UnityEngine.UI.Image.");
+            }
+
+            return image;
+        }
+
+        internal static Button AddConfiguredButtonComponent(GameObject gameObject)
+        {
+            Button button = gameObject.AddComponent(uiButtonComponentType) as Button;
+            if (button == null)
+            {
+                return null;
+            }
+
+            return button;
+        }
+
         private static void LogProjectFontSettingsWarnings(PsdLayoutProjectFontSnapshot settings)
         {
             if (settings.fontStatus == PsdProjectAssetStatus.Missing)
@@ -5031,7 +5232,8 @@
             TMP_FontAsset matched = null;
             foreach (string guid in AssetDatabase.FindAssets("t:TMP_FontAsset"))
             {
-                TMP_FontAsset candidate = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetDatabase.GUIDToAssetPath(guid));
+                TMP_FontAsset candidate =
+                    AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetDatabase.GUIDToAssetPath(guid));
                 if (IsUsableTextMeshProFont(candidate) &&
                     PsdTextFontNameMatcher.IsMatch(
                         psdFontName,
@@ -5181,7 +5383,8 @@
 
                 if (style.ShadowBlur > 0f)
                 {
-                    PsdLogger.Warning("PSD text shadow blur is approximated by Unity UI Shadow; layer=" + GetRuntimeObjectName(layer));
+                    PsdLogger.Warning("PSD text shadow blur is approximated by Unity UI Shadow; layer=" +
+                                      GetRuntimeObjectName(layer));
                 }
             }
         }
@@ -5197,8 +5400,9 @@
 
             // create an empty Image object with a Button behavior attached
             Image image = CreateUIImage(layer);
-            Button button = image.gameObject.AddComponent<Button>();
-            UiLayoutContext buttonLayoutContext = GetChildUILayoutContext(layer, buttonPreset, GetLayerLayoutRect(layer));
+            Button button = AddConfiguredButtonComponent(image.gameObject);
+            UiLayoutContext buttonLayoutContext =
+                GetChildUILayoutContext(layer, buttonPreset, GetLayerLayoutRect(layer));
 
             // look through the children for a clip rect
             ////Rectangle? clipRect = null;
@@ -5211,6 +5415,11 @@
             ////}
 
             // look through the children for the sprite states
+            if (button == null)
+            {
+                return;
+            }
+
             foreach (Layer child in layer.Children)
             {
                 LayerImportInfo childInfo = GetLayerInfo(child);
@@ -5327,7 +5536,8 @@
             transform.anchorMin = anchor;
             transform.anchorMax = anchor;
             transform.pivot = anchor;
-            transform.anchoredPosition = GetAnchoredPositionForLayer(layoutRect, currentGroupLayoutContext, effectivePreset);
+            transform.anchoredPosition =
+                GetAnchoredPositionForLayer(layoutRect, currentGroupLayoutContext, effectivePreset);
             transform.sizeDelta = childContext.LocalRectSize;
             return childContext;
         }
@@ -5635,13 +5845,15 @@
                 if (rectTransform == null)
                 {
                     UnityEngine.Object.DestroyImmediate(instance);
-                    throw new InvalidOperationException("Common Prefab must have a RectTransform when Use Unity UI is enabled: " + prefab.name);
+                    throw new InvalidOperationException(
+                        "Common Prefab must have a RectTransform when Use Unity UI is enabled: " + prefab.name);
                 }
 
                 rectTransform.SetParent(currentGroupGameObject.transform, false);
                 ApplyLayerUILayout(rectTransform, layer, info.AnchorPreset);
                 RegisterGeneratedUiNode(layer, rectTransform);
-                if (PsdCommonPrefabVisualFallbackPolicy.RequiresSourceVisualFallback(HasRenderableCommonPrefabVisual(instance)))
+                if (PsdCommonPrefabVisualFallbackPolicy.RequiresSourceVisualFallback(
+                        HasRenderableCommonPrefabVisual(instance)))
                 {
                     Image fallback = CreateCommonPrefabSourceFallback(layer);
                     fallback.gameObject.name = GetRuntimeObjectName(layer) + "__PsdFallback";
@@ -5675,7 +5887,7 @@
             RectTransform transform = uiObject.GetComponent<RectTransform>();
             ApplyLayerUILayout(transform, layer, preset);
 
-            Image image = uiObject.AddComponent<Image>();
+            Image image = AddConfiguredImageComponent(uiObject);
             image.sprite = sprite;
             ApplyImageLayoutBehavior(image, preset);
             return image;
@@ -5760,7 +5972,7 @@
             ApplyLayerUILayout(transform, layer, info.AnchorPreset);
             RegisterGeneratedUiNode(layer, transform);
 
-            Image image = uiObject.AddComponent<Image>();
+            Image image = AddConfiguredImageComponent(uiObject);
             image.sprite = sprite;
             ApplyCommonTextureVisualTransform(transform, layer, sprite);
             ApplyImageLayoutBehavior(image, info.AnchorPreset);
@@ -5799,8 +6011,8 @@
                 Vector2 nativeSize = new Vector2(sprite.rect.width * match.Scale, sprite.rect.height * match.Scale);
                 transform.sizeDelta = nativeSize;
                 PsdLogger.Info("Recovered Common Texture transform. layer=" + DescribeLayerForLog(layer) +
-                    ", rotation=" + match.RotationDegrees.ToString("F2", CultureInfo.InvariantCulture) +
-                    ", scale=" + match.Scale.ToString("F3", CultureInfo.InvariantCulture));
+                               ", rotation=" + match.RotationDegrees.ToString("F2", CultureInfo.InvariantCulture) +
+                               ", scale=" + match.Scale.ToString("F3", CultureInfo.InvariantCulture));
             }
             finally
             {
@@ -5812,7 +6024,8 @@
         {
             pixels = null;
             if (sprite == null || sprite.texture == null) return false;
-            RenderTexture temporary = RenderTexture.GetTemporary(sprite.texture.width, sprite.texture.height, 0, RenderTextureFormat.ARGB32);
+            RenderTexture temporary = RenderTexture.GetTemporary(sprite.texture.width, sprite.texture.height, 0,
+                RenderTextureFormat.ARGB32);
             RenderTexture previous = RenderTexture.active;
             Texture2D copy = null;
             try
@@ -5832,6 +6045,7 @@
                 {
                     Array.Copy(texturePixels, ((startY + y) * copy.width) + startX, pixels, y * width, width);
                 }
+
                 return pixels.Length == width * height;
             }
             catch (UnityException)
@@ -5894,8 +6108,8 @@
                 }
 
                 return currentAutomaticNineSliceBordersByLayer != null &&
-                    currentAutomaticNineSliceBordersByLayer.TryGetValue(layer, out border) &&
-                    IsNineSliceBorderValid(layer, border, "manual PSD editor");
+                       currentAutomaticNineSliceBordersByLayer.TryGetValue(layer, out border) &&
+                       IsNineSliceBorderValid(layer, border, "manual PSD editor");
             }
 
             if (currentAutomaticNineSliceBordersByLayer != null &&
@@ -6005,7 +6219,8 @@
             currentManualNineSliceOverridesByLayerId = PsdNineSliceOverrideStore.ReadAll(importer.userData);
             if (currentManualNineSliceOverridesByLayerId.Count > 0)
             {
-                PsdLogger.Info("Loaded " + currentManualNineSliceOverridesByLayerId.Count + " manual PSD 9-slice override(s) from .meta userData.");
+                PsdLogger.Info("Loaded " + currentManualNineSliceOverridesByLayerId.Count +
+                               " manual PSD 9-slice override(s) from .meta userData.");
             }
         }
 
@@ -6013,7 +6228,7 @@
         {
             value = null;
             return layer != null && layer.Id != 0U && currentManualNineSliceOverridesByLayerId != null &&
-                currentManualNineSliceOverridesByLayerId.TryGetValue(layer.Id, out value);
+                   currentManualNineSliceOverridesByLayerId.TryGetValue(layer.Id, out value);
         }
 
         private static bool HasEnabledManualNineSliceOverride(Layer layer)
@@ -6048,7 +6263,7 @@
         private static bool IsAutomaticNineSliceBorderInTargetCoordinates(Layer layer)
         {
             return layer != null && currentAutomaticNineSliceBordersInTargetCoordinates != null &&
-                currentAutomaticNineSliceBordersInTargetCoordinates.Contains(layer);
+                   currentAutomaticNineSliceBordersInTargetCoordinates.Contains(layer);
         }
 
         private static void ClearAutomaticNineSliceBorder(Layer layer)
@@ -6078,8 +6293,8 @@
 
             currentNineSliceBordersByLayerId.Clear();
             useEmbeddedNineSliceMetadata = manifest != null &&
-                manifest.IsUsable &&
-                manifest.nineSliceSchemaVersion >= 1;
+                                           manifest.IsUsable &&
+                                           manifest.nineSliceSchemaVersion >= 1;
             if (manifest == null || !manifest.IsUsable || manifest.layers == null)
             {
                 return;
@@ -6363,7 +6578,8 @@
         /// <param name="parentContext">The current parent layout context.</param>
         /// <param name="preset">The anchor preset used by the child.</param>
         /// <returns>Local anchored position for the generated UI element.</returns>
-        private static Vector2 GetAnchoredPositionForLayer(Rect rect, UiLayoutContext parentContext, AnchorNamePreset preset)
+        private static Vector2 GetAnchoredPositionForLayer(Rect rect, UiLayoutContext parentContext,
+            AnchorNamePreset preset)
         {
             Vector2 localPoint = MapPsdPointToLocalSpace(GetPsdPresetPoint(rect, preset), parentContext);
             Vector2 anchorPoint = GetLocalPresetPoint(parentContext.LocalRectSize, preset);
@@ -6518,7 +6734,7 @@
         {
             return new Rect(-size.x * 0.5f, -size.y * 0.5f, size.x, size.y);
         }
+
         #endregion
     }
 }
-

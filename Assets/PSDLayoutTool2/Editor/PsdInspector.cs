@@ -306,9 +306,16 @@
                         SettingsService.OpenProjectSettings("Project/PSD Layout Tool/Common Asset Catalog");
                     }
 
-                    if (GUILayout.Button(Localize("生成预制体", "Generate Prefab")))
+                    if (GUILayout.Button(Localize("全量生成预制体", "Full Generate Prefab")))
                     {
                         GeneratePrefabWithMissingProfileRecovery(assetPath);
+                    }
+
+                    if (ShouldShowIncrementalUpdateButton(
+                            PsdImporter.IsIncrementalPrefabUpdateAvailable(assetPath)) &&
+                        GUILayout.Button(Localize("增量更新（保留整理）", "Incremental Update (Preserve Organization)")))
+                    {
+                        PsdImporter.UpdatePrefabIncrementally(assetPath);
                     }
 
                     GUILayout.Space(3);
@@ -351,6 +358,11 @@
             }
 
             ConfirmAndRecoverMissingProfile(assetPath);
+        }
+
+        internal static bool ShouldShowIncrementalUpdateButton(bool isIncrementalEligible)
+        {
+            return isIncrementalEligible;
         }
 
         private static void ConfirmAndRecoverMissingProfile(string assetPath)

@@ -1,9 +1,11 @@
 namespace PsdLayoutTool2
 {
     using System;
+    using System.Collections.Generic;
     using TMPro;
     using UnityEditor;
     using UnityEngine;
+    using UnityEngine.UI;
 
     internal enum PsdProjectAssetStatus
     {
@@ -123,6 +125,21 @@ namespace PsdLayoutTool2
         internal readonly PsdImporter.SpriteAtlasVersion spriteAtlasVersion;
     }
 
+    /// <summary>
+    /// Resolved UI component types used while generating PSD UI nodes.
+    /// </summary>
+    internal readonly struct PsdLayoutProjectUiComponentSnapshot
+    {
+        internal PsdLayoutProjectUiComponentSnapshot(Type imageComponentType, Type buttonComponentType)
+        {
+            this.imageComponentType = imageComponentType ?? typeof(Image);
+            this.buttonComponentType = buttonComponentType ?? typeof(Button);
+        }
+
+        internal readonly Type imageComponentType;
+        internal readonly Type buttonComponentType;
+    }
+
     internal readonly struct PsdLayoutProjectSettingsMigrationSnapshot
     {
         internal PsdLayoutProjectSettingsMigrationSnapshot(
@@ -197,6 +214,218 @@ namespace PsdLayoutTool2
         {
             string normalized = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
             return normalized.EndsWith("_", StringComparison.Ordinal) ? normalized : normalized + "_";
+        }
+    }
+
+    [Serializable]
+    internal sealed class PsdLayoutProjectUiComponentSettings
+    {
+        internal const string DefaultImageComponentTypeName = "UnityEngine.UI.Image";
+        internal const string DefaultButtonComponentTypeName = "UnityEngine.UI.Button";
+
+        private static readonly Dictionary<Type, List<Type>> ComponentTypesByBaseType =
+            new Dictionary<Type, List<Type>>();
+
+        [SerializeField]
+        private string imageComponentTypeName = DefaultImageComponentTypeName;
+
+        [SerializeField]
+        private string buttonComponentTypeName = DefaultButtonComponentTypeName;
+
+        internal PsdLayoutProjectUiComponentSnapshot Resolve()
+        {
+            if (!ResolveComponentType(imageComponentTypeName, typeof(Image), out Type imageComponentType, out _))
+            {
+                imageComponentType = typeof(Image);
+            }
+
+            if (!ResolveComponentType(buttonComponentTypeName, typeof(Button), out Type buttonComponentType, out _))
+            {
+                buttonComponentType = typeof(Button);
+            }
+
+            return new PsdLayoutProjectUiComponentSnapshot(imageComponentType, buttonComponentType);
+        }
+
+        internal bool TrySetComponentTypes(string imageTypeName, string buttonTypeName, out string error)
+        {
+            if (!ResolveComponentType(imageTypeName, typeof(Image), out Type imageType, out error))
+            {
+                return false;
+            }
+
+            if (!ResolveComponentType(buttonTypeName, typeof(Button), out Type buttonType, out error))
+            {
+                return false;
+            }
+
+            string normalizedImageTypeName = imageType.FullName;
+            string normalizedButtonTypeName = buttonType.FullName;
+            error = string.Empty;
+            if (string.Equals(imageComponentTypeName, normalizedImageTypeName, StringComparison.Ordinal) &&
+                string.Equals(buttonComponentTypeName, normalizedButtonTypeName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            imageComponentTypeName = normalizedImageTypeName;
+            buttonComponentTypeName = normalizedButtonTypeName;
+            return true;
+        }
+
+        internal static List<string> FindComponentTypeNames(Type expectedBaseType, string query, int maxResults)
+        {
+            var matches = new List<Type>();
+            foreach (Type candidate in GetComponentTypes(expectedBaseType))
+            {
+                if (GetFuzzyMatchScore(candidate, query) >= 0)
+                {
+                    matches.Add(candidate);
+                }
+            }
+
+            matches.Sort((left, right) =>
+            {
+                int leftScore = GetFuzzyMatchScore(left, query);
+                int rightScore = GetFuzzyMatchScore(right, query);
+                int scoreComparison = leftScore.CompareTo(rightScore);
+                return scoreComparison != 0
+                    ? scoreComparison
+                    : string.Compare(left.FullName, right.FullName, StringComparison.Ordinal);
+            });
+
+            int count = Math.Min(Math.Max(maxResults, 0), matches.Count);
+            var results = new List<string>(count);
+            for (int index = 0; index < count; index++)
+            {
+                results.Add(matches[index].FullName);
+            }
+
+            return results;
+        }
+
+        private static List<Type> GetComponentTypes(Type expectedBaseType)
+        {
+            if (ComponentTypesByBaseType.TryGetValue(expectedBaseType, out List<Type> cached))
+            {
+                return cached;
+            }
+
+            var types = new HashSet<Type> { expectedBaseType };
+            foreach (Type candidate in TypeCache.GetTypesDerivedFrom<Component>())
+            {
+                if (!candidate.IsAbstract && expectedBaseType.IsAssignableFrom(candidate))
+                {
+                    types.Add(candidate);
+                }
+            }
+
+            var results = new List<Type>(types);
+            ComponentTypesByBaseType[expectedBaseType] = results;
+            return results;
+        }
+
+        private static int GetFuzzyMatchScore(Type candidate, string query)
+        {
+            string normalizedQuery = query == null ? string.Empty : query.Trim();
+            int simpleNameScore = GetFuzzyMatchScore(candidate.Name, normalizedQuery);
+            int fullNameScore = GetFuzzyMatchScore(candidate.FullName, normalizedQuery);
+            if (simpleNameScore < 0)
+            {
+                return fullNameScore;
+            }
+
+            return fullNameScore < 0 ? simpleNameScore : Math.Min(simpleNameScore, fullNameScore);
+        }
+
+        private static int GetFuzzyMatchScore(string candidate, string query)
+        {
+            if (string.IsNullOrEmpty(query))
+            {
+                return 0;
+            }
+
+            int substringIndex = candidate.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+            if (substringIndex >= 0)
+            {
+                return substringIndex * 2;
+            }
+
+            int candidateIndex = 0;
+            int score = 0;
+            for (int queryIndex = 0; queryIndex < query.Length; queryIndex++)
+            {
+                char queryCharacter = char.ToUpperInvariant(query[queryIndex]);
+                int matchIndex = -1;
+                for (; candidateIndex < candidate.Length; candidateIndex++)
+                {
+                    if (char.ToUpperInvariant(candidate[candidateIndex]) == queryCharacter)
+                    {
+                        matchIndex = candidateIndex++;
+                        break;
+                    }
+                }
+
+                if (matchIndex < 0)
+                {
+                    return -1;
+                }
+
+                score += matchIndex;
+            }
+
+            return 100 + score;
+        }
+
+        private static bool ResolveComponentType(string typeName, Type expectedBaseType, out Type resolvedType, out string error)
+        {
+            string requestedName = string.IsNullOrWhiteSpace(typeName)
+                ? expectedBaseType.FullName
+                : typeName.Trim();
+            resolvedType = string.Equals(requestedName, expectedBaseType.FullName, StringComparison.Ordinal) ||
+                           string.Equals(requestedName, expectedBaseType.AssemblyQualifiedName, StringComparison.Ordinal)
+                ? expectedBaseType
+                : Type.GetType(requestedName, false);
+
+            if (resolvedType == null)
+            {
+                foreach (Type candidate in TypeCache.GetTypesDerivedFrom<Component>())
+                {
+                    if (string.Equals(candidate.FullName, requestedName, StringComparison.Ordinal) ||
+                        string.Equals(candidate.Name, requestedName, StringComparison.Ordinal))
+                    {
+                        if (resolvedType != null)
+                        {
+                            resolvedType = null;
+                            error = "组件类名不唯一，请填写完整命名空间。";
+                            return false;
+                        }
+
+                        resolvedType = candidate;
+                    }
+                }
+            }
+
+            if (resolvedType == null)
+            {
+                error = "找不到组件类型：" + requestedName;
+                return false;
+            }
+
+            if (resolvedType.IsAbstract || !typeof(Component).IsAssignableFrom(resolvedType))
+            {
+                error = "组件类型必须是可挂载的 Unity Component：" + requestedName;
+                return false;
+            }
+
+            if (!expectedBaseType.IsAssignableFrom(resolvedType))
+            {
+                error = requestedName + " 必须继承 " + expectedBaseType.FullName + "。";
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
         }
     }
 
@@ -380,7 +609,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 6;
+        private const int CurrentSettingsVersion = 7;
 
         [SerializeField]
         private int settingsVersion;
@@ -394,6 +623,9 @@ namespace PsdLayoutTool2
 
         [SerializeField]
         private PsdLayoutProjectOutputSettings outputSettings = new PsdLayoutProjectOutputSettings();
+
+        [SerializeField]
+        private PsdLayoutProjectUiComponentSettings uiComponentSettings = new PsdLayoutProjectUiComponentSettings();
 
         [SerializeField]
         private PsdHierarchyAiSettings hierarchyAiSettings = new PsdHierarchyAiSettings();
@@ -432,6 +664,24 @@ namespace PsdLayoutTool2
         {
             EnsureData();
             return outputSettings.Resolve();
+        }
+
+        internal PsdLayoutProjectUiComponentSnapshot ResolveUiComponentSettings()
+        {
+            EnsureData();
+            return uiComponentSettings.Resolve();
+        }
+
+        internal bool TrySetUiComponentTypes(string imageTypeName, string buttonTypeName, out string error)
+        {
+            EnsureData();
+            if (!uiComponentSettings.TrySetComponentTypes(imageTypeName, buttonTypeName, out error))
+            {
+                return false;
+            }
+
+            SaveAsset();
+            return true;
         }
 
         internal PsdHierarchyAiSettingsSnapshot ResolveHierarchyAiSettings()
@@ -578,6 +828,12 @@ namespace PsdLayoutTool2
             if (outputSettings == null)
             {
                 outputSettings = new PsdLayoutProjectOutputSettings();
+                changed = true;
+            }
+
+            if (uiComponentSettings == null)
+            {
+                uiComponentSettings = new PsdLayoutProjectUiComponentSettings();
                 changed = true;
             }
 

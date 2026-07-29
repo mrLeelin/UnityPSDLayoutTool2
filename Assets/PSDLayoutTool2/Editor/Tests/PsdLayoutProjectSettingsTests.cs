@@ -1,10 +1,13 @@
 namespace PsdLayoutTool2.Tests
 {
+    using System.Collections.Generic;
     using NUnit.Framework;
     using TMPro;
     using UnityEditor;
     using UnityEngine;
     using UnityEngine.UIElements;
+    using UiButton = UnityEngine.UI.Button;
+    using UiImage = UnityEngine.UI.Image;
 
     public sealed class PsdLayoutProjectSettingsTests
     {
@@ -15,6 +18,7 @@ namespace PsdLayoutTool2.Tests
         private const string ProjectCopyPath = TempFolder + "/Project/PsdLayoutProjectSettings.asset";
         private const string AiSectionName = "psd-project-settings-ai";
         private const string OutputSectionName = "psd-project-settings-output";
+        private const string UiComponentSectionName = "psd-project-settings-ui-components";
         private const string FontSectionName = "psd-project-settings-font";
         private const string CommonNamingSectionName = "psd-project-settings-common-naming";
         private const string FixedOutputContentName = "psd-project-settings-fixed-output";
@@ -32,6 +36,8 @@ namespace PsdLayoutTool2.Tests
             PsdImporter.TextMeshProFont = null;
             PsdImporter.TextMeshProBaseMaterial = null;
             PsdImporter.AtlasVersion = PsdImporter.SpriteAtlasVersion.V1;
+            PsdImporter.ApplyProjectUiComponentSettings(
+                new PsdLayoutProjectUiComponentSnapshot(typeof(UiImage), typeof(UiButton)));
             AssetDatabase.DeleteAsset(TempFolder);
         }
 
@@ -113,6 +119,92 @@ namespace PsdLayoutTool2.Tests
             Assert.That(error, Is.Not.Empty);
             Assert.That(data.Resolve().prefabPrefix, Is.EqualTo("Common_Prefab_"));
             Assert.That(data.Resolve().texturePrefix, Is.EqualTo("Common_Texture_"));
+        }
+
+        [Test]
+        public void UiComponentSettingsUseImageAndButtonByDefault()
+        {
+            var data = new PsdLayoutProjectUiComponentSettings();
+
+            PsdLayoutProjectUiComponentSnapshot snapshot = data.Resolve();
+
+            Assert.That(snapshot.imageComponentType, Is.EqualTo(typeof(UiImage)));
+            Assert.That(snapshot.buttonComponentType, Is.EqualTo(typeof(UiButton)));
+        }
+
+        [Test]
+        public void UiComponentSettingsAcceptCustomImageAndButtonTypes()
+        {
+            var data = new PsdLayoutProjectUiComponentSettings();
+
+            Assert.That(
+                data.TrySetComponentTypes(
+                    typeof(PsdLayoutProjectSettingsTestImage).FullName,
+                    typeof(PsdLayoutProjectSettingsTestButton).FullName,
+                    out string error),
+                Is.True,
+                error);
+
+            PsdLayoutProjectUiComponentSnapshot snapshot = data.Resolve();
+            Assert.That(snapshot.imageComponentType, Is.EqualTo(typeof(PsdLayoutProjectSettingsTestImage)));
+            Assert.That(snapshot.buttonComponentType, Is.EqualTo(typeof(PsdLayoutProjectSettingsTestButton)));
+        }
+
+        [Test]
+        public void UiComponentSettingsRejectIncompatibleTypes()
+        {
+            var data = new PsdLayoutProjectUiComponentSettings();
+
+            Assert.That(
+                data.TrySetComponentTypes(typeof(UiButton).FullName, typeof(UiButton).FullName, out string error),
+                Is.False);
+            Assert.That(error, Does.Contain(typeof(UiImage).FullName));
+        }
+
+        [Test]
+        public void UiComponentSettingsFuzzySearchFindsCustomImageByAbbreviation()
+        {
+            List<string> matches = PsdLayoutProjectUiComponentSettings.FindComponentTypeNames(
+                typeof(UiImage),
+                "PSTImg",
+                12);
+
+            Assert.That(matches, Does.Contain(typeof(PsdLayoutProjectSettingsTestImage).FullName));
+        }
+
+        [Test]
+        public void UiComponentSettingsFuzzySearchKeepsImageAndButtonCandidatesSeparate()
+        {
+            List<string> matches = PsdLayoutProjectUiComponentSettings.FindComponentTypeNames(
+                typeof(UiButton),
+                "PSTBtn",
+                12);
+
+            Assert.That(matches, Does.Contain(typeof(PsdLayoutProjectSettingsTestButton).FullName));
+            Assert.That(matches, Does.Not.Contain(typeof(PsdLayoutProjectSettingsTestImage).FullName));
+        }
+
+        [Test]
+        public void ImporterAddsConfiguredCustomUiComponents()
+        {
+            PsdImporter.ApplyProjectUiComponentSettings(
+                new PsdLayoutProjectUiComponentSnapshot(
+                    typeof(PsdLayoutProjectSettingsTestImage),
+                    typeof(PsdLayoutProjectSettingsTestButton)));
+            var gameObject = new GameObject("Configured Components");
+            try
+            {
+                Assert.That(
+                    PsdImporter.AddConfiguredImageComponent(gameObject),
+                    Is.TypeOf<PsdLayoutProjectSettingsTestImage>());
+                Assert.That(
+                    PsdImporter.AddConfiguredButtonComponent(gameObject),
+                    Is.TypeOf<PsdLayoutProjectSettingsTestButton>());
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
         }
 
         [Test]
@@ -312,6 +404,9 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(root, Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(AiSectionName), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(OutputSectionName), Is.Not.Null);
+                Assert.That(root.Q<VisualElement>(UiComponentSectionName), Is.Not.Null);
+                Assert.That(root.Q<TextField>("psd-project-settings-image-component-type"), Is.Not.Null);
+                Assert.That(root.Q<TextField>("psd-project-settings-button-component-type"), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(FontSectionName), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(CommonNamingSectionName), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(FixedOutputContentName), Is.Null);
@@ -398,5 +493,13 @@ namespace PsdLayoutTool2.Tests
 
             AssetDatabase.CreateFolder(parent, System.IO.Path.GetFileName(folder));
         }
+    }
+
+    public sealed class PsdLayoutProjectSettingsTestImage : UiImage
+    {
+    }
+
+    public sealed class PsdLayoutProjectSettingsTestButton : UiButton
+    {
     }
 }
