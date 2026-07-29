@@ -134,6 +134,65 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void PureBareNumberedSiblingsFormAComponentFamily()
+        {
+            var nodes = new JArray
+            {
+                CreateCandidateNode("n000060", string.Empty, "ExampleView", 0, 1),
+                CreateCandidateNode("n000061", "n000060", "[Tasks]", 0, 5),
+                CreateCandidateNode("n000062", "n000061", "5", 0, 1),
+                CreateCandidateNode("n000063", "n000061", "4", 1, 1),
+                CreateCandidateNode("n000064", "n000061", "3", 2, 1),
+                CreateCandidateNode("n000065", "n000061", "2", 3, 1),
+                CreateCandidateNode("n000066", "n000061", "1", 4, 1),
+                CreateCandidateNode("n000067", "n000062", "State5", 0, 0),
+                CreateCandidateNode("n000068", "n000063", "State4", 0, 0),
+                CreateCandidateNode("n000069", "n000064", "State3", 0, 0),
+                CreateCandidateNode("n000070", "n000065", "State2", 0, 0),
+                CreateCandidateNode("n000071", "n000066", "State1", 0, 0),
+            };
+
+            JObject candidate = (JObject)PsdHierarchyChatContextBuilder.BuildComponentFamilyCandidates(nodes)[0];
+
+            Assert.That(candidate.Value<string>("suggestedAssetName"), Is.EqualTo("Task"));
+            Assert.That(candidate.Value<bool>("requiresExtraction"), Is.True);
+            Assert.That(candidate.Value<int>("instanceCount"), Is.EqualTo(5));
+            Assert.That(((JArray)candidate["sources"]).Values<string>(), Is.EqualTo(new[]
+            {
+                "node:n000062", "node:n000063", "node:n000064", "node:n000065", "node:n000066",
+            }));
+        }
+
+        [Test]
+        public void NumberedRepeatedUnitsIncludeBareSiblingWhenItsIndexIsAlreadyNamed()
+        {
+            var nodes = new JArray
+            {
+                CreateCandidateNode("n000040", string.Empty, "ExampleView", 0, 1),
+                CreateCandidateNode("n000041", "n000040", "[TaskList]", 0, 4),
+                CreateCandidateNode("n000042", "n000041", "[TaskItem_1]", 0, 1),
+                CreateCandidateNode("n000043", "n000041", "[TaskItem_2]", 1, 1),
+                CreateCandidateNode("n000044", "n000041", "[TaskItem_3]", 2, 1),
+                CreateCandidateNode("n000045", "n000041", "1", 3, 2),
+                CreateCandidateNode("n000046", "n000042", "State1", 0, 0),
+                CreateCandidateNode("n000047", "n000043", "State2", 0, 0),
+                CreateCandidateNode("n000048", "n000044", "State3", 0, 0),
+                CreateCandidateNode("n000049", "n000045", "State4", 0, 0),
+                CreateCandidateNode("n000050", "n000045", "Lock", 1, 0),
+            };
+
+            JObject candidate = (JObject)PsdHierarchyChatContextBuilder.BuildComponentFamilyCandidates(nodes)[0];
+
+            Assert.That(candidate.Value<string>("suggestedAssetName"), Is.EqualTo("TaskItem"));
+            Assert.That(candidate.Value<int>("instanceCount"), Is.EqualTo(4));
+            Assert.That(candidate.Value<string>("recommendedMode"), Is.EqualTo("variant"));
+            Assert.That(((JArray)candidate["sources"]).Values<string>(), Is.EqualTo(new[]
+            {
+                "node:n000042", "node:n000043", "node:n000044", "node:n000045",
+            }));
+        }
+
+        [Test]
         public void CodexCustomApiRequestContainsContextAndBearerKey()
         {
             PsdHierarchyChatHttpRequest request = PsdHierarchyChatClient.BuildRequest(

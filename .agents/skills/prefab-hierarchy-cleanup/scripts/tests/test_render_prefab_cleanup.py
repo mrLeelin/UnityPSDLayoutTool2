@@ -106,6 +106,51 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertEqual(candidate["instanceCount"], 5)
         self.assertEqual(candidate["instances"], [item.path for item in items])
 
+    def test_pure_bare_numbered_siblings_form_a_component_family(self):
+        root = self.make_candidate_node("Root", 0, 1)
+        parent = self.make_candidate_node("Root/[Tasks]", 0, 5)
+        root.children.append(parent)
+        items = [
+            self.make_candidate_node(f"Root/[Tasks]/{index}", sibling, 1)
+            for sibling, index in enumerate((5, 4, 3, 2, 1))
+        ]
+        parent.children.extend(items)
+        for index, item in enumerate(items):
+            item.children.append(self.make_candidate_node(item.path + f"/State{index}", 0, 0))
+
+        candidates = self.numbered_families(numbered_component_candidates(root))
+
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertEqual(candidate["suggestedAssetName"], "Task")
+        self.assertTrue(candidate["requiresExtraction"])
+        self.assertEqual(candidate["instanceCount"], 5)
+        self.assertEqual(candidate["instances"], [item.path for item in items])
+
+    def test_numbered_family_includes_bare_sibling_when_its_index_is_already_named(self):
+        root = self.make_candidate_node("Root", 0, 1)
+        parent = self.make_candidate_node("Root/[TaskItems]", 0, 4)
+        root.children.append(parent)
+        items = [
+            self.make_candidate_node("Root/[TaskItems]/[TaskItem_1]", 0, 1),
+            self.make_candidate_node("Root/[TaskItems]/[TaskItem_2]", 1, 1),
+            self.make_candidate_node("Root/[TaskItems]/[TaskItem_3]", 2, 1),
+            self.make_candidate_node("Root/[TaskItems]/1", 3, 2),
+        ]
+        parent.children.extend(items)
+        for index, item in enumerate(items):
+            item.children.append(self.make_candidate_node(item.path + f"/State{index}", 0, 0))
+        items[3].children.append(self.make_candidate_node(items[3].path + "/Lock", 1, 0))
+
+        candidates = self.numbered_families(numbered_component_candidates(root))
+
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertEqual(candidate["suggestedAssetName"], "TaskItem")
+        self.assertEqual(candidate["instanceCount"], 4)
+        self.assertEqual(candidate["recommendedMode"], "variant")
+        self.assertEqual(candidate["instances"], [item.path for item in items])
+
     def test_partially_identical_family_also_reports_structure_subsets(self):
         root = self.make_candidate_node("Root", 0, 1)
         parent = self.make_candidate_node("Root/[StorySection]", 0, 3)

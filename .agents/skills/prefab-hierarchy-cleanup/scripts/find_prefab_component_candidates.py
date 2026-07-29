@@ -304,11 +304,6 @@ def numbered_family_name(node: Node) -> str | None:
     return match.group("stem") if match is not None else None
 
 
-def numbered_family_index(node: Node) -> int | None:
-    match = NUMBERED_FAMILY_RE.match(node.name.strip("[]").strip())
-    return int(match.group("index")) if match is not None else None
-
-
 def bare_numbered_index(node: Node) -> int | None:
     value = node.name.strip("[]").strip()
     return int(value) if BARE_INDEX_RE.match(value) is not None else None
@@ -370,15 +365,19 @@ def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
         for bare_index, bare_node in bare_index_nodes:
             eligible_families = []
             for family_name, group in groups.items():
-                represented_indices = {numbered_family_index(node) for node in group}
                 if (
                     len(group) >= 2
-                    and bare_index not in represented_indices
                     and matching_rect_transform_frame(group + [bare_node])
                 ):
                     eligible_families.append(family_name)
             if len(eligible_families) == 1:
                 groups[eligible_families[0]].append(bare_node)
+
+        if not groups and len({index for index, _ in bare_index_nodes}) >= 3:
+            bare_nodes = [node for _, node in bare_index_nodes]
+            family_name = singular_component_name(parent.name)
+            if family_name is not None and matching_rect_transform_frame(bare_nodes):
+                groups[family_name] = bare_nodes
 
         for family_name, group in sorted(groups.items()):
             ordered = sorted(group, key=lambda item: item.sibling)
@@ -447,6 +446,22 @@ def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
                     }
                 )
     return result
+
+
+def singular_component_name(container_name: str) -> str | None:
+    """Derive a component name from an English plural container such as [Tasks]."""
+    name = container_name.strip().strip("[]")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name):
+        return None
+    if name.endswith("ies") and len(name) > 3:
+        return name[:-3] + "y"
+    if (
+        name.endswith("s")
+        and len(name) > 1
+        and not name.endswith(("ss", "us", "is"))
+    ):
+        return name[:-1]
+    return name
 
 
 def containment_misgroupings(

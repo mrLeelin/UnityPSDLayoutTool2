@@ -1,5 +1,6 @@
 namespace PsdLayoutTool2.Tests
 {
+    using System.Collections.Generic;
     using NUnit.Framework;
     using UnityEditor;
     using UnityEngine;
@@ -7,6 +8,24 @@ namespace PsdLayoutTool2.Tests
 
     public sealed class PsdHierarchyChatWindowTests
     {
+        [Test]
+        public void FreshSnapshotClearsRequestHistoryAndCliSession()
+        {
+            var conversation = new List<PsdHierarchyChatMessage>
+            {
+                new PsdHierarchyChatMessage("user", "Old snapshot request"),
+                new PsdHierarchyChatMessage("assistant", "Old snapshot plan"),
+            };
+            string cliSessionId = "old-cli-session";
+
+            PsdHierarchyChatWindow.ResetConversationForFreshSnapshot(
+                conversation,
+                ref cliSessionId);
+
+            Assert.That(conversation, Is.Empty);
+            Assert.That(cliSessionId, Is.Empty);
+        }
+
         [Test]
         public void WindowBuildsOnlyChatControls()
         {

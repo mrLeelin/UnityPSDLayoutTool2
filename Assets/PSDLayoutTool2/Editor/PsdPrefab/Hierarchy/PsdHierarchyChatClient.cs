@@ -697,7 +697,7 @@ namespace PsdLayoutTool2
                 }
 
                 var groups = new Dictionary<string, List<JObject>>(StringComparer.Ordinal);
-                var bareIndexChildren = new List<JObject>();
+                var bareIndexChildren = new List<KeyValuePair<int, JObject>>();
                 foreach (JObject child in parent.Value)
                 {
                     if (child.Value<int?>("childCount") <= 0)
@@ -709,7 +709,7 @@ namespace PsdLayoutTool2
                     {
                         if (TryGetBareRepeatedIndex(child.Value<string>("name"), out int bareIndex))
                         {
-                            bareIndexChildren.Add(child);
+                            bareIndexChildren.Add(new KeyValuePair<int, JObject>(bareIndex, child));
                         }
 
                         continue;
@@ -724,20 +724,27 @@ namespace PsdLayoutTool2
                     group.Add(child);
                 }
 
-                foreach (JObject bareChild in bareIndexChildren)
+                foreach (KeyValuePair<int, JObject> bareEntry in bareIndexChildren)
                 {
-                    TryGetBareRepeatedIndex(bareChild.Value<string>("name"), out int bareIndex);
+                    JObject bareChild = bareEntry.Value;
                     List<KeyValuePair<string, List<JObject>>> eligibleGroups = groups
                         .Where(pair => pair.Value.Count >= 2)
                         .Where(pair => !ContainsNestedPrefab(bareChild.Value<string>("id"), nodeById))
-                        .Where(pair => !pair.Value.Any(node =>
-                            TryGetRepeatedFamilyIndex(node.Value<string>("name"), out int index) &&
-                            index == bareIndex))
                         .Where(pair => HasConsistentRectTransformFrame(pair.Value.Concat(new[] { bareChild }).ToList()))
                         .ToList();
                     if (eligibleGroups.Count == 1)
                     {
                         eligibleGroups[0].Value.Add(bareChild);
+                    }
+                }
+
+                if (groups.Count == 0 && bareIndexChildren.Select(entry => entry.Key).Distinct().Count() >= 3)
+                {
+                    List<JObject> bareChildren = bareIndexChildren.Select(entry => entry.Value).ToList();
+                    if (HasConsistentRectTransformFrame(bareChildren) &&
+                        TryGetBareNumberedFamilyStem(parentNode.Value<string>("name"), out string bareFamilyStem))
+                    {
+                        groups.Add(bareFamilyStem, bareChildren);
                     }
                 }
 
@@ -1059,11 +1066,6 @@ namespace PsdLayoutTool2
             return TryGetRepeatedFamilyParts(name, out stem, out int ignoredIndex);
         }
 
-        private static bool TryGetRepeatedFamilyIndex(string name, out int index)
-        {
-            return TryGetRepeatedFamilyParts(name, out string ignoredStem, out index);
-        }
-
         private static bool TryGetRepeatedFamilyParts(string name, out string stem, out int index)
         {
             stem = string.Empty;
@@ -1107,6 +1109,31 @@ namespace PsdLayoutTool2
             index = 0;
             string value = (name ?? string.Empty).Trim().Trim('[', ']');
             return value.Length > 0 && value.All(char.IsDigit) && int.TryParse(value, out index);
+        }
+
+        private static bool TryGetBareNumberedFamilyStem(string parentName, out string stem)
+        {
+            stem = (parentName ?? string.Empty).Trim().Trim('[', ']');
+            if (string.IsNullOrWhiteSpace(stem) || !char.IsLetter(stem[0]) ||
+                stem.Any(character => !char.IsLetterOrDigit(character)))
+            {
+                stem = string.Empty;
+                return false;
+            }
+
+            if (stem.EndsWith("ies", StringComparison.Ordinal) && stem.Length > 3)
+            {
+                stem = stem.Substring(0, stem.Length - 3) + "y";
+            }
+            else if (stem.EndsWith("s", StringComparison.Ordinal) && stem.Length > 1 &&
+                     !stem.EndsWith("ss", StringComparison.Ordinal) &&
+                     !stem.EndsWith("us", StringComparison.Ordinal) &&
+                     !stem.EndsWith("is", StringComparison.Ordinal))
+            {
+                stem = stem.Substring(0, stem.Length - 1);
+            }
+
+            return true;
         }
 
         private static string ToSuggestedAssetName(string stem)

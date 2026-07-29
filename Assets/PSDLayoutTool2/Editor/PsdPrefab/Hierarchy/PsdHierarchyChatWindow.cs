@@ -514,6 +514,7 @@ namespace PsdLayoutTool2
             }
 
             context = refreshedContext;
+            ResetFailedPlanConversation();
             AppendMessage("system", "已刷新当前 Prefab 快照，正在基于失败原因生成新的待确认计划。");
             rootVisualElement.schedule.Execute(() => SendMessage(
                 "The confirmed cleanup plan failed before the Prefab was saved. Re-analyze the current authoritative snapshot and return a complete replacement JSON plan. Do not repeat the failed extraction unchanged and do not request confirmation in this reply. Failure detail:\n" +
@@ -535,6 +536,7 @@ namespace PsdLayoutTool2
             }
 
             context = refreshedContext;
+            ResetFailedPlanConversation();
             if (context.componentFamilyCandidates == null ||
                 !context.componentFamilyCandidates.Any(candidate => candidate.requiresExtraction))
             {
@@ -625,9 +627,21 @@ namespace PsdLayoutTool2
 
         private void ResetFailedPlanConversation()
         {
+            ResetConversationForFreshSnapshot(conversation, ref cliSessionId);
+            RefreshConnectionUi();
+        }
+
+        internal static void ResetConversationForFreshSnapshot(
+            List<PsdHierarchyChatMessage> conversation,
+            ref string cliSessionId)
+        {
+            if (conversation == null)
+            {
+                throw new ArgumentNullException(nameof(conversation));
+            }
+
             conversation.Clear();
             cliSessionId = string.Empty;
-            RefreshConnectionUi();
         }
 
         private void OpenCurrentConversationInCli()
