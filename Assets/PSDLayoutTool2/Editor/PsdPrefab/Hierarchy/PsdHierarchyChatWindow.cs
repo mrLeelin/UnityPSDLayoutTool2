@@ -287,7 +287,10 @@ namespace PsdLayoutTool2
             SendMessage(PsdHierarchyChatClient.ResolveUserPrompt(prompt), false);
         }
 
-        private async void SendMessage(string prompt, bool isInitialRequest)
+        private async void SendMessage(
+            string prompt,
+            bool isInitialRequest,
+            bool showUserMessage = true)
         {
             if (context == null || isSending)
             {
@@ -303,7 +306,10 @@ namespace PsdLayoutTool2
 
             isSending = true;
             conversation.Add(new PsdHierarchyChatMessage("user", prompt));
-            AppendMessage("user", prompt);
+            if (showUserMessage)
+            {
+                AppendMessage("user", prompt);
+            }
             ShowThinkingIndicator();
             if (!isInitialRequest && draftField != null)
             {
@@ -444,6 +450,8 @@ namespace PsdLayoutTool2
             ShowThinkingIndicator("正在校验已确认方案，并通过 Unity Editor API 更新 Prefab...");
             SetSending(true, "正在更新 Prefab...");
             bool queueComponentExtractionFollowUp = false;
+            bool queueFailureReanalysis = false;
+            string applyFailure = string.Empty;
             try
             {
                 PsdHierarchyChatCleanupExecutionResult result =
@@ -452,6 +460,24 @@ namespace PsdLayoutTool2
                 AppendMessage("system", result.message);
                 SetSending(false, result.success ? "更新完成" : "更新失败");
                 queueComponentExtractionFollowUp = result.success && IsHierarchyOnlyPlan(planToApply);
+                if (!result.success)
+                {
+                    bool discarded = PsdHierarchyChatCleanupExecution.TryDiscardFailedReplayStage(
+                        context,
+                        planToApply,
+                        out string discardError);
+                    if (discarded)
+                    {
+                        AppendMessage("system", "已移除未执行成功的重放阶段，避免下次 PSD 生成再次重放旧计划。");
+                    }
+                    else if (!string.IsNullOrEmpty(discardError))
+                    {
+                        AppendMessage("system", "未能清理失败计划的旧重放阶段：" + discardError);
+                    }
+
+                    applyFailure = result.message;
+                    queueFailureReanalysis = true;
+                }
             }
             catch (Exception exception)
             {
@@ -469,6 +495,31 @@ namespace PsdLayoutTool2
             {
                 QueueComponentExtractionFollowUp();
             }
+            else if (queueFailureReanalysis)
+            {
+                QueueFailedApplyReanalysis(applyFailure);
+            }
+        }
+
+        private void QueueFailedApplyReanalysis(string failure)
+        {
+            if (!PsdHierarchyChatContextBuilder.TryCreate(
+                    context.sourcePsdAssetPath,
+                    context.targetPrefabAssetPath,
+                    out PsdHierarchyChatContext refreshedContext,
+                    out string error))
+            {
+                AppendMessage("system", "更新失败后无法刷新当前 Prefab 快照：" + error);
+                return;
+            }
+
+            context = refreshedContext;
+            AppendMessage("system", "已刷新当前 Prefab 快照，正在基于失败原因生成新的待确认计划。");
+            rootVisualElement.schedule.Execute(() => SendMessage(
+                "The confirmed cleanup plan failed before the Prefab was saved. Re-analyze the current authoritative snapshot and return a complete replacement JSON plan. Do not repeat the failed extraction unchanged and do not request confirmation in this reply. Failure detail:\n" +
+                (failure ?? string.Empty),
+                false,
+                false)).ExecuteLater(1);
         }
 
         private void QueueComponentExtractionFollowUp()

@@ -183,6 +183,7 @@ namespace PsdLayoutTool2
                     throw new InvalidDataException("计划引用的层级快照已经失效，请重新分析当前 Prefab。");
                 }
 
+                NormalizeSingleStateVariantExtractions(plan, context);
                 ValidateAllExistingNodeReferences(plan, context);
                 ValidateRequiredComponentFamilyDecisions(plan, context);
                 ResolveExistingNodeReferences(plan, context);
@@ -274,21 +275,11 @@ namespace PsdLayoutTool2
 
             if (ResolveExecutionBackendForPlan(runnerPlanJson) == PsdHierarchyCleanupExecutionBackend.NativeUnity)
             {
-                try
-                {
-                    PsdHierarchyCleanupReplayProfile.Persist(
-                        context.sourcePsdAssetPath,
-                        context.targetPrefabAssetPath,
-                        runnerPlanJson);
-                }
-                catch (Exception exception)
-                {
-                    return new PsdHierarchyChatCleanupExecutionResult(
-                        false,
-                        "Prefab was not changed because the cleanup replay Profile could not be saved: " + exception.Message);
-                }
-
-                return PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
+                PsdHierarchyChatCleanupExecutionResult nativeResult =
+                    PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
+                return nativeResult.success
+                    ? PersistCompletedReplayStage(context, runnerPlanJson, nativeResult)
+                    : nativeResult;
             }
 
             string runnerPath = ResolveRunnerPath(context);
@@ -303,24 +294,6 @@ namespace PsdLayoutTool2
             {
                 Directory.CreateDirectory(temporaryDirectory);
                 File.WriteAllText(planPath, runnerPlanJson, new UTF8Encoding(false));
-                try
-                {
-                    // Every confirmed local operation is a replay stage. Later
-                    // extraction stages may address wrappers/renames created by
-                    // earlier hierarchy-only stages, so replacing or dropping
-                    // those stages would make regeneration nondeterministic.
-                    PsdHierarchyCleanupReplayProfile.Persist(
-                        context.sourcePsdAssetPath,
-                        context.targetPrefabAssetPath,
-                        runnerPlanJson);
-                }
-                catch (Exception exception)
-                {
-                    return new PsdHierarchyChatCleanupExecutionResult(
-                        false,
-                        "Prefab 未修改，因为整理重放 Profile 保存失败：" + exception.Message);
-                }
-
                 PsdHierarchyChatCleanupExecutionResult result =
                     await Task.Run(() => RunCleanup(runnerPath, context.projectRoot, planPath));
                 if (!result.success)
@@ -328,10 +301,10 @@ namespace PsdLayoutTool2
                     return new PsdHierarchyChatCleanupExecutionResult(
                         false,
                         result.message + Environment.NewLine +
-                        "整理意图已写入重放 Profile；下次从 PSD 生成时会从原始候选确定性恢复该阶段。");
+                        "本次失败计划没有写入重放 Profile；将基于当前 Prefab 重新分析并生成新计划。");
                 }
 
-                return result;
+                return PersistCompletedReplayStage(context, runnerPlanJson, result);
             }
             catch (Exception exception)
             {
@@ -343,6 +316,44 @@ namespace PsdLayoutTool2
                 {
                     File.Delete(planPath);
                 }
+            }
+        }
+
+        internal static bool TryDiscardFailedReplayStage(
+            PsdHierarchyChatContext context,
+            string planJson,
+            out string error)
+        {
+            error = string.Empty;
+            if (context == null || !TryPrepareRunnerPlan(context, planJson, out string runnerPlanJson, out error))
+                return false;
+
+            return PsdHierarchyCleanupReplayProfile.TryDiscardMatchingLastStage(
+                context.sourcePsdAssetPath,
+                context.targetPrefabAssetPath,
+                runnerPlanJson,
+                out error);
+        }
+
+        private static PsdHierarchyChatCleanupExecutionResult PersistCompletedReplayStage(
+            PsdHierarchyChatContext context,
+            string runnerPlanJson,
+            PsdHierarchyChatCleanupExecutionResult result)
+        {
+            try
+            {
+                PsdHierarchyCleanupReplayProfile.Persist(
+                    context.sourcePsdAssetPath,
+                    context.targetPrefabAssetPath,
+                    runnerPlanJson);
+                return result;
+            }
+            catch (Exception exception)
+            {
+                return new PsdHierarchyChatCleanupExecutionResult(
+                    true,
+                    result.message + Environment.NewLine +
+                    "Prefab 已更新，但整理重放 Profile 保存失败：" + exception.Message);
             }
         }
 
@@ -813,6 +824,117 @@ namespace PsdLayoutTool2
                     "重复组件候选校验失败：" + Environment.NewLine +
                     "- " + string.Join(Environment.NewLine + "- ", errors));
             }
+        }
+
+        private static void NormalizeSingleStateVariantExtractions(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            if (!(plan?["variantComponentExtractions"] is JArray variants) || variants.Count == 0)
+            {
+                return;
+            }
+
+            if (!(plan["componentExtractions"] is JArray componentExtractions))
+            {
+                throw new InvalidDataException("componentExtractions must be an array.");
+            }
+
+            JArray decisions = plan["componentFamilyDecisions"] as JArray;
+            for (int index = variants.Count - 1; index >= 0; index--)
+            {
+                if (!(variants[index] is JObject variant) ||
+                    !(variant["states"] is JArray states) ||
+                    states.Count != 1 ||
+                    !(states[0] is JObject state) ||
+                    !(variant["instances"] is JArray instances) ||
+                    instances.Count < 2)
+                {
+                    continue;
+                }
+
+                string stateId = state.Value<string>("id");
+                string extractionId = variant.Value<string>("id");
+                string template = variant.Value<string>("template");
+                if (string.IsNullOrWhiteSpace(stateId) ||
+                    string.IsNullOrWhiteSpace(extractionId) ||
+                    string.IsNullOrWhiteSpace(template) ||
+                    !instances.OfType<JObject>().All(instance =>
+                        string.Equals(instance.Value<string>("state"), stateId, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                JToken[] instanceSources = instances
+                    .OfType<JObject>()
+                    .Select(instance => instance["source"]?.DeepClone())
+                    .ToArray();
+                if (instanceSources.Length != instances.Count ||
+                    instanceSources.Any(source => source == null || source.Type != JTokenType.String) ||
+                    !instanceSources.Any(source => string.Equals(
+                        source.Value<string>(), template, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                PsdHierarchyComponentFamilyCandidate requiredCandidate = FindMatchingRequiredCandidate(
+                    context,
+                    instanceSources);
+                if (requiredCandidate != null &&
+                    !string.IsNullOrWhiteSpace(requiredCandidate.recommendedMode) &&
+                    !string.Equals(
+                        requiredCandidate.recommendedMode,
+                        "component",
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "variantComponentExtractions[" + index +
+                        "] has one visual state, but required candidate " +
+                        requiredCandidate.id + " requires " +
+                        requiredCandidate.recommendedMode +
+                        " because its source structures differ. Return a complete " +
+                        requiredCandidate.recommendedMode +
+                        " extraction for every required source instead of downgrading it to componentExtractions.");
+                }
+
+                componentExtractions.Add(new JObject
+                {
+                    ["id"] = extractionId,
+                    ["template"] = template,
+                    ["assetPath"] = variant["assetPath"]?.DeepClone(),
+                    ["instances"] = new JArray(instanceSources),
+                });
+                if (decisions != null)
+                {
+                    foreach (JObject decision in decisions.OfType<JObject>())
+                    {
+                        if (string.Equals(decision.Value<string>("extractionId"), extractionId, StringComparison.Ordinal) &&
+                            string.Equals(decision.Value<string>("mode"), "variant", StringComparison.Ordinal))
+                        {
+                            decision["mode"] = "component";
+                        }
+                    }
+                }
+
+                variants.RemoveAt(index);
+            }
+        }
+
+        private static PsdHierarchyComponentFamilyCandidate FindMatchingRequiredCandidate(
+            PsdHierarchyChatContext context,
+            IReadOnlyList<JToken> sources)
+        {
+            if (context?.componentFamilyCandidates == null || sources == null)
+            {
+                return null;
+            }
+
+            string[] sourceValues = sources
+                .Select(source => source?.Value<string>())
+                .ToArray();
+            return context.componentFamilyCandidates.FirstOrDefault(candidate =>
+                candidate.requiresExtraction &&
+                candidate.sources.SequenceEqual(sourceValues, StringComparer.Ordinal));
         }
 
         private static void NormalizeDirectChildVerificationNames(JObject plan)

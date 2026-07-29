@@ -407,6 +407,58 @@ namespace PsdLayoutTool2
             return profile;
         }
 
+        internal static bool TryDiscardMatchingLastStage(
+            string sourcePsdAssetPath,
+            string prefabPath,
+            string validatedRunnerPlanJson,
+            out string error)
+        {
+            error = string.Empty;
+            string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(sourcePsdAssetPath));
+            if (string.IsNullOrEmpty(sourceGuid))
+            {
+                error = "Source PSD GUID could not be resolved.";
+                return false;
+            }
+
+            string normalizedTarget = NormalizeAssetPath(prefabPath);
+            string profilePath = GetProfilePath(normalizedTarget, sourceGuid);
+            PsdHierarchyCleanupReplayProfile profile =
+                AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(profilePath);
+            if (profile == null) return false;
+
+            try
+            {
+                string expectedStage = ParseAndValidatePlan(validatedRunnerPlanJson, normalizedTarget)
+                    .ToString(Newtonsoft.Json.Formatting.None);
+                List<string> stages = profile.ReadStoredStages(normalizedTarget);
+                if (stages.Count == 0 || !string.Equals(
+                        stages[stages.Count - 1], expectedStage, StringComparison.Ordinal))
+                    return false;
+
+                stages.RemoveAt(stages.Count - 1);
+                if (stages.Count == 0)
+                {
+                    AssetDatabase.DeleteAsset(profilePath);
+                    return true;
+                }
+
+                profile.schemaVersion = CurrentSchemaVersion;
+                profile.runnerPlanJson = string.Empty;
+                profile.runnerPlanStages = stages;
+                EditorUtility.SetDirty(profile);
+                AssetDatabase.SaveAssetIfDirty(profile);
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is Newtonsoft.Json.JsonException ||
+                exception is InvalidDataException)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
         public static void Remove(string sourcePsdAssetPath, string prefabPath)
         {
             string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(sourcePsdAssetPath));

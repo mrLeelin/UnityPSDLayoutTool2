@@ -282,6 +282,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("node:<id>"));
             Assert.That(prompt, Does.Contain("stateSourceNames").And.Contain("direct children"));
             Assert.That(prompt, Does.Contain("commonSourceNames").And.Contain("derive the other"));
+            Assert.That(prompt, Does.Contain("Repeated unit structure differs for component extraction"));
             Assert.That(prompt, Does.Not.Contain("original pre-apply full path"));
         }
 

@@ -323,6 +323,125 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanDowngradesSingleStateVariantToComponentExtraction()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "variant",
+                    ["extractionId"] = "task_item",
+                    ["reason"] = "The plan selected one observed visual state.",
+                },
+            };
+            plan["variantComponentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "task_item",
+                    ["template"] = "node:n000003",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                    ["defaultState"] = "normal",
+                    ["states"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "normal",
+                            ["source"] = "node:n000003",
+                            ["name"] = "[State_Normal]",
+                        },
+                    },
+                    ["instances"] = new JArray
+                    {
+                        new JObject { ["source"] = "node:n000003", ["name"] = "[TaskItem_1]", ["state"] = "normal" },
+                        new JObject { ["source"] = "node:n000004", ["name"] = "[TaskItem_2]", ["state"] = "normal" },
+                        new JObject { ["source"] = "node:n000005", ["name"] = "[TaskItem_3]", ["state"] = "normal" },
+                    },
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["variantComponentExtractions"]?.Count(), Is.EqualTo(0));
+            Assert.That(runnerPlan["componentFamilyDecisions"][0]["mode"].Value<string>(), Is.EqualTo("component"));
+            Assert.That(runnerPlan["componentExtractions"][0]["id"].Value<string>(), Is.EqualTo("task_item"));
+            Assert.That(
+                runnerPlan["componentExtractions"][0]["instances"].Values<string>().ToArray(),
+                Is.EqualTo(new[]
+                {
+                    "Root/TaskList/[TaskItem_1]",
+                    "Root/TaskList/[TaskItem_2]",
+                    "Root/TaskList/[TaskItem_3]",
+                }));
+        }
+
+        [Test]
+        public void VersionTwoPlanRejectsSingleStateVariantForARequiredNonComponentFamily()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "variant",
+                    ["extractionId"] = "task_item",
+                    ["reason"] = "The plan selected one observed visual state.",
+                },
+            };
+            plan["variantComponentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "task_item",
+                    ["template"] = "node:n000003",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                    ["defaultState"] = "normal",
+                    ["states"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "normal",
+                            ["source"] = "node:n000003",
+                            ["name"] = "[State_Normal]",
+                        },
+                    },
+                    ["instances"] = new JArray
+                    {
+                        new JObject { ["source"] = "node:n000003", ["name"] = "[TaskItem_1]", ["state"] = "normal" },
+                        new JObject { ["source"] = "node:n000004", ["name"] = "[TaskItem_2]", ["state"] = "normal" },
+                        new JObject { ["source"] = "node:n000005", ["name"] = "[TaskItem_3]", ["state"] = "normal" },
+                    },
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext("variant"),
+                plan.ToString(),
+                out _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("has one visual state").And.Contain("requires variant"));
+        }
+
+        [Test]
         public void VersionTwoPlanCompletesMissingCommonAndSelectedStateMembersFromTheSnapshot()
         {
             var plan = JObject.Parse(
@@ -657,9 +776,12 @@ namespace PsdLayoutTool2.Tests
                 "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
         }
 
-        private static PsdHierarchyChatContext CreateRequiredCandidateContext()
+        private static PsdHierarchyChatContext CreateRequiredCandidateContext(string recommendedMode = null)
         {
-            const string snapshot =
+            string recommendedModeJson = string.IsNullOrWhiteSpace(recommendedMode)
+                ? string.Empty
+                : "\"recommendedMode\":\"" + recommendedMode + "\",";
+            string snapshot =
                 "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
                 "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
                 "{\"id\":\"n000001\",\"path\":\"Root\"}," +
@@ -669,6 +791,7 @@ namespace PsdLayoutTool2.Tests
                 "{\"id\":\"n000005\",\"path\":\"Root/TaskList/[TaskItem_3]\"}]," +
                 "\"componentFamilyCandidates\":[{" +
                 "\"id\":\"family_001\",\"suggestedAssetName\":\"TaskItem\"," +
+                recommendedModeJson +
                 "\"parent\":\"node:n000002\",\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\"]," +
                 "\"requiresExtraction\":true}]}";
             return new PsdHierarchyChatContext(

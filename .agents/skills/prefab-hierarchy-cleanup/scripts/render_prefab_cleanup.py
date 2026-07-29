@@ -345,7 +345,10 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
             fail(f"{label} must use [Common] and [States] containers")
         states = require_list(extraction.get("states"), f"{label}.states")
         if len(states) < 2:
-            fail(f"{label}.states must contain at least two visual states")
+            fail(
+                f"{label}.states must contain at least two visual states; use componentExtractions "
+                "when every visible instance has one observed state"
+            )
         state_ids: set[str] = set()
         state_sources: set[str] = set()
         for state_index, state in enumerate(states):
@@ -382,11 +385,16 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         for instance_index, instance in enumerate(instances):
             instance_label = f"{label}.instances[{instance_index}]"
             source = require_string(instance.get("source"), f"{instance_label}.source")
-            if source not in state_sources:
-                fail(f"{instance_label}.source must match one of the state sources")
+            if source.rsplit("/", 1)[0] != template_parent:
+                fail(f"{instance_label}.source must be a sibling of template")
             if source in instance_sources:
                 fail(f"duplicate variant component instance source: {source}")
+            if source not in state_sources:
+                for existing_path in extraction_instance_paths:
+                    if source == existing_path or source.startswith(existing_path + "/") or existing_path.startswith(source + "/"):
+                        fail(f"variant component instance overlaps another component extraction: {source} and {existing_path}")
             instance_sources.add(source)
+            extraction_instance_paths.add(source)
             name = require_string(instance.get("name"), f"{instance_label}.name")
             if not (name.startswith("[") and name.endswith("]")):
                 fail(f"{instance_label}.name must be a bracketed semantic item name")
@@ -396,8 +404,8 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
             state_id = require_string(instance.get("state"), f"{instance_label}.state")
             if state_id not in state_ids:
                 fail(f"{instance_label}.state must match a states[].id")
-        if instance_sources != state_sources:
-            fail(f"{label}.instances must replace every approved state source exactly once")
+        if not state_sources.issubset(instance_sources):
+            fail(f"{label}.instances must replace every state representative source exactly once")
 
     for index, extraction in enumerate(stateful_component_extractions):
         label = f"statefulComponentExtractions[{index}]"
@@ -962,16 +970,6 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
             ]
         )
 
-    for label, extractions in (
-        ("Component", plan["component_extractions"]),
-        ("State component", plan["state_component_extractions"]),
-        ("Variant component", plan["variant_component_extractions"]),
-        ("Stateful component", plan["stateful_component_extractions"]),
-    ):
-        for extraction in extractions:
-            asset = csharp(extraction["assetPath"])
-            lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({asset}) != null) throw new InvalidOperationException(\"{label} Prefab target already exists: \" + {asset});")
-
     lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
 
     def assert_path(operation: str, path: str) -> None:
@@ -1027,6 +1025,24 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
             assert_path(f"statefulComponentExtractions[{index}].states[{state_index}].source", state["source"])
         for instance_index, instance in enumerate(extraction["instances"]):
             assert_path(f"statefulComponentExtractions[{index}].instances[{instance_index}].source", instance["source"])
+
+    for index, extraction in enumerate(plan["component_extractions"]):
+        template_var = f"preflightComponentTemplate{index}"
+        signature_var = f"preflightComponentSignature{index}"
+        lines.extend(
+            [
+                f"    var {template_var} = FindByPath(root, {csharp(extraction['template'])}).transform;",
+                f"    var {signature_var} = StructureSignature({template_var});",
+            ]
+        )
+        for instance_index, instance in enumerate(extraction["instances"]):
+            instance_var = f"preflightComponentInstance{index}_{instance_index}"
+            lines.extend(
+                [
+                    f"    var {instance_var} = FindByPath(root, {csharp(instance)}).transform;",
+                    f"    if (!string.Equals({signature_var}, StructureSignature({instance_var}), StringComparison.Ordinal)) throw new InvalidOperationException(\"Repeated unit structure differs for component extraction: \" + {instance_var}.name);",
+                ]
+            )
 
     for index, wrapper in enumerate(plan["wrappers"]):
         if not wrapper["parent"].startswith("@"):
@@ -1511,7 +1527,6 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "",
         "GameObject CreateComponentPrefab(Transform template, string assetPath)",
         "{",
-        "    if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null) throw new InvalidOperationException(\"Component Prefab target already exists: \" + assetPath);",
         "    EnsureAssetFolder(assetPath); var clone = Object.Instantiate(template.gameObject);",
         "    try { clone.name = Path.GetFileNameWithoutExtension(assetPath); clone.transform.SetParent(null, false); var componentAsset = PrefabUtility.SaveAsPrefabAsset(clone, assetPath); if (componentAsset == null) throw new InvalidOperationException(\"Failed to save component Prefab: \" + assetPath); return componentAsset; }",
         "    finally { Object.DestroyImmediate(clone); }",
@@ -1554,7 +1569,6 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "",
         "GameObject CreateStateComponentPrefab(Transform template, Transform[] sources, string[] stateNames, int defaultStateIndex, string assetPath)",
         "{",
-        "    if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null) throw new InvalidOperationException(\"State component Prefab target already exists: \" + assetPath);",
         "    if (sources == null || stateNames == null || sources.Length != stateNames.Length || defaultStateIndex < 0 || defaultStateIndex >= sources.Length) throw new InvalidOperationException(\"Invalid state component extraction contract\");",
         "    var parent = template.parent; if (parent == null) throw new InvalidOperationException(\"Cannot extract states from the Prefab root\");",
         "    for (var index = 0; index < sources.Length; index++) if (sources[index].parent != parent) throw new InvalidOperationException(\"State sources must be direct siblings: \" + sources[index].name);",
@@ -1589,7 +1603,6 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "",
         "GameObject CreateVariantComponentPrefab(Transform template, Transform[] sources, string[] stateNames, int defaultStateIndex, string assetPath)",
         "{",
-        "    if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null) throw new InvalidOperationException(\"Variant component Prefab target already exists: \" + assetPath);",
         "    if (sources == null || stateNames == null || sources.Length != stateNames.Length || defaultStateIndex < 0 || defaultStateIndex >= sources.Length) throw new InvalidOperationException(\"Invalid variant component extraction contract\");",
         "    var parent = template.parent; if (parent == null) throw new InvalidOperationException(\"Cannot extract variants from the Prefab root\");",
         "    for (var index = 0; index < sources.Length; index++) if (sources[index].parent != parent) throw new InvalidOperationException(\"Variant sources must be direct siblings: \" + sources[index].name);",
@@ -1613,7 +1626,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    var beforeCorners = new List<Vector3[]>(); CaptureHierarchyCorners(source, beforeCorners);",
         "    var instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject; if (instance == null) throw new InvalidOperationException(\"Failed to instantiate variant component Prefab: \" + componentAsset.name);",
         "    var destination = instance.transform; destination.SetParent(parent, false); destination.SetSiblingIndex(siblingIndex); destination.name = instanceName; destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag; CopyTransformData(source, destination); destination.gameObject.SetActive(source.gameObject.activeSelf);",
-        "    var states = destination.Find(\"[States]\"); if (states == null) throw new InvalidOperationException(\"Variant component has no [States] container: \" + destination.name); for (var index = 0; index < states.childCount; index++) states.GetChild(index).gameObject.SetActive(states.GetChild(index).name == activeStateName); AssertVariantState(destination, activeStateName, destination.name);",
+        "    var states = destination.Find(\"[States]\"); if (states == null) throw new InvalidOperationException(\"Variant component has no [States] container: \" + destination.name); var activeState = states.Find(activeStateName); if (activeState == null) throw new InvalidOperationException(\"Variant component state was not found: \" + activeStateName); CopyStateRootData(source, activeState); for (var index = 0; index < states.childCount; index++) states.GetChild(index).gameObject.SetActive(states.GetChild(index).name == activeStateName); AssertVariantState(destination, activeStateName, destination.name);",
         "    Object.DestroyImmediate(source.gameObject); AssertHierarchyCorners(states.GetChild(FindStateIndex(states, activeStateName)), beforeCorners, destination.name); return instance;",
         "}",
         "",
@@ -1654,7 +1667,6 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "",
         "GameObject CreateStatefulComponentPrefab(Transform template, Transform commonSource, string[] commonSourceNames, string[] commonTargetNames, Transform[] stateSources, string[] stateNames, string[][] stateSourceNames, string[][] stateTargetNames, int defaultStateIndex, string assetPath)",
         "{",
-        "    if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null) throw new InvalidOperationException(\"Stateful component Prefab target already exists: \" + assetPath);",
         "    if (commonSourceNames.Length != commonTargetNames.Length || stateSources.Length != stateNames.Length || stateSources.Length != stateSourceNames.Length || stateSources.Length != stateTargetNames.Length || defaultStateIndex < 0 || defaultStateIndex >= stateSources.Length) throw new InvalidOperationException(\"Invalid stateful component extraction contract\");",
         "    var parent = template.parent; if (parent == null) throw new InvalidOperationException(\"Cannot extract a stateful component from the Prefab root\"); EnsureAssetFolder(assetPath);",
         "    var builder = new GameObject(Path.GetFileNameWithoutExtension(assetPath), typeof(RectTransform)); builder.transform.SetParent(parent, false); builder.transform.SetSiblingIndex(template.GetSiblingIndex()); builder.layer = template.gameObject.layer; builder.tag = template.gameObject.tag; CopyTransformData(template, builder.transform);",
@@ -1800,17 +1812,6 @@ def render(plan: dict[str, Any], mode: str) -> str:
                     f"AssertGuid({csharp(source)}, {csharp(rename['expectedGuid'])});",
                 ]
             )
-    for label, extractions in (
-        ("Component", plan["component_extractions"]),
-        ("State component", plan["state_component_extractions"]),
-        ("Variant component", plan["variant_component_extractions"]),
-        ("Stateful component", plan["stateful_component_extractions"]),
-    ):
-        for extraction in extractions:
-            asset = csharp(extraction["assetPath"])
-            if mode != "reapply":
-                lines.append(f"if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>({asset}) != null) throw new InvalidOperationException(\"{label} Prefab target already exists: \" + {asset});")
-
     lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
 
     if mode == "reapply":

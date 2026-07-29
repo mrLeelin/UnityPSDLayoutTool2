@@ -508,6 +508,44 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertLess(generated.index(move), generated.index(removal))
         self.assertNotIn("PrefabUtility.SaveAsPrefabAsset(root, outputPath)", generated)
 
+    def test_preflight_rejects_component_extractions_with_different_structures(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        sources = [
+            "RewardPanel/Root/Title",
+            "RewardPanel/Root/LegacyGroup",
+        ]
+        raw_plan["componentExtractions"] = [
+            {
+                "id": "title_or_legacy",
+                "template": sources[0],
+                "assetPath": "Assets/UI/Common/TitleOrLegacy.prefab",
+                "instances": sources,
+            }
+        ]
+        raw_plan["componentFamilyDecisions"] = [
+            {
+                "parent": "RewardPanel/Root",
+                "sources": sources,
+                "mode": "component",
+                "extractionId": "title_or_legacy",
+                "reason": "Preflight must validate structural compatibility.",
+            }
+        ]
+
+        generated = render(normalize_plan(raw_plan, "preflight"), "preflight")
+
+        self.assertIn(
+            'var preflightComponentTemplate0 = FindByPath(root, "RewardPanel/Root/Title").transform;',
+            generated,
+        )
+        self.assertIn(
+            "var preflightComponentSignature0 = StructureSignature(preflightComponentTemplate0);",
+            generated,
+        )
+        self.assertIn("Repeated unit structure differs for component extraction", generated)
+
     def test_verify_ignores_preexisting_missing_sprites_inside_nested_prefabs(self):
         raw_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
@@ -569,6 +607,52 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertEqual(len(normalized["stateful_component_extractions"]), 1)
         self.assertEqual(len(normalized["renames"]), 1)
 
+    def test_variant_component_allows_multiple_instances_of_one_state(self):
+        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
+        extraction = plan["variantComponentExtractions"][0]
+        extraction["states"] = [
+            extraction["states"][0],
+            extraction["states"][3],
+        ]
+        extraction["instances"] = [
+            extraction["instances"][0],
+            extraction["instances"][3],
+            extraction["instances"][4],
+        ]
+        extraction["instances"][2]["state"] = "locked"
+        plan["componentFamilyDecisions"] = [
+            {
+                "parent": extraction["template"].rsplit("/", 1)[0],
+                "sources": [instance["source"] for instance in extraction["instances"]],
+                "mode": "variant",
+                "extractionId": extraction["id"],
+                "reason": "Multiple visible rows reuse the locked visual state.",
+            }
+        ]
+
+        normalized = normalize_plan(plan, "verify")
+
+        self.assertEqual(
+            [instance["state"] for instance in normalized["variant_component_extractions"][0]["instances"]],
+            ["in_progress", "locked", "locked"],
+        )
+        self.assertIn("CopyStateRootData(source, activeState);", render(normalized, "apply"))
+        preflight = render(normalize_plan(plan, "preflight"), "preflight")
+        self.assertNotIn("Variant component Prefab target already exists", preflight)
+
+    def test_single_state_variant_directs_plan_repair_to_component_extraction(self):
+        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
+        extraction = plan["variantComponentExtractions"][0]
+        extraction["states"] = [extraction["states"][0]]
+        extraction["instances"] = [
+            extraction["instances"][0],
+            extraction["instances"][4],
+        ]
+        extraction["instances"][1]["state"] = "in_progress"
+
+        with self.assertRaisesRegex(ValueError, "use componentExtractions"):
+            normalize_plan(plan, "verify")
+
     def test_component_assets_are_limited_to_the_target_prefab_common_directory(self):
         plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
         plan["variantComponentExtractions"][0]["assetPath"] = "Assets/UI/Other/TaskItem.prefab"
@@ -620,10 +704,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
 
         self.assertIn("LoadExistingComponentPrefab", generated)
         self.assertIn("?? CreateVariantComponentPrefab(", generated)
-        self.assertEqual(
-            generated.count("Variant component Prefab target already exists"),
-            1,
-        )
+        self.assertNotIn("Variant component Prefab target already exists", generated)
         self.assertIn("Candidate source paths", generated)
         self.assertIn(
             'AssertPlanPath(root, "variantComponentExtractions[0].template"',
@@ -647,10 +728,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
 
         self.assertIn("LoadExistingComponentPrefab", generated)
         self.assertIn("?? CreateStatefulComponentPrefab(", generated)
-        self.assertEqual(
-            generated.count("Stateful component Prefab target already exists"),
-            1,
-        )
+        self.assertNotIn("Stateful component Prefab target already exists", generated)
         self.assertIn("ReplaceStatefulSourceWithComponent", generated)
 
     def test_reapply_temp_target_keeps_component_ownership_bound_to_original_prefab(self):

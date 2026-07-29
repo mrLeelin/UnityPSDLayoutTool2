@@ -262,7 +262,7 @@ Use `scripts/find_prefab_component_candidates.py` only to discover candidate fam
 }
 ```
 
-Use this only when all listed units have the same recursive component/child signature. Sprite, text, color, active state, and RectTransform differences become nested-instance overrides. The runner rejects source units with nested Prefabs or external serialized references, refuses to overwrite an existing component asset, preserves RectTransform world corners, and verifies every final instance points to `assetPath`.
+Use this only when all listed units have the same recursive component/child signature. Sprite, text, color, active state, and RectTransform differences become nested-instance overrides. The runner rejects source units with nested Prefabs or external serialized references, overwrites the declared component asset path with the current extraction, preserves RectTransform world corners, and verifies every final instance points to `assetPath`.
 
 The component asset root is named from the output filename (for example `ContentCard.prefab` has a `ContentCard` root); every original instance name is preserved as an instance override. Every component `assetPath` must be a PascalCase `.prefab` directly under the target Prefab's sibling `Common` directory. A plan may contain multiple families and extraction modes only when no source or instance paths overlap or nest.
 
@@ -290,11 +290,11 @@ Use `stateComponentExtractions` when several **direct sibling roots occupy one v
 
 All `states[].source` paths must be direct siblings of `template`; `template` must be one of them. The generated root uses the output file name, such as `InventoryItem`, and contains a `[States]` child with the state names in the supplied order. Only `defaultState` is active in the saved component; branch selection at runtime remains outside this skill.
 
-State branches may have different recursive signatures, but the sources must be visually overlapping and semantically mutually exclusive. Do not use this for simultaneously visible list entries. It rejects nested source Prefabs, external serialized references, source-path overlap, and existing output assets. A state extraction adds the component root and its `[States]` container to the final hierarchy, so update optional node/component counts in `verify` by two for each extracted state component.
+State branches may have different recursive signatures, but the sources must be visually overlapping and semantically mutually exclusive. Do not use this for simultaneously visible list entries. It rejects nested source Prefabs, external serialized references, or source-path overlap, and overwrites the declared output asset path with the current extraction. A state extraction adds the component root and its `[States]` container to the final hierarchy, so update optional node/component counts in `verify` by two for each extracted state component.
 
 ### Variant List Component Extraction
 
-Use `variantComponentExtractions` when several rows are visible at different list positions but represent one logical component in different visual states. It creates one shared Prefab and replaces every listed row with a nested instance. It does **not** collapse the rows into a single visible object.
+Use `variantComponentExtractions` only when several rows are visible at different list positions, represent one logical component, and have at least two distinct observed visual states. It creates one shared Prefab and replaces every listed row with a nested instance. It does **not** collapse the rows into a single visible object. When every visible row has one observed state, use `componentExtractions` instead; do not invent a second state to satisfy this schema.
 
 ```json
 {
@@ -321,7 +321,7 @@ Use `variantComponentExtractions` when several rows are visible at different lis
 }
 ```
 
-`states[].source` must be direct siblings of `template`; every state source must appear exactly once in `instances`. The output root has direct `[Common]` and `[States]` children. Move only members proven common to every state into `[Common]`; leave it empty if no such proof exists. The runner normalizes each state root to the component origin, preserves each instance's original list position, and activates exactly `instances[].state`. It can be combined with other non-overlapping extraction modes and hierarchy changes in the reviewed plan.
+`states[].source` must be direct siblings of `template` and contain one representative row for each unique visual state. `instances` must contain every visible repeated row exactly once; multiple instance rows may select the same state through `instances[].state`. Every state representative source must appear once in `instances`, but an instance source does not need to be a state representative. The output root has direct `[Common]` and `[States]` children. Move only members proven common to every state into `[Common]`; leave it empty if no such proof exists. The runner normalizes each state root to the component origin, preserves each instance's original list position, and activates exactly `instances[].state`. It can be combined with other non-overlapping extraction modes and hierarchy changes in the reviewed plan.
 
 ### Stateful Repeated Component Extraction
 
@@ -382,7 +382,7 @@ Use `statefulComponentExtractions` for repeated items that contain real shared c
 }
 ```
 
-`common.members` specifies the reusable `[Common]` contract. Each state specifies its branch members. A state may use an empty `members` array only for an explicit all-common state: every direct child of each instance using that state must be covered by `commonSourceNames`, and its `stateSourceNames` must be `[]`. An empty branch never permits an unmapped child or an invented placeholder state. Each instance otherwise maps all its direct members using `commonSourceNames` and `stateSourceNames`; the runner rejects an unmapped or duplicated child. During version 2 Unity-chat conversion only, an incomplete, duplicated, or invalid Common/State instance list can be rebuilt from the authoritative snapshot when the opposite list is a complete observed mapping or the instance is the reviewed source of that contract. The missing side is the ordered direct-child complement, and the final counts must exactly equal `common.members` plus the selected state's `members`. This conversion cannot invent a member or bypass a structural mismatch. Direct version 1 runner plans still require both complete explicit lists. Stateful extraction can be combined with other non-overlapping extraction modes and hierarchy operations. It rejects nested Prefabs, external references, incomplete member mapping, and an existing output asset.
+`common.members` specifies the reusable `[Common]` contract. Each state specifies its branch members. A state may use an empty `members` array only for an explicit all-common state: every direct child of each instance using that state must be covered by `commonSourceNames`, and its `stateSourceNames` must be `[]`. An empty branch never permits an unmapped child or an invented placeholder state. Each instance otherwise maps all its direct members using `commonSourceNames` and `stateSourceNames`; the runner rejects an unmapped or duplicated child. During version 2 Unity-chat conversion only, an incomplete, duplicated, or invalid Common/State instance list can be rebuilt from the authoritative snapshot when the opposite list is a complete observed mapping or the instance is the reviewed source of that contract. The missing side is the ordered direct-child complement, and the final counts must exactly equal `common.members` plus the selected state's `members`. This conversion cannot invent a member or bypass a structural mismatch. Direct version 1 runner plans still require both complete explicit lists. Stateful extraction can be combined with other non-overlapping extraction modes and hierarchy operations. It rejects nested Prefabs, external references, or incomplete member mapping, and overwrites the declared output asset path with the current extraction.
 
 ## Private Asset Renames
 
