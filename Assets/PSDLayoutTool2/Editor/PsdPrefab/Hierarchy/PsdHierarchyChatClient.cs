@@ -749,7 +749,9 @@ namespace PsdLayoutTool2
                         .Distinct(StringComparer.Ordinal)
                         .Count() == 1;
                     bool hasCommonDirectChild = HasCommonDirectChildName(group, childrenByParentId);
-                    bool requiresExtraction = identicalStructure || hasCommonDirectChild;
+                    // Repeated siblings are the reusable unit even when their states have
+                    // no direct child in common. Variant extraction owns that case.
+                    bool requiresExtraction = true;
                     string suggestedAssetName = ToSuggestedAssetName(groupEntry.Key);
                     string familyCandidateId = "family_" + candidateIndex.ToString("D3");
                     candidates.Add(new JObject

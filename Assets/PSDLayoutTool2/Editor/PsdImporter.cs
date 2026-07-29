@@ -1620,7 +1620,7 @@
             }
 
             PsdCommonAssetReference commonReference;
-            if (PsdCommonAssetNameParser.TryParse(layer.Name, out commonReference))
+            if (TryResolveCommonLayerReference(layer.Name, out commonReference))
             {
                 return;
             }
@@ -2736,7 +2736,7 @@
             }
 
             PsdCommonAssetReference commonReference;
-            if (PsdCommonAssetNameParser.TryParse(info.Layer.Name, out commonReference))
+            if (TryResolveCommonLayerReference(info.Layer.Name, out commonReference))
             {
                 return false;
             }
@@ -2917,7 +2917,7 @@
         private static string GetRuntimeObjectName(Layer layer)
         {
             PsdCommonAssetReference commonReference;
-            if (layer != null && PsdCommonAssetNameParser.TryParse(layer.Name, out commonReference))
+            if (layer != null && TryResolveCommonLayerReference(layer.Name, out commonReference))
             {
                 return MakeNameSafe(commonReference.Key);
             }
@@ -3691,10 +3691,17 @@
             }
 
             PsdCommonAssetReference commonReference;
-            if (PsdCommonAssetNameParser.TryParse(layer.Name, out commonReference))
+            if (TryResolveCommonLayerReference(layer.Name, out commonReference))
             {
                 ExportCommonLayer(layer, info, commonReference);
                 return;
+            }
+
+            if (commonReference != null)
+            {
+                PsdLogger.Warning(
+                    "Common asset was not resolved; importing the PSD layer normally: " +
+                    DescribeLayerForLog(layer));
             }
 
             if (info.IsFolderLike)
@@ -5496,15 +5503,16 @@
         }
 
         /// <summary>
-        /// Validates every Common_* import contract before generated output is
-        /// changed, so a missing public asset cannot create a partial prefab.
+        /// Validates every resolved Common_* import contract before generated
+        /// output is changed. Common-named layers without a catalog asset stay
+        /// ordinary PSD layers and are intentionally excluded from this check.
         /// </summary>
         private static void ValidateCommonLibraryReferences(IEnumerable<Layer> layers)
         {
             foreach (Layer layer in layers)
             {
                 PsdCommonAssetReference reference;
-                if (PsdCommonAssetNameParser.TryParse(layer.Name, out reference))
+                if (TryResolveCommonLayerReference(layer.Name, out reference))
                 {
                     if (reference.Kind == PsdCommonAssetKind.Texture && layer.Children.Count > 0)
                     {
@@ -5513,13 +5521,6 @@
                         throw new InvalidOperationException(
                             naming.texturePrefix + " layers must be leaf art layers. Invalid layer: " +
                             DescribeLayerForLog(layer));
-                    }
-
-                    UnityEngine.Object asset;
-                    string error;
-                    if (!PsdCommonAssetResolver.TryResolve(reference, out asset, out error))
-                    {
-                        throw new InvalidOperationException(error + " Layer: " + DescribeLayerForLog(layer));
                     }
 
                     // A common prefab replaces the complete PSD subtree; its
@@ -5536,6 +5537,37 @@
                     ValidateCommonLibraryReferences(layer.Children);
                 }
             }
+        }
+
+        internal static bool ShouldTreatLayerAsResolvedCommonAsset(
+            string layerName,
+            Func<PsdCommonAssetReference, bool> isReferenceResolvable,
+            out PsdCommonAssetReference reference)
+        {
+            reference = null;
+            if (!PsdCommonAssetNameParser.TryParse(layerName, out reference))
+            {
+                return false;
+            }
+
+            return isReferenceResolvable != null && isReferenceResolvable(reference);
+        }
+
+        private static bool TryResolveCommonLayerReference(
+            string layerName,
+            out PsdCommonAssetReference reference)
+        {
+            return ShouldTreatLayerAsResolvedCommonAsset(
+                layerName,
+                IsCommonAssetReferenceResolvable,
+                out reference);
+        }
+
+        private static bool IsCommonAssetReferenceResolvable(PsdCommonAssetReference reference)
+        {
+            UnityEngine.Object asset;
+            string error;
+            return PsdCommonAssetResolver.TryResolve(reference, out asset, out error);
         }
 
         /// <summary>

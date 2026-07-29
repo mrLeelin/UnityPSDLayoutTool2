@@ -192,11 +192,11 @@ namespace PsdLayoutTool2
             var backendField = new PopupField<string>("Backend", choices, selectedIndex)
             {
                 name = "psd-project-settings-cleanup-execution-backend",
-                tooltip = "Native Unity executes safe hierarchy-only plans without external CLI tools. Select uLoop only for component extraction or asset rename plans.",
+                tooltip = "Native Unity executes hierarchy-only plans directly. When a reviewed plan needs component extraction or asset renames, it automatically uses the optional uLoop runner for that plan.",
             };
             section.Add(new HelpBox(
                 selectedIndex == 0
-                    ? "Native Unity is active. It does not start uLoop; unsupported complex plans are stopped before Prefab changes."
+                    ? "Native Unity is active. Hierarchy-only plans run in Unity; component extraction and asset rename plans automatically use uLoop after their normal review and confirmation."
                     : "uLoop runner is active for this project. It supports component extraction and asset renames.",
                 selectedIndex == 0 ? HelpBoxMessageType.Info : HelpBoxMessageType.Warning));
             section.Add(backendField);

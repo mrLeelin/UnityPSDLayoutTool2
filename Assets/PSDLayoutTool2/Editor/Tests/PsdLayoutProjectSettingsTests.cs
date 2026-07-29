@@ -357,6 +357,31 @@ namespace PsdLayoutTool2.Tests
             }
         }
 
+        [Test]
+        public void ProjectSettingsWindowLoadsItsUiToolkitResources()
+        {
+            var settings = ScriptableObject.CreateInstance<PsdLayoutProjectSettings>();
+            PsdLayoutProjectSettingsWindow.Open(settings);
+            PsdLayoutProjectSettingsWindow[] windows =
+                Resources.FindObjectsOfTypeAll<PsdLayoutProjectSettingsWindow>();
+            PsdLayoutProjectSettingsWindow window = windows.Length == 0 ? null : windows[0];
+
+            try
+            {
+                Assert.That(window, Is.Not.Null);
+                Assert.That(window.rootVisualElement.Q("settings-host"), Is.Not.Null);
+            }
+            finally
+            {
+                if (window != null)
+                {
+                    window.Close();
+                }
+
+                Object.DestroyImmediate(settings);
+            }
+        }
+
         private static void EnsureAssetFolder(string assetPath)
         {
             string folder = System.IO.Path.GetDirectoryName(assetPath).Replace('\\', '/');

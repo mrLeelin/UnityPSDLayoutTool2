@@ -618,6 +618,25 @@ namespace PsdLayoutTool2.Tests
             Assert.That(error, Does.Contain("componentExtractions").And.Contain("uLoop"));
         }
 
+        [Test]
+        public void NativeBackendRequestsUloopOnlyForPlansWithComplexOperations()
+        {
+            var hierarchyOnlyPlan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+
+            Assert.That(
+                PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(hierarchyOnlyPlan.ToString()),
+                Is.False);
+
+            hierarchyOnlyPlan["variantComponentExtractions"] = new JArray
+            {
+                new JObject { ["id"] = "task_item" },
+            };
+
+            Assert.That(
+                PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(hierarchyOnlyPlan.ToString()),
+                Is.True);
+        }
+
         private static PsdHierarchyChatContext CreateNodeSnapshotContext()
         {
             const string snapshot =

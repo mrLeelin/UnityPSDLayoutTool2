@@ -73,7 +73,8 @@ namespace PsdLayoutTool2
         internal static PsdLayoutProjectSettings OpenInInspector()
         {
             PsdLayoutProjectSettings settings = GetOrCreate();
-            Selection.activeObject = settings;
+            //点击按钮的时候不需要Ping
+            //Selection.activeObject = settings;
             PsdLayoutProjectSettingsWindow.Open(settings);
             return settings;
         }

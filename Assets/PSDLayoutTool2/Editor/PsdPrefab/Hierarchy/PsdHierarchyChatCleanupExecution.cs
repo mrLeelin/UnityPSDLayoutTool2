@@ -223,7 +223,7 @@ namespace PsdLayoutTool2
                 return new PsdHierarchyChatCleanupExecutionResult(false, snapshotError);
             }
 
-            if (ResolveExecutionBackend() == PsdHierarchyCleanupExecutionBackend.NativeUnity)
+            if (ResolveExecutionBackendForPlan(runnerPlanJson) == PsdHierarchyCleanupExecutionBackend.NativeUnity)
             {
                 return PsdHierarchyNativeCleanupExecutor.Validate(runnerPlanJson);
             }
@@ -272,7 +272,7 @@ namespace PsdLayoutTool2
                 return new PsdHierarchyChatCleanupExecutionResult(false, snapshotError);
             }
 
-            if (ResolveExecutionBackend() == PsdHierarchyCleanupExecutionBackend.NativeUnity)
+            if (ResolveExecutionBackendForPlan(runnerPlanJson) == PsdHierarchyCleanupExecutionBackend.NativeUnity)
             {
                 try
                 {
@@ -402,7 +402,7 @@ namespace PsdLayoutTool2
             string projectRoot,
             string runnerPlanJson)
         {
-            if (ResolveExecutionBackend() == PsdHierarchyCleanupExecutionBackend.NativeUnity)
+            if (ResolveExecutionBackendForPlan(runnerPlanJson) == PsdHierarchyCleanupExecutionBackend.NativeUnity)
             {
                 return PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
             }
@@ -537,6 +537,15 @@ namespace PsdLayoutTool2
             }
 
             return settings.backend;
+        }
+
+        private static PsdHierarchyCleanupExecutionBackend ResolveExecutionBackendForPlan(string runnerPlanJson)
+        {
+            PsdHierarchyCleanupExecutionBackend selectedBackend = ResolveExecutionBackend();
+            return selectedBackend == PsdHierarchyCleanupExecutionBackend.NativeUnity &&
+                   PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(runnerPlanJson)
+                ? PsdHierarchyCleanupExecutionBackend.UloopRunner
+                : selectedBackend;
         }
 
         internal static string ExtractReviewText(string assistantReply)

@@ -3,6 +3,7 @@ namespace PsdLayoutTool2
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using UnityEditor;
     using UnityEngine;
     using UnityEngine.UIElements;
@@ -22,6 +23,8 @@ namespace PsdLayoutTool2
 
         private const string StyleSheetGuid = "18f53073502d4d7e89345f900b727c7e";
         private const int MaxAutomaticPlanRepairAttempts = 1;
+        private const string ComponentExtractionFollowUpPrompt =
+            "第一阶段层级整理已经应用。请基于当前最新快照继续完成第二阶段：为所有 requiresExtraction:true 的重复组件候选生成完整的 Prefab 抽取计划。不要重新组织已完成的层级；只处理这些组件候选并返回完整 JSON 计划。";
 
         private PsdHierarchyChatContext context;
         private readonly List<PsdHierarchyChatMessage> conversation = new List<PsdHierarchyChatMessage>();
@@ -440,6 +443,7 @@ namespace PsdLayoutTool2
 
             ShowThinkingIndicator("正在校验已确认方案，并通过 Unity Editor API 更新 Prefab...");
             SetSending(true, "正在更新 Prefab...");
+            bool queueComponentExtractionFollowUp = false;
             try
             {
                 PsdHierarchyChatCleanupExecutionResult result =
@@ -447,6 +451,7 @@ namespace PsdLayoutTool2
                 HideThinkingIndicator();
                 AppendMessage("system", result.message);
                 SetSending(false, result.success ? "更新完成" : "更新失败");
+                queueComponentExtractionFollowUp = result.success && IsHierarchyOnlyPlan(planToApply);
             }
             catch (Exception exception)
             {
@@ -458,6 +463,54 @@ namespace PsdLayoutTool2
             {
                 HideThinkingIndicator();
                 isSending = false;
+            }
+
+            if (queueComponentExtractionFollowUp)
+            {
+                QueueComponentExtractionFollowUp();
+            }
+        }
+
+        private void QueueComponentExtractionFollowUp()
+        {
+            if (!PsdHierarchyChatContextBuilder.TryCreate(
+                    context.sourcePsdAssetPath,
+                    context.targetPrefabAssetPath,
+                    out PsdHierarchyChatContext refreshedContext,
+                    out string error))
+            {
+                AppendMessage("system", "第一阶段已完成，但无法刷新第二阶段抽取快照：" + error);
+                return;
+            }
+
+            context = refreshedContext;
+            if (context.componentFamilyCandidates == null ||
+                !context.componentFamilyCandidates.Any(candidate => candidate.requiresExtraction))
+            {
+                return;
+            }
+
+            AppendMessage("system", "第一阶段已完成。正在基于最新层级自动生成重复组件的第二阶段抽取方案；该方案生成后仍需确认才会写入 Prefab。");
+            rootVisualElement.schedule.Execute(() => SendMessage(ComponentExtractionFollowUpPrompt, false)).ExecuteLater(1);
+        }
+
+        private static bool IsHierarchyOnlyPlan(string planJson)
+        {
+            try
+            {
+                var plan = Newtonsoft.Json.Linq.JObject.Parse(planJson ?? string.Empty);
+                return new[]
+                    {
+                        "componentExtractions",
+                        "stateComponentExtractions",
+                        "variantComponentExtractions",
+                        "statefulComponentExtractions",
+                    }
+                    .All(property => !(plan[property] is Newtonsoft.Json.Linq.JArray operations) || operations.Count == 0);
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return false;
             }
         }
 

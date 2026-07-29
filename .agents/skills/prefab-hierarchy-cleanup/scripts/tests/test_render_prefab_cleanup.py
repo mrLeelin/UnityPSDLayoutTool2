@@ -57,7 +57,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertEqual(candidate["recommendedMode"], "stateful")
         self.assertEqual(candidate["instances"], [card.path for card in cards])
 
-    def test_numbered_family_without_common_direct_members_is_optional_variant(self):
+    def test_numbered_family_without_common_direct_members_is_required_variant(self):
         root = self.make_candidate_node("Root", 0, 1)
         parent = self.make_candidate_node("Root/[TaskItems]", 0, 3)
         root.children.append(parent)
@@ -80,7 +80,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
 
         self.assertEqual(len(candidates), 1)
         candidate = candidates[0]
-        self.assertFalse(candidate["requiresExtraction"])
+        self.assertTrue(candidate["requiresExtraction"])
         self.assertEqual(candidate["recommendedMode"], "variant")
 
     def test_numbered_family_includes_matching_bare_index_sibling(self):

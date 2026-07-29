@@ -402,7 +402,9 @@ def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
                         if has_common_direct_child
                         else "variant"
                     ),
-                    "requiresExtraction": identical_structure or has_common_direct_child,
+                    # A repeated family is reusable even when its instances have no
+                    # direct child in common: that case is represented as a variant.
+                    "requiresExtraction": True,
                     "sizeDeltaOverridesAllowed": True,
                     "nestedPrefabInsideAnySource": False,
                     "requiresUnityExternalReferenceCheck": True,

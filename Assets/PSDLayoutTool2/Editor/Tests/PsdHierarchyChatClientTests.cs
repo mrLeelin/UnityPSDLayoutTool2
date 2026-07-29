@@ -52,7 +52,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void NumberedRepeatedUnitsWithoutCommonMembersAreNotMandatoryStatefulCandidates()
+        public void NumberedRepeatedUnitsWithoutCommonMembersAreMandatoryVariantCandidates()
         {
             var nodes = new JArray
             {
@@ -73,7 +73,7 @@ namespace PsdLayoutTool2.Tests
             JObject candidate = (JObject)candidates[0];
             Assert.That(candidate.Value<string>("id"), Is.EqualTo("family_001"));
             Assert.That(candidate.Value<string>("suggestedAssetName"), Is.EqualTo("TaskItem"));
-            Assert.That(candidate.Value<bool>("requiresExtraction"), Is.False);
+            Assert.That(candidate.Value<bool>("requiresExtraction"), Is.True);
             Assert.That(candidate.Value<string>("recommendedMode"), Is.EqualTo("variant"));
             Assert.That(candidate["parent"].Value<string>(), Is.EqualTo("node:n000002"));
             Assert.That(((JArray)candidate["sources"]).Values<string>(), Is.EqualTo(new[]

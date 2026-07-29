@@ -9,10 +9,8 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettingsWindow : EditorWindow
     {
-        private const string WindowUxmlPath =
-            "Assets/UnityPSDLayoutTool2/Assets/PSDLayoutTool2/Editor/Settings/PsdLayoutProjectSettingsWindow.uxml";
-        private const string WindowUssPath =
-            "Assets/UnityPSDLayoutTool2/Assets/PSDLayoutTool2/Editor/Settings/PsdLayoutProjectSettingsWindow.uss";
+        private const string WindowUxmlGuid = "dfb437fe04b840047a8caf32f8f042f2";
+        private const string WindowUssGuid = "7b18789d5bd973241823b9a388bc81aa";
 
         private PsdLayoutProjectSettings settings;
         private UnityEditor.Editor settingsEditor;
@@ -40,8 +38,10 @@ namespace PsdLayoutTool2
         {
             rootVisualElement.Clear();
 
-            VisualTreeAsset windowUxml = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(WindowUxmlPath);
-            StyleSheet windowUss = AssetDatabase.LoadAssetAtPath<StyleSheet>(WindowUssPath);
+            string windowUxmlPath = AssetDatabase.GUIDToAssetPath(WindowUxmlGuid);
+            string windowUssPath = AssetDatabase.GUIDToAssetPath(WindowUssGuid);
+            VisualTreeAsset windowUxml = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(windowUxmlPath);
+            StyleSheet windowUss = AssetDatabase.LoadAssetAtPath<StyleSheet>(windowUssPath);
             if (windowUxml == null || windowUss == null)
             {
                 rootVisualElement.Add(new HelpBox(

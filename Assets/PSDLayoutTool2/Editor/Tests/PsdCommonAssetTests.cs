@@ -55,6 +55,32 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void UnresolvedCommonPrefabLayerFallsBackToNormalImport()
+        {
+            bool usesCommonReplacement = PsdImporter.ShouldTreatLayerAsResolvedCommonAsset(
+                "Common_Prefab_PkGreenBtn_85",
+                candidate => false,
+                out PsdCommonAssetReference reference);
+
+            Assert.That(reference, Is.Not.Null);
+            Assert.That(reference.Kind, Is.EqualTo(PsdCommonAssetKind.Prefab));
+            Assert.That(reference.Key, Is.EqualTo("PkGreenBtn_85"));
+            Assert.That(usesCommonReplacement, Is.False);
+        }
+
+        [Test]
+        public void ResolvedCommonPrefabLayerKeepsCommonReplacement()
+        {
+            bool usesCommonReplacement = PsdImporter.ShouldTreatLayerAsResolvedCommonAsset(
+                "Common_Prefab_PkGreenBtn_85",
+                candidate => true,
+                out PsdCommonAssetReference reference);
+
+            Assert.That(reference, Is.Not.Null);
+            Assert.That(usesCommonReplacement, Is.True);
+        }
+
+        [Test]
         public void CatalogDeltaReplacesAnImportedAssetAtItsCurrentPath()
         {
             var existing = new[]

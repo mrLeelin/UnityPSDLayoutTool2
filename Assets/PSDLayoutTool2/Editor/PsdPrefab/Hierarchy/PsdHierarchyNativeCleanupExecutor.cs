@@ -3,6 +3,7 @@ namespace PsdLayoutTool2
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using Newtonsoft.Json.Linq;
     using UnityEditor;
     using UnityEngine;
@@ -10,8 +11,8 @@ namespace PsdLayoutTool2
     /// <summary>
     /// Executes the safe, hierarchy-only subset of a reviewed cleanup plan in
     /// the current Unity Editor process. Complex component and asset operations
-    /// remain an explicit opt-in to the uLoop runner until they have native
-    /// equivalents with the same replay guarantees.
+    /// are delegated to the uLoop runner only when a reviewed plan actually
+    /// needs those operations.
     /// </summary>
     internal static class PsdHierarchyNativeCleanupExecutor
     {
@@ -28,6 +29,22 @@ namespace PsdLayoutTool2
             "containmentFindings",
             "containmentResolutions",
         };
+
+        internal static bool RequiresUloopRunner(string planJson)
+        {
+            try
+            {
+                var plan = JObject.Parse(planJson ?? string.Empty);
+                return UloopOnlyProperties.Any(property =>
+                    plan[property] is JArray operations && operations.Count > 0);
+            }
+            catch
+            {
+                // Let the native preflight report malformed JSON with its existing
+                // diagnostic instead of treating it as a backend-routing decision.
+                return false;
+            }
+        }
 
         internal static bool TryValidatePlanCapabilities(string planJson, out string error)
         {
