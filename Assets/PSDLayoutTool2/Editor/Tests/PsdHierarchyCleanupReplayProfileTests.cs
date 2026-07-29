@@ -11,6 +11,7 @@ namespace PsdLayoutTool2.Tests
         private const string SourceGuid = "0123456789abcdef0123456789abcdef";
         private const string TestFolder =
             "Assets/PSDLayoutTool2Settings/ReplayProfileTests";
+        private const string SourceAssetPath = TestFolder + "/Source.asset";
         private const string TargetPath = TestFolder + "/ExampleView.prefab";
         private const string ComponentPath = TestFolder + "/Common/ReusableItem.prefab";
 
@@ -224,6 +225,82 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 PsdHierarchyCleanupReplayCoordinator.TargetGuidMatches(string.Empty, string.Empty),
                 Is.False);
+        }
+
+        [Test]
+        public void MissingTargetWithoutAReplayProfileKeepsNormalPrefabSaveEligible()
+        {
+            var source = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
+            AssetDatabase.CreateAsset(source, SourceAssetPath);
+            AssetDatabase.SaveAssetIfDirty(source);
+            AssetDatabase.DeleteAsset(TargetPath);
+            Assert.That(AssetDatabase.AssetPathToGUID(TargetPath), Is.Empty);
+
+            var candidate = new GameObject("GeneratedCandidate");
+            try
+            {
+                Assert.That(PsdHierarchyCleanupReplayCoordinator.TryStageAndSchedule(
+                    SourceAssetPath,
+                    TargetPath,
+                    candidate,
+                    out string error), Is.False);
+                Assert.That(error, Is.Empty);
+            }
+            finally
+            {
+                Object.DestroyImmediate(candidate);
+            }
+        }
+
+        [Test]
+        public void OrphanedReplayProfileCanBeArchivedWhenTargetIsMissing()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
+            EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
+            AssetDatabase.CreateAsset(profile, profilePath);
+            AssetDatabase.SaveAssetIfDirty(profile);
+            AssetDatabase.DeleteAsset(TargetPath);
+
+            Assert.That(PsdHierarchyCleanupReplayProfile.IsMissingTargetRecoveryEligible(
+                TargetPath, SourceGuid), Is.True);
+
+            string archivedProfilePath;
+            string failureReason;
+            bool archived = PsdHierarchyCleanupReplayProfile.TryArchiveForMissingTargetRecovery(
+                TargetPath, SourceGuid, out archivedProfilePath, out failureReason);
+            try
+            {
+                Assert.That(archived, Is.True, failureReason);
+                Assert.That(archivedProfilePath, Does.StartWith(
+                    "Assets/PSDLayoutTool2Settings/OrphanedHierarchyCleanupReplayProfiles/"));
+                Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(profilePath), Is.Null);
+                Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(archivedProfilePath),
+                    Is.Not.Null);
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(archivedProfilePath))
+                    AssetDatabase.DeleteAsset(archivedProfilePath);
+            }
+        }
+
+        [Test]
+        public void ReplayProfileCannotBeArchivedWhileItsTargetExists()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
+            EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
+            AssetDatabase.CreateAsset(profile, profilePath);
+            AssetDatabase.SaveAssetIfDirty(profile);
+
+            Assert.That(PsdHierarchyCleanupReplayProfile.IsMissingTargetRecoveryEligible(
+                TargetPath, SourceGuid), Is.False);
+            Assert.That(PsdHierarchyCleanupReplayProfile.TryArchiveForMissingTargetRecovery(
+                TargetPath, SourceGuid, out string archivedProfilePath, out string failureReason), Is.False);
+            Assert.That(archivedProfilePath, Is.Empty);
+            Assert.That(failureReason, Does.Contain("loadable Prefab target"));
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(profilePath), Is.Not.Null);
         }
 
         [Test]

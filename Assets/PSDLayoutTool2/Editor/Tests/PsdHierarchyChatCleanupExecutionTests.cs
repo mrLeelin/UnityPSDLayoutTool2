@@ -141,6 +141,41 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanStablyDeduplicatesDirectChildVerificationNames()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["verify"] = new JObject
+            {
+                ["directChildren"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["path"] = "Root/Group/[Item_1]",
+                        ["children"] = new JArray(
+                            "ItemFrame",
+                            "ItemIcon",
+                            "ItemFrame",
+                            "ItemLabel",
+                            "ItemIcon"),
+                    },
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateNodeSnapshotContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(
+                runnerPlan["verify"]["directChildren"][0]["children"].Values<string>(),
+                Is.EqualTo(new[] { "ItemFrame", "ItemIcon", "ItemLabel" }));
+        }
+
+        [Test]
         public void VersionTwoPlanRejectsAnUnknownNodeReference()
         {
             bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
@@ -510,6 +545,77 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 runnerPlan["moves"][0]["destination"].Value<string>(),
                 Is.EqualTo(parent.Value<string>("path")));
+        }
+
+        [Test]
+        public void NativeBackendAcceptsAHierarchyOnlyPlan()
+        {
+            Assert.That(
+                PsdHierarchyNativeCleanupExecutor.TryValidatePlanCapabilities(
+                    CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true),
+                    out string error),
+                Is.True,
+                error);
+        }
+
+        [Test]
+        public void NativeBackendAcceptsNodeCountVerification()
+        {
+            var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+            plan["verify"] = new JObject
+            {
+                ["nodes"] = 3,
+            };
+
+            Assert.That(
+                PsdHierarchyNativeCleanupExecutor.TryValidatePlanCapabilities(plan.ToString(), out string error),
+                Is.True,
+                error);
+        }
+
+        [Test]
+        public void NativeBackendAcceptsEmptyContainerRemovalPlans()
+        {
+            var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+            plan["emptyContainerRemovals"] = new JArray
+            {
+                new JObject { ["source"] = "Root/LegacyGroup" },
+            };
+
+            Assert.That(
+                PsdHierarchyNativeCleanupExecutor.TryValidatePlanCapabilities(plan.ToString(), out string error),
+                Is.True,
+                error);
+        }
+
+        [Test]
+        public void NativeBackendAcceptsNonBlockingVerificationFields()
+        {
+            var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+            plan["verify"] = new JObject
+            {
+                ["requireEnglishNames"] = true,
+            };
+
+            Assert.That(
+                PsdHierarchyNativeCleanupExecutor.TryValidatePlanCapabilities(plan.ToString(), out string error),
+                Is.True,
+                error);
+        }
+
+        [Test]
+        public void NativeBackendRejectsComponentExtractionBeforePrefabWrites()
+        {
+            var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+            plan["componentExtractions"] = new JArray
+            {
+                new JObject { ["id"] = "item" },
+            };
+
+            Assert.That(
+                PsdHierarchyNativeCleanupExecutor.TryValidatePlanCapabilities(plan.ToString(), out string error),
+                Is.False);
+            Assert.That(error, Does.Contain("componentExtractions").And.Contain("uLoop"));
         }
 
         private static PsdHierarchyChatContext CreateNodeSnapshotContext()

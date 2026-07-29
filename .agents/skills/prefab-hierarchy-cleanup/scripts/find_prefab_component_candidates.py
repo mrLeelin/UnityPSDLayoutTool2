@@ -26,6 +26,10 @@ RECT_RE = re.compile(
     r"anchoredPosition=(?P<position_x>-?[\d.]+),(?P<position_y>-?[\d.]+),"
     r"sizeDelta=(?P<size_x>-?[\d.]+),(?P<size_y>-?[\d.]+)"
 )
+TRANSFORM_RE = re.compile(
+    r"scale=(?P<scale_x>-?[\d.]+),(?P<scale_y>-?[\d.]+),(?P<scale_z>-?[\d.]+),"
+    r"rotation=(?P<rotation_x>-?[\d.]+),(?P<rotation_y>-?[\d.]+),(?P<rotation_z>-?[\d.]+)"
+)
 TRAILING_STATE_INDEX_RE = re.compile(r"(?:[_\s-]*(?:\d+|[一二三四五六七八九十]+))$")
 
 
@@ -46,6 +50,7 @@ class Node:
     pivot: tuple[float, float] | None
     anchored_position: tuple[float, float] | None
     size_delta: tuple[float, float] | None
+    axis_aligned: bool = True
     children: list["Node"] = field(default_factory=list)
 
     @property
@@ -63,6 +68,21 @@ def parse_snapshot(text: str) -> Node:
         path = match.group("path")
         rect_match = RECT_RE.search(raw_line)
         rect_values = rect_match.groupdict() if rect_match is not None else {}
+        transform_match = TRANSFORM_RE.search(raw_line)
+        axis_aligned = True
+        if transform_match is not None:
+            transform_values = transform_match.groupdict()
+            axis_aligned = all(
+                abs(float(transform_values[f"scale_{axis}"]) - 1.0) <= 0.001
+                for axis in ("x", "y", "z")
+            ) and all(
+                min(
+                    abs(float(transform_values[f"rotation_{axis}"])),
+                    abs(360.0 - float(transform_values[f"rotation_{axis}"])),
+                )
+                <= 0.001
+                for axis in ("x", "y", "z")
+            )
 
         def vector(prefix: str) -> tuple[float, float] | None:
             x = rect_values.get(prefix + "_x")
@@ -81,6 +101,7 @@ def parse_snapshot(text: str) -> Node:
             pivot=vector("pivot"),
             anchored_position=vector("position"),
             size_delta=vector("size"),
+            axis_aligned=axis_aligned,
         )
         nodes[path] = node
         if "/" not in path:
@@ -136,6 +157,74 @@ def base_name(node: Node) -> str:
 
 def approximately_equal(left: tuple[float, float], right: tuple[float, float], tolerance: float = 0.001) -> bool:
     return abs(left[0] - right[0]) <= tolerance and abs(left[1] - right[1]) <= tolerance
+
+
+def world_rects(root: Node) -> dict[str, tuple[float, float, float, float]]:
+    """Derive root-space rects for every node that carries complete rect data.
+
+    Snapshots only report local anchor data, so containment across different
+    containers has to be reconstructed here. Nodes with a non-identity scale or
+    any rotation are skipped rather than approximated: an axis-aligned rect
+    would be wrong for them, and a wrong rect is worse than a missing one.
+    """
+    result: dict[str, tuple[float, float, float, float]] = {}
+
+    def walk(node: Node, parent_rect: tuple[float, float, float, float] | None) -> None:
+        if node.size_delta is None or node.pivot is None or not node.axis_aligned:
+            return
+        if parent_rect is None:
+            width, height = node.size_delta
+            pivot_x, pivot_y = node.pivot
+            rect = (
+                -width * pivot_x,
+                -height * pivot_y,
+                width * (1 - pivot_x),
+                height * (1 - pivot_y),
+            )
+        else:
+            if node.anchor_min is None or node.anchor_max is None or node.anchored_position is None:
+                return
+            parent_min_x, parent_min_y, parent_max_x, parent_max_y = parent_rect
+            parent_width = parent_max_x - parent_min_x
+            parent_height = parent_max_y - parent_min_y
+            anchor_min_x = parent_min_x + parent_width * node.anchor_min[0]
+            anchor_min_y = parent_min_y + parent_height * node.anchor_min[1]
+            anchor_max_x = parent_min_x + parent_width * node.anchor_max[0]
+            anchor_max_y = parent_min_y + parent_height * node.anchor_max[1]
+            width = (anchor_max_x - anchor_min_x) + node.size_delta[0]
+            height = (anchor_max_y - anchor_min_y) + node.size_delta[1]
+            pivot_x, pivot_y = node.pivot
+            center_x = anchor_min_x + (anchor_max_x - anchor_min_x) * pivot_x + node.anchored_position[0]
+            center_y = anchor_min_y + (anchor_max_y - anchor_min_y) * pivot_y + node.anchored_position[1]
+            rect = (
+                center_x - width * pivot_x,
+                center_y - height * pivot_y,
+                center_x + width * (1 - pivot_x),
+                center_y + height * (1 - pivot_y),
+            )
+        result[node.path] = rect
+        for child in node.children:
+            walk(child, rect)
+
+    walk(root, None)
+    return result
+
+
+def rect_area(rect: tuple[float, float, float, float]) -> float:
+    return max(0.0, rect[2] - rect[0]) * max(0.0, rect[3] - rect[1])
+
+
+def contains_rect(
+    outer: tuple[float, float, float, float],
+    inner: tuple[float, float, float, float],
+    tolerance: float = 1.0,
+) -> bool:
+    return (
+        inner[0] >= outer[0] - tolerance
+        and inner[1] >= outer[1] - tolerance
+        and inner[2] <= outer[2] + tolerance
+        and inner[3] <= outer[3] + tolerance
+    )
 
 
 def state_overlap(left: Node, right: Node) -> float | None:
@@ -242,6 +331,24 @@ def matching_rect_transform_frame(nodes: list[Node]) -> bool:
     )
 
 
+def structure_subsets(ordered: list[Node]) -> list[list[Node]]:
+    """Split one numbered family into buckets that share a recursive signature.
+
+    A family such as [StoryCard_1..3] where only _3 carries an extra child is
+    otherwise reported as a single non-identical family, so the two members that
+    ARE identical can never be proposed as a plain component extraction. Bucketing
+    by signature keeps the whole family visible while making each internally
+    consistent subset reachable on its own.
+    """
+    buckets: dict[tuple, list[Node]] = {}
+    for node in ordered:
+        buckets.setdefault(signature(node), []).append(node)
+    return sorted(
+        (sorted(bucket, key=lambda item: item.sibling) for bucket in buckets.values()),
+        key=lambda bucket: bucket[0].sibling,
+    )
+
+
 def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
     """Find high-confidence numbered families, including stateful size variants."""
     result: list[dict[str, object]] = []
@@ -301,7 +408,187 @@ def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
                     "requiresUnityExternalReferenceCheck": True,
                 }
             )
+            family_candidate_id = f"numbered_{candidate_index:03d}"
             candidate_index += 1
+            if identical_structure:
+                continue
+            for subset_index, subset in enumerate(structure_subsets(ordered), start=1):
+                result.append(
+                    {
+                        "id": f"{family_candidate_id}_s{subset_index:02d}",
+                        "kind": "numbered_structure_subset",
+                        "parent": parent.path,
+                        "familyCandidateId": family_candidate_id,
+                        "suggestedAssetName": family_name,
+                        "template": subset[0].path,
+                        "instances": [node.path for node in subset],
+                        "instanceCount": len(subset),
+                        "recommendedMode": "component" if len(subset) >= 2 else "skip",
+                        # A subset and its family compete for the same sources, so the
+                        # subset is an obligation only when the family itself is not.
+                        "requiresExtraction": len(subset) >= 2
+                        and not (identical_structure or has_common_direct_child),
+                        "evidence": (
+                            "only member of "
+                            + family_name
+                            + " with this recursive signature, so it has no peer to "
+                            "share a component Prefab with"
+                            if len(subset) < 2
+                            else "members of "
+                            + family_name
+                            + " that share one recursive signature; use this narrower "
+                            "boundary when the family-level extraction does not apply"
+                        ),
+                        "sizeDeltaOverridesAllowed": True,
+                        "nestedPrefabInsideAnySource": False,
+                        "requiresUnityExternalReferenceCheck": True,
+                    }
+                )
+    return result
+
+
+def containment_misgroupings(
+    root: Node,
+    candidates: list[dict[str, object]],
+    area_ratio_threshold: float = 0.25,
+) -> list[dict[str, object]]:
+    """Report numbered families that geometrically live inside another family.
+
+    SKILL.md already says repeated labels and counters belong to the nearest
+    repeated visual unit when geometry and cardinality line up, but nothing
+    enforced it, so a family grouped by name prefix could sit in a sibling
+    container that does not visually own it. This reports the case that is
+    unambiguous: equal member counts, every member fully inside a distinct
+    member of the other family, and a small area ratio.
+    """
+    rects = world_rects(root)
+    families = [
+        candidate
+        for candidate in candidates
+        if candidate.get("kind") == "numbered_repeated"
+    ]
+    result: list[dict[str, object]] = []
+    for inner in families:
+        inner_paths = list(inner["instances"])
+        inner_rects = [rects.get(path) for path in inner_paths]
+        if any(rect is None for rect in inner_rects):
+            continue
+        for outer in families:
+            if outer is inner or outer["parent"] == inner["parent"]:
+                continue
+            outer_paths = list(outer["instances"])
+            if len(outer_paths) != len(inner_paths):
+                continue
+            outer_rects = [rects.get(path) for path in outer_paths]
+            if any(rect is None for rect in outer_rects):
+                continue
+            if any(
+                inner_path == outer_path or inner_path.startswith(outer_path + "/")
+                for inner_path in inner_paths
+                for outer_path in outer_paths
+            ):
+                continue
+
+            mapping: dict[str, str] = {}
+            used_outer: set[str] = set()
+            ratios: list[float] = []
+            for inner_path, inner_rect in zip(inner_paths, inner_rects):
+                matches = [
+                    outer_path
+                    for outer_path, outer_rect in zip(outer_paths, outer_rects)
+                    if outer_path not in used_outer and contains_rect(outer_rect, inner_rect)
+                ]
+                if len(matches) != 1:
+                    mapping = {}
+                    break
+                outer_path = matches[0]
+                outer_area = rect_area(outer_rects[outer_paths.index(outer_path)])
+                if outer_area <= 0.0:
+                    mapping = {}
+                    break
+                ratio = rect_area(inner_rect) / outer_area
+                if ratio > area_ratio_threshold:
+                    mapping = {}
+                    break
+                used_outer.add(outer_path)
+                mapping[inner_path] = outer_path
+                ratios.append(ratio)
+
+            if len(mapping) != len(inner_paths):
+                continue
+            result.append(
+                {
+                    "innerCandidateId": inner["id"],
+                    "outerCandidateId": outer["id"],
+                    "innerParent": inner["parent"],
+                    "outerParent": outer["parent"],
+                    "memberCount": len(inner_paths),
+                    "maxAreaRatio": round(max(ratios), 4),
+                    "mapping": [
+                        {"source": inner_path, "containedBy": mapping[inner_path]}
+                        for inner_path in inner_paths
+                    ],
+                    "severity": "blocking",
+                    "reason": (
+                        "every member is fully inside a distinct member of "
+                        f"{outer['suggestedAssetName']} with equal cardinality and a small "
+                        "area ratio, so it belongs to that repeated unit rather than to "
+                        f"{inner['parent']}"
+                    ),
+                }
+            )
+    return result
+
+
+def sparse_containers(
+    root: Node,
+    fill_ratio_threshold: float = 0.2,
+    minimum_children: int = 2,
+) -> list[dict[str, object]]:
+    """Report containers whose children fill very little of their own rect.
+
+    Advisory only. A container grouped by name prefix rather than by layout
+    tends to be far larger than the union of what it holds, which is a hint
+    that its members were placed by naming instead of by geometry.
+    """
+    rects = world_rects(root)
+    result: list[dict[str, object]] = []
+    for node in visit(root):
+        if node.depth == 0 or len(node.children) < minimum_children:
+            continue
+        own = rects.get(node.path)
+        if own is None:
+            continue
+        own_area = rect_area(own)
+        if own_area <= 0.0:
+            continue
+        child_rects = [rects.get(child.path) for child in node.children]
+        if any(rect is None for rect in child_rects):
+            continue
+        union = (
+            min(rect[0] for rect in child_rects),
+            min(rect[1] for rect in child_rects),
+            max(rect[2] for rect in child_rects),
+            max(rect[3] for rect in child_rects),
+        )
+        covered = sum(rect_area(rect) for rect in child_rects)
+        fill_ratio = covered / own_area
+        if fill_ratio >= fill_ratio_threshold:
+            continue
+        result.append(
+            {
+                "parent": node.path,
+                "childCount": len(node.children),
+                "fillRatio": round(fill_ratio, 4),
+                "unionCoversOwnRect": contains_rect(union, own),
+                "severity": "warning",
+                "reason": (
+                    "direct children cover a small fraction of this container's rect, "
+                    "which suggests the container was formed by name prefix rather than "
+                    "by layout; confirm each child belongs here"
+                ),
+            }
+        )
     return result
 
 
@@ -388,6 +675,8 @@ def main() -> int:
         "candidates": components,
         "componentCandidates": components,
         "stateCandidates": states,
+        "containmentMisgroupings": containment_misgroupings(root, components),
+        "sparseContainers": sparse_containers(root),
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

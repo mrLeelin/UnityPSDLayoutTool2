@@ -614,9 +614,9 @@
         }
 
         /// <summary>
-        /// Explicitly resets an orphaned hierarchy Profile after its recorded
-        /// Prefab and the currently configured output Prefab are both missing.
-        /// The Profile is archived first; the subsequent import is a new
+        /// Explicitly resets orphaned hierarchy or cleanup replay Profiles after
+        /// their target and the currently configured output Prefab are both missing.
+        /// The Profiles are archived first; the subsequent import is a new
         /// generation and must be organized again before incremental updates.
         /// </summary>
         public static bool TryRecoverMissingHierarchyProfileAndGeneratePrefab(
@@ -649,18 +649,41 @@
                 return false;
             }
 
-            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
-            if (!PsdPrefabTransactionalSave.TryArchiveProfileForMissingTargetRecovery(
-                    profilePath, prefabPath, out archivedProfilePath, out failureReason))
+            string hierarchyProfilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
+            bool recoverHierarchyProfile = PsdPrefabTransactionalSave.IsMissingTargetRecoveryEligible(
+                hierarchyProfilePath, prefabPath);
+            bool recoverCleanupReplayProfile =
+                PsdHierarchyCleanupReplayProfile.IsMissingTargetRecoveryEligible(prefabPath, sourceGuid);
+            if (!recoverHierarchyProfile && !recoverCleanupReplayProfile)
+            {
+                failureReason = "No orphaned hierarchy or cleanup replay Profile exists for this PSD.";
                 return false;
+            }
+
+            var archivedProfilePaths = new List<string>();
+            string archivedHierarchyProfilePath = string.Empty;
+            if (recoverHierarchyProfile &&
+                !PsdPrefabTransactionalSave.TryArchiveProfileForMissingTargetRecovery(
+                    hierarchyProfilePath, prefabPath, out archivedHierarchyProfilePath, out failureReason))
+                return false;
+            if (recoverHierarchyProfile) archivedProfilePaths.Add(archivedHierarchyProfilePath);
+
+            string archivedCleanupReplayProfilePath = string.Empty;
+            if (recoverCleanupReplayProfile &&
+                !PsdHierarchyCleanupReplayProfile.TryArchiveForMissingTargetRecovery(
+                    prefabPath, sourceGuid, out archivedCleanupReplayProfilePath, out failureReason))
+                return false;
+            if (recoverCleanupReplayProfile) archivedProfilePaths.Add(archivedCleanupReplayProfilePath);
+
+            archivedProfilePath = string.Join("\n", archivedProfilePaths);
 
             GeneratePrefab(normalizedAssetPath);
             return true;
         }
 
         /// <summary>
-        /// Checks whether the active Profile for a PSD is an orphan whose
-        /// recorded target and configured output Prefab are both absent.
+        /// Checks whether an active hierarchy or cleanup replay Profile is an
+        /// orphan whose recorded target and configured output Prefab are absent.
         /// </summary>
         public static bool IsMissingHierarchyProfileRecoveryEligible(string assetPath)
         {
@@ -680,8 +703,11 @@
                     out prefabPath))
                 return false;
 
-            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
-            return PsdPrefabTransactionalSave.IsMissingTargetRecoveryEligible(profilePath, prefabPath);
+            string hierarchyProfilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
+            return PsdPrefabTransactionalSave.IsMissingTargetRecoveryEligible(
+                       hierarchyProfilePath, prefabPath) ||
+                   PsdHierarchyCleanupReplayProfile.IsMissingTargetRecoveryEligible(
+                       prefabPath, sourceGuid);
         }
 
         /// <summary>
@@ -979,18 +1005,6 @@
 
                 currentPath = outputFullPath;
                 currentOutputRootDirectory = outputFullPath;
-                PsdLogger.Step("Create output directories under: " + currentPath);
-                Directory.CreateDirectory(currentPath);
-                Directory.CreateDirectory(Path.Combine(
-                    GetFullProjectPath(), textureRelativePath.Replace('/', Path.DirectorySeparatorChar)));
-                if (CreatePrefab)
-                {
-                    Directory.CreateDirectory(Path.Combine(
-                        GetFullProjectPath(), atlasRelativePath.Replace('/', Path.DirectorySeparatorChar)));
-                    Directory.CreateDirectory(Path.Combine(
-                        GetFullProjectPath(), prefabFolderRelativePath.Replace('/', Path.DirectorySeparatorChar)));
-                }
-
                 if (effectiveSelection != null)
                 {
                     effectiveSelection.PathsToDelete.ExceptWith(protectedCleanupReplayPaths);
@@ -1004,6 +1018,15 @@
                         outputFullPath,
                         textureRelativePath,
                         conflictAnalysis.PrefabFullPath);
+                }
+
+                PsdLogger.Step("Create output directories under: " + currentPath);
+                EnsureAssetFolderExists(outputRelativePath);
+                EnsureAssetFolderExists(textureRelativePath);
+                if (CreatePrefab)
+                {
+                    EnsureAssetFolderExists(atlasRelativePath);
+                    EnsureAssetFolderExists(prefabFolderRelativePath);
                 }
 
                 rootPsdGameObject = null;
@@ -1314,6 +1337,35 @@
         {
             useExplicitUpdateSelection = false;
             selectedUpdatePathsForCurrentImport = null;
+        }
+
+        /// <summary>
+        /// Creates an Assets-relative directory chain through AssetDatabase so
+        /// subsequent Prefab and SpriteAtlas writes see a registered folder.
+        /// </summary>
+        private static void EnsureAssetFolderExists(string assetFolderPath)
+        {
+            string normalizedPath = (assetFolderPath ?? string.Empty).Trim()
+                .Replace('\\', '/')
+                .TrimEnd('/');
+            if (string.IsNullOrEmpty(normalizedPath) ||
+                (!string.Equals(normalizedPath, "Assets", StringComparison.Ordinal) &&
+                 !normalizedPath.StartsWith("Assets/", StringComparison.Ordinal)))
+                throw new ArgumentException("Output folder must be an Assets-relative path.", nameof(assetFolderPath));
+
+            string[] segments = normalizedPath.Split('/');
+            string current = segments[0];
+            for (int index = 1; index < segments.Length; index++)
+            {
+                string next = current + "/" + segments[index];
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    string guid = AssetDatabase.CreateFolder(current, segments[index]);
+                    if (string.IsNullOrEmpty(guid) || !AssetDatabase.IsValidFolder(next))
+                        throw new InvalidOperationException("Could not create output folder: " + next);
+                }
+                current = next;
+            }
         }
 
         /// <summary>

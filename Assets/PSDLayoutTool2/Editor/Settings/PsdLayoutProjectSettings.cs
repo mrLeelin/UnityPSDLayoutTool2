@@ -380,7 +380,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 5;
+        private const int CurrentSettingsVersion = 6;
 
         [SerializeField]
         private int settingsVersion;
@@ -397,6 +397,10 @@ namespace PsdLayoutTool2
 
         [SerializeField]
         private PsdHierarchyAiSettings hierarchyAiSettings = new PsdHierarchyAiSettings();
+
+        [SerializeField]
+        private PsdHierarchyCleanupExecutionSettings hierarchyCleanupExecutionSettings =
+            new PsdHierarchyCleanupExecutionSettings();
 
         [SerializeField]
         private PsdCommonAssetPreviewSettings previewServerSettings = new PsdCommonAssetPreviewSettings();
@@ -444,6 +448,21 @@ namespace PsdLayoutTool2
         {
             EnsureData();
             if (hierarchyAiSettings.Set(provider, connectionMode, customEndpoint, customModel))
+            {
+                SaveAsset();
+            }
+        }
+
+        internal PsdHierarchyCleanupExecutionSettingsSnapshot ResolveHierarchyCleanupExecutionSettings()
+        {
+            EnsureData();
+            return hierarchyCleanupExecutionSettings.Resolve();
+        }
+
+        internal void SetHierarchyCleanupExecutionBackend(PsdHierarchyCleanupExecutionBackend backend)
+        {
+            EnsureData();
+            if (hierarchyCleanupExecutionSettings.Set(backend))
             {
                 SaveAsset();
             }
@@ -565,6 +584,12 @@ namespace PsdLayoutTool2
             if (hierarchyAiSettings == null)
             {
                 hierarchyAiSettings = new PsdHierarchyAiSettings();
+                changed = true;
+            }
+
+            if (hierarchyCleanupExecutionSettings == null)
+            {
+                hierarchyCleanupExecutionSettings = new PsdHierarchyCleanupExecutionSettings();
                 changed = true;
             }
 

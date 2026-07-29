@@ -2,6 +2,7 @@ namespace PsdLayoutTool2.Tests
 {
     using System.Reflection;
     using NUnit.Framework;
+    using UnityEditor;
     using UnityEngine;
 
     public sealed class PsdImporterDefaultTests
@@ -57,6 +58,37 @@ namespace PsdLayoutTool2.Tests
                 targetCoordinatesProperty.SetValue(null, previousTargetCoordinates);
                 PsdImporter.PixelsToUnits = previousPixelsToUnits;
             }
+        }
+    }
+
+    public sealed class PsdImporterOutputFolderTests
+    {
+        private const string RootPath =
+            "Assets/PSDLayoutTool2/Editor/Tests/PsdImporterOutputFolderTemp";
+        private const string PrefabFolderPath = RootPath + "/Generated/Prefab";
+
+        [SetUp]
+        public void SetUp()
+        {
+            AssetDatabase.DeleteAsset(RootPath);
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            AssetDatabase.DeleteAsset(RootPath);
+        }
+
+        [Test]
+        public void EnsureAssetFolderExistsRegistersNestedPrefabFolder()
+        {
+            const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
+            MethodInfo ensureFolder = typeof(PsdImporter).GetMethod("EnsureAssetFolderExists", flags);
+
+            Assert.That(ensureFolder, Is.Not.Null);
+            ensureFolder.Invoke(null, new object[] { PrefabFolderPath });
+
+            Assert.That(AssetDatabase.IsValidFolder(PrefabFolderPath), Is.True);
         }
     }
 }

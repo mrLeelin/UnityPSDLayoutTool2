@@ -55,16 +55,16 @@ namespace PsdLayoutTool2
                 error = "Source PSD GUID could not be resolved for cleanup replay.";
                 return false;
             }
+            PsdHierarchyCleanupReplayProfile profile =
+                PsdHierarchyCleanupReplayProfile.Load(targetPath, sourceGuid);
+            if (profile == null) return false;
+
             string expectedTargetGuid = AssetDatabase.AssetPathToGUID(targetPath);
             if (string.IsNullOrEmpty(expectedTargetGuid))
             {
                 error = "Target Prefab GUID could not be resolved for cleanup replay.";
                 return false;
             }
-
-            PsdHierarchyCleanupReplayProfile profile =
-                PsdHierarchyCleanupReplayProfile.Load(targetPath, sourceGuid);
-            if (profile == null) return false;
             if (generatedCandidate == null)
             {
                 error = "Generated Prefab candidate is missing for cleanup replay.";

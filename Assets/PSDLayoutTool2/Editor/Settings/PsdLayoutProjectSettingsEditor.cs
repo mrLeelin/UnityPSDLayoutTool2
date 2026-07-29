@@ -13,6 +13,7 @@ namespace PsdLayoutTool2
     internal sealed class PsdLayoutProjectSettingsEditor : UnityEditor.Editor
     {
         private const string AiSectionName = "psd-project-settings-ai";
+        private const string CleanupExecutionSectionName = "psd-project-settings-cleanup-execution";
         private const string OutputSectionName = "psd-project-settings-output";
         private const string FontSectionName = "psd-project-settings-font";
         private const string CommonNamingSectionName = "psd-project-settings-common-naming";
@@ -44,6 +45,7 @@ namespace PsdLayoutTool2
             root.style.borderBottomRightRadius = 6;
             root.Add(CreateHeader());
             root.Add(CreateHierarchyAiSection(settings));
+            root.Add(CreateHierarchyCleanupExecutionSection(settings));
             root.Add(CreateOutputSection(settings));
             root.Add(CreateFontSection(settings));
             root.Add(CreatePreviewServerSection(settings));
@@ -174,6 +176,39 @@ namespace PsdLayoutTool2
                 tooltip = tooltip,
             };
             return field;
+        }
+
+        private static VisualElement CreateHierarchyCleanupExecutionSection(PsdLayoutProjectSettings settings)
+        {
+            VisualElement section = CreateSection(CleanupExecutionSectionName, "Prefab Cleanup Execution");
+            PsdHierarchyCleanupExecutionSettingsSnapshot snapshot =
+                settings.ResolveHierarchyCleanupExecutionSettings();
+            var choices = new List<string>
+            {
+                "Native Unity (default)",
+                "uLoop runner (optional)",
+            };
+            int selectedIndex = snapshot.backend == PsdHierarchyCleanupExecutionBackend.UloopRunner ? 1 : 0;
+            var backendField = new PopupField<string>("Backend", choices, selectedIndex)
+            {
+                name = "psd-project-settings-cleanup-execution-backend",
+                tooltip = "Native Unity executes safe hierarchy-only plans without external CLI tools. Select uLoop only for component extraction or asset rename plans.",
+            };
+            section.Add(new HelpBox(
+                selectedIndex == 0
+                    ? "Native Unity is active. It does not start uLoop; unsupported complex plans are stopped before Prefab changes."
+                    : "uLoop runner is active for this project. It supports component extraction and asset renames.",
+                selectedIndex == 0 ? HelpBoxMessageType.Info : HelpBoxMessageType.Warning));
+            section.Add(backendField);
+            backendField.RegisterValueChangedCallback(change =>
+            {
+                settings.SetHierarchyCleanupExecutionBackend(
+                    choices.IndexOf(change.newValue) == 1
+                        ? PsdHierarchyCleanupExecutionBackend.UloopRunner
+                        : PsdHierarchyCleanupExecutionBackend.NativeUnity);
+                ReplaceSection(section, CreateHierarchyCleanupExecutionSection(settings));
+            });
+            return section;
         }
 
         private static VisualElement CreateHierarchyAiSection(PsdLayoutProjectSettings settings)

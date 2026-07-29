@@ -28,6 +28,7 @@ The Unity AI hierarchy chat window accepts only version 2 plans. The window supp
   "textureRenames": [],
   "spriteAtlasRenames": [],
   "componentFamilyDecisions": [],
+  "containmentResolutions": [],
   "componentExtractions": [],
   "stateComponentExtractions": [],
   "variantComponentExtractions": [],
@@ -45,13 +46,14 @@ The following fields are existing-node references and therefore must use `node:<
 - `tightBounds[].target`, with `@wrapperId` allowed;
 - `componentFamilyDecisions[].parent` and every entry in `sources`;
 - `componentExtractions[].template` and every entry in `instances`;
-- every `template`, `common.source`, `states[].source`, and `instances[].source` in state, variant, and stateful extraction contracts.
+- every `template`, `common.source`, `states[].source`, and `instances[].source` in state, variant, and stateful extraction contracts;
+- `containmentResolutions[].source`, and `newParent` unless it is an `@wrapperId`.
 
 Asset paths, output verification paths, new semantic names, state/member names, and wrapper IDs are not node references. Keep their existing schema below. Never invent a node ID, derive one from a GameObject name, or emit a raw pre-apply hierarchy path in an existing-node reference. If the intended object cannot be proven from the supplied snapshot, omit that operation and report the ambiguity in the review.
 
 Every plan-owned ID, including `wrappers[].id`, extraction `id`, and state `id`, must be lower snake_case matching `^[a-z][a-z0-9_]*$`. Use `screen_root`, `day_markers`, or `task_in_progress`; do not use PascalCase, kebab-case, spaces, brackets, or an `@` prefix. The `@` prefix is reserved only for a reference to an earlier wrapper, for example `@screen_root`.
 
-Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, then writes a temporary internal version 1 runner plan. The AI must never emit that internal plan.
+Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, writes the forced snapshot candidates into `requiredComponentFamilies` and the measured geometry into `containmentFindings`, then writes a temporary internal version 1 runner plan. The AI must never emit that internal plan, and must never emit `requiredComponentFamilies` or `containmentFindings` itself. It does emit `containmentResolutions`, one entry per finding member.
 
 ## Internal Runner Plan (Version 1)
 
@@ -76,6 +78,7 @@ The bundled PowerShell/Python runner remains compatible with existing version 1 
   "textureRenames": [],
   "spriteAtlasRenames": [],
   "componentFamilyDecisions": [],
+  "containmentResolutions": [],
   "componentExtractions": [],
   "stateComponentExtractions": [],
   "variantComponentExtractions": [],
@@ -171,6 +174,66 @@ Use inner-to-outer order so nested groups are tightened before their parents. Wh
 ```
 
 `parent`, at least two unique `sources`, `mode`, and `reason` are required. Use `skip` only with a concrete preservation or safety reason. For every other mode, `extractionId` must reference exactly one matching extraction, and the declared sources must cover that extraction exactly. Valid modes are `component`, `state`, `variant`, and `stateful`. In a Unity AI chat plan, every snapshot candidate decision must also include its exact `candidateId`; a candidate marked `requiresExtraction: true` cannot use `skip`.
+
+A numbered family whose members do not all share one recursive structure additionally reports `numbered_structure_subset` candidates, one per structure bucket, each carrying `familyCandidateId` and the members of that bucket. A bucket with at least two members recommends `component`; a lone member recommends `skip` and sets `requiresExtraction: false`, because it has no peer to share a Prefab with. A subset is never forced while its own family is already required, since both claim the same sources and only one decision may own a source. Choosing both boundaries for the same member fails validation with a duplicate-instance error.
+
+### Required Component Families
+
+`requiredComponentFamilies` carries the authoritative snapshot candidates that must be extracted, so the shared plan validator enforces the same rule the Unity AI chat path enforces. Unity writes this field automatically when it converts a version 2 node-ID plan into a version 1 runner plan: every chat candidate with `requiresExtraction: true` becomes one entry whose `parent` and `sources` are the resolved hierarchy paths. Do not author it by hand.
+
+```json
+{
+  "requiredComponentFamilies": [
+    {
+      "candidateId": "family_001",
+      "parent": "InventoryPanelView/[ItemList]",
+      "sources": [
+        "InventoryPanelView/[ItemList]/[Item_03]",
+        "InventoryPanelView/[ItemList]/[Item_04]"
+      ]
+    }
+  ]
+}
+```
+
+Each entry needs `candidateId`, `parent`, and at least two unique `sources`. Every entry must be matched by one `componentFamilyDecisions` entry covering the same source set in any order and declaring the same `parent`; that decision may not use `skip`. The field is absent when the snapshot has no forced candidate, and legacy v1 plans without it stay runnable.
+
+### Geometry Containment
+
+`containmentFindings` carries measured geometry, not opinion: Unity compares the world rectangles of two numbered repeated families and records the cases where every member of the inner family sits fully inside a distinct member of the outer family. Unity writes this field when it converts a version 2 node-ID plan into a version 1 runner plan, exactly like `requiredComponentFamilies`. Do not author it by hand.
+
+```json
+{
+  "containmentFindings": [
+    {
+      "innerCandidateId": "family_002",
+      "innerParent": "ParkourView/[TopCoinDisplays]",
+      "mapping": [
+        {
+          "source": "ParkourView/[TopCoinDisplays]/[CoinDisplay_1]",
+          "containedBy": "ParkourView/[MainContent]/[StoryCard_1]"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Every finding member needs one `containmentResolutions` entry, which the AI does author:
+
+```json
+{
+  "containmentResolutions": [
+    {
+      "source": "ParkourView/[TopCoinDisplays]/[CoinDisplay_1]",
+      "mode": "reparent",
+      "newParent": "ParkourView/[MainContent]/[StoryCard_1]"
+    }
+  ]
+}
+```
+
+`source` and `mode` are always required. `mode: "reparent"` needs `newParent`, which must be the containing node from the finding or a descendant of it, or a wrapper reference starting with `@`. `mode: "keep"` needs `evidence` of at least 20 characters explaining why a node that is geometrically inside a repeated unit still belongs outside it — a shared layout group, an animation driver, or a region-scale background are the usual reasons. Duplicate sources are rejected. A finding with no resolution is a hard error, so a plan cannot silently repeat the misgrouping the measurement found.
 
 ## Optional Component Extraction
 

@@ -136,6 +136,18 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         raw.get("componentFamilyDecisions", []),
         "componentFamilyDecisions",
     )
+    required_component_families = require_list(
+        raw.get("requiredComponentFamilies", []),
+        "requiredComponentFamilies",
+    )
+    containment_findings = require_list(
+        raw.get("containmentFindings", []),
+        "containmentFindings",
+    )
+    containment_resolutions = require_list(
+        raw.get("containmentResolutions", []),
+        "containmentResolutions",
+    )
 
     if (texture_renames or atlas_renames) and not VIEW_RE.match(prefab_name):
         fail("prefabName must be PascalCase and end with View when renaming private assets")
@@ -523,6 +535,10 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
                 extraction_sources_by_id[extraction_id] = {
                     state["source"] for state in extraction["states"]
                 }
+            elif decision_mode == "component":
+                # componentExtractions[].instances is a plain path list, unlike the
+                # variant and stateful shapes which wrap each instance in an object.
+                extraction_sources_by_id[extraction_id] = set(extraction["instances"])
             else:
                 extraction_sources_by_id[extraction_id] = {
                     instance["source"] for instance in extraction["instances"]
@@ -560,6 +576,91 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
 
     if declared_extraction_ids != set(extraction_decision_modes):
         fail("componentFamilyDecisions must declare every component extraction exactly once")
+
+    decisions_by_sources = {
+        frozenset(decision["sources"]): decision
+        for decision in component_family_decisions
+    }
+    for index, family in enumerate(required_component_families):
+        label = f"requiredComponentFamilies[{index}]"
+        candidate_id = require_string(family.get("candidateId"), f"{label}.candidateId")
+        require_string(family.get("parent"), f"{label}.parent")
+        family_sources = family.get("sources")
+        if not isinstance(family_sources, list) or not all(
+            isinstance(source, str) and source for source in family_sources
+        ):
+            fail(f"{label}.sources must be a non-empty string list")
+        if len(family_sources) < 2 or len(family_sources) != len(set(family_sources)):
+            fail(f"{label}.sources must contain at least two unique paths")
+        decision = decisions_by_sources.get(frozenset(family_sources))
+        if decision is None:
+            fail(
+                f"componentFamilyDecisions must cover required candidate {candidate_id} "
+                f"with exactly these sources: {', '.join(family_sources)}"
+            )
+        if decision["parent"] != family["parent"]:
+            fail(f"{label}.parent must match its componentFamilyDecisions entry")
+        if decision["mode"] == "skip":
+            fail(
+                f"required candidate {candidate_id} must not use skip; extract it as a "
+                "component, state, variant, or stateful Prefab"
+            )
+
+    resolutions_by_source: dict[str, dict] = {}
+    for index, resolution in enumerate(containment_resolutions):
+        label = f"containmentResolutions[{index}]"
+        if not isinstance(resolution, dict):
+            fail(f"{label} must be an object")
+        source = require_string(resolution.get("source"), f"{label}.source")
+        mode = require_string(resolution.get("mode"), f"{label}.mode")
+        if mode not in {"reparent", "keep"}:
+            fail(f"{label}.mode must be reparent or keep")
+        if mode == "reparent":
+            require_string(resolution.get("newParent"), f"{label}.newParent")
+        else:
+            evidence = require_string(resolution.get("evidence"), f"{label}.evidence")
+            if len(evidence) < 20:
+                fail(
+                    f"{label}.evidence must explain in at least 20 characters why the "
+                    "geometrically contained node stays outside its container"
+                )
+        if source in resolutions_by_source:
+            fail(f"duplicate containmentResolutions source: {source}")
+        resolutions_by_source[source] = resolution
+
+    for index, finding in enumerate(containment_findings):
+        label = f"containmentFindings[{index}]"
+        if not isinstance(finding, dict):
+            fail(f"{label} must be an object")
+        require_string(finding.get("innerParent"), f"{label}.innerParent")
+        mapping = require_list(finding.get("mapping"), f"{label}.mapping")
+        if not mapping:
+            fail(f"{label}.mapping must not be empty")
+        for pair_index, pair in enumerate(mapping):
+            pair_label = f"{label}.mapping[{pair_index}]"
+            if not isinstance(pair, dict):
+                fail(f"{pair_label} must be an object")
+            source = require_string(pair.get("source"), f"{pair_label}.source")
+            contained_by = require_string(
+                pair.get("containedBy"), f"{pair_label}.containedBy"
+            )
+            resolution = resolutions_by_source.get(source)
+            if resolution is None:
+                fail(
+                    f"containmentResolutions must resolve {source}; it is geometrically "
+                    f"inside {contained_by} but grouped elsewhere. Reparent it into the "
+                    "repeated unit that contains it, or record evidence for keeping it out"
+                )
+            if (
+                resolution["mode"] == "reparent"
+                and resolution["newParent"] != contained_by
+                and not resolution["newParent"].startswith("@")
+                and not resolution["newParent"].startswith(contained_by + "/")
+            ):
+                fail(
+                    f"containmentResolutions for {source} reparents to "
+                    f"{resolution['newParent']}, which is not inside {contained_by}"
+                )
 
     asset_targets: set[str] = set()
     for label, entries in (("textureRenames", texture_renames), ("spriteAtlasRenames", atlas_renames)):
@@ -636,6 +737,9 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         "variant_component_extractions": variant_component_extractions,
         "stateful_component_extractions": stateful_component_extractions,
         "component_family_decisions": component_family_decisions,
+        "required_component_families": required_component_families,
+        "containment_findings": containment_findings,
+        "containment_resolutions": containment_resolutions,
         "verify": verify,
     }
 
@@ -892,6 +996,16 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
         assert_path(f"componentFamilyDecisions[{index}].parent", decision["parent"])
         for source_index, source in enumerate(decision["sources"]):
             assert_path(f"componentFamilyDecisions[{index}].sources[{source_index}]", source)
+    for index, family in enumerate(plan["required_component_families"]):
+        assert_path(f"requiredComponentFamilies[{index}].parent", family["parent"])
+        for source_index, source in enumerate(family["sources"]):
+            assert_path(f"requiredComponentFamilies[{index}].sources[{source_index}]", source)
+    for index, finding in enumerate(plan["containment_findings"]):
+        assert_path(f"containmentFindings[{index}].innerParent", finding["innerParent"])
+        for pair_index, pair in enumerate(finding["mapping"]):
+            label = f"containmentFindings[{index}].mapping[{pair_index}]"
+            assert_path(f"{label}.source", pair["source"])
+            assert_path(f"{label}.containedBy", pair["containedBy"])
     for index, extraction in enumerate(plan["component_extractions"]):
         assert_path(f"componentExtractions[{index}].template", extraction["template"])
         for instance_index, instance in enumerate(extraction["instances"]):
@@ -1731,6 +1845,23 @@ def render(plan: dict[str, Any], mode: str) -> str:
                     f"componentFamilyDecisions[{index}].sources[{source_index}]",
                     source,
                 )
+        for index, family in enumerate(plan["required_component_families"]):
+            assert_replay_path(
+                f"requiredComponentFamilies[{index}].parent", family["parent"]
+            )
+            for source_index, source in enumerate(family["sources"]):
+                assert_replay_path(
+                    f"requiredComponentFamilies[{index}].sources[{source_index}]",
+                    source,
+                )
+        for index, finding in enumerate(plan["containment_findings"]):
+            assert_replay_path(
+                f"containmentFindings[{index}].innerParent", finding["innerParent"]
+            )
+            for pair_index, pair in enumerate(finding["mapping"]):
+                label = f"containmentFindings[{index}].mapping[{pair_index}]"
+                assert_replay_path(f"{label}.source", pair["source"])
+                assert_replay_path(f"{label}.containedBy", pair["containedBy"])
         for index, extraction in enumerate(plan["component_extractions"]):
             assert_replay_path(
                 f"componentExtractions[{index}].template", extraction["template"]

@@ -30,6 +30,27 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void CleanupExecutionDefaultsToNativeUnityBackend()
+        {
+            var settings = new PsdHierarchyCleanupExecutionSettings();
+
+            Assert.That(
+                settings.Resolve().backend,
+                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity));
+        }
+
+        [Test]
+        public void CleanupExecutionCanSelectTheOptionalUloopBackend()
+        {
+            var settings = new PsdHierarchyCleanupExecutionSettings();
+
+            Assert.That(settings.Set(PsdHierarchyCleanupExecutionBackend.UloopRunner), Is.True);
+            Assert.That(
+                settings.Resolve().backend,
+                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.UloopRunner));
+        }
+
+        [Test]
         public void CustomApiRequiresHttpEndpoint()
         {
             var settings = new PsdHierarchyAiSettings();

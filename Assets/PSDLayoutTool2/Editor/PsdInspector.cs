@@ -358,8 +358,8 @@
             if (!EditorUtility.DisplayDialog(
                     "PSDLayoutTool2",
                     Localize(
-                        "这会归档失效的层级 Profile，并以全新 Prefab 重新生成。旧 Profile 的本地 ID 不能用于新 Prefab；完成后需要再次整理层级。是否继续？",
-                        "This archives the orphaned hierarchy Profile and regenerates a new Prefab. The old Profile local IDs cannot be reused; organize the new Prefab again afterward. Continue?"),
+                        "这会归档失效的层级或清理回放 Profile，并以全新 Prefab 重新生成。旧 Profile 的本地 ID 不能用于新 Prefab；完成后需要再次整理层级。是否继续？",
+                        "This archives the orphaned hierarchy or cleanup replay Profile and regenerates a new Prefab. The old Profile local IDs cannot be reused; organize the new Prefab again afterward. Continue?"),
                     Localize("归档并重新生成", "Archive and Regenerate"),
                     Localize("取消", "Cancel")))
                 return;

@@ -20,6 +20,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:UloopExitCode = 0
 
 function Get-UnityFailureDetail {
     param([string]$Result)
@@ -43,6 +44,29 @@ function Get-UnityFailureDetail {
     }
 
     return $detail
+}
+
+function Invoke-UloopCli {
+    param([string[]]$Arguments)
+
+    $uloopCommand = Get-Command -Name "uloop.cmd", "uloop" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -ne $uloopCommand) {
+        & $uloopCommand.Source @Arguments
+        $script:UloopExitCode = $LASTEXITCODE
+        return
+    }
+
+    # Unity inherits the system Node.js path, but a global uloop-cli install is optional.
+    # Use the package-matched CLI through npx when the global command is unavailable.
+    $npxCommand = Get-Command -Name "npx.cmd", "npx" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $npxCommand) {
+        throw "Neither uloop nor npx is available. Install Node.js or the uloop-cli package."
+    }
+
+    & $npxCommand.Source --yes "uloop-cli@2.2.0" @Arguments
+    $script:UloopExitCode = $LASTEXITCODE
 }
 
 $selectedModes = 0
@@ -111,12 +135,13 @@ try {
         throw "Plan validation/rendering failed with exit code $LASTEXITCODE."
     }
 
+    $cliArguments = @("execute-dynamic-code", "--project-path", $ProjectPath)
     if ($CompileOnly) {
-        $unityResult = & uloop execute-dynamic-code --project-path $ProjectPath --compile-only true --code-file $payloadPath 2>&1 | Out-String
-    } else {
-        $unityResult = & uloop execute-dynamic-code --project-path $ProjectPath --code-file $payloadPath 2>&1 | Out-String
+        $cliArguments += @("--compile-only", "true")
     }
-    $unityExitCode = $LASTEXITCODE
+    $cliArguments += @("--code-file", $payloadPath)
+    $unityResult = Invoke-UloopCli -Arguments $cliArguments 2>&1 | Out-String
+    $unityExitCode = $script:UloopExitCode
     if ($unityExitCode -ne 0 -or $unityResult -notmatch '"Success"\s*:\s*true') {
         $failureDetail = Get-UnityFailureDetail $unityResult
         if ($ApplyConfirmed) {

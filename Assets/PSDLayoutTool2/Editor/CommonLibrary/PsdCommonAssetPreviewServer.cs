@@ -16,23 +16,38 @@ namespace PsdLayoutTool2
     {
         [Serializable] private sealed class Payload { public List<Item> items = new List<Item>(); }
         [Serializable] private sealed class Item { public string id; public string kind; public string name; public string path; public string size; public string image; }
+        /// <summary>Cached PNG for one asset, kept across refreshes until its source file changes.</summary>
+        private sealed class PreviewEntry { public byte[] png; public string version; }
+        private const int MaxEncodesPerRefresh = 8;
+        private const double RefreshIntervalSeconds = 2d;
         private static readonly object Sync = new object();
         private static TcpListener listener;
         private static Thread worker;
         private static Payload payload;
         private static Dictionary<string, string> texturePaths = new Dictionary<string, string>();
-        private static Dictionary<string, byte[]> previewImages = new Dictionary<string, byte[]>();
+
+        /// <summary>Persistent preview cache. Never rebuilt wholesale: entries survive
+        /// refreshes so an asset whose async preview was not ready keeps its earlier PNG.</summary>
+        private static readonly Dictionary<string, PreviewEntry> PreviewCache = new Dictionary<string, PreviewEntry>();
         private static double nextPreviewRefresh;
         internal static int Port { get; private set; }
         internal static string Error { get; private set; }
         internal static bool IsRunning => listener != null;
 
+        /// <summary>SessionState survives assembly reloads but is cleared when the Editor
+        /// exits, which matches how long the preview service should stay alive.</summary>
+        private const string ResumePortKey = "PsdLayoutTool2.PreviewServer.ResumePort";
+
         internal static bool Start(int port)
         {
-            Stop(); Error = string.Empty;
+            Shutdown(); Error = string.Empty;
             try
             {
-                payload = BuildPayload();
+                SessionState.SetInt(ResumePortKey, port);
+                // Default preview cache holds ~30 entries; a larger library would keep
+                // evicting previews so some prefabs never produced a thumbnail.
+                try { AssetPreview.SetPreviewTextureCacheSize(512); } catch { }
+                Refresh();
                 listener = new TcpListener(IPAddress.Any, port);
                 listener.Start(); Port = port;
                 worker = new Thread(Listen) { IsBackground = true, Name = "PSD Common Preview" };
@@ -41,10 +56,21 @@ namespace PsdLayoutTool2
             catch (Exception exception) { Error = exception.Message; Stop(); return false; }
         }
 
+        /// <summary>Stops the service and forgets the resume port, so it stays down
+        /// until started again. Used by the Stop button.</summary>
         internal static void Stop()
+        {
+            SessionState.EraseInt(ResumePortKey);
+            Shutdown();
+        }
+
+        /// <summary>Releases the socket without clearing the resume port, so the service
+        /// comes back automatically after an assembly reload.</summary>
+        private static void Shutdown()
         {
             TcpListener active = listener; listener = null; Port = 0;
             if (active != null) { try { active.Stop(); } catch { } }
+            lock (Sync) { PreviewCache.Clear(); texturePaths = new Dictionary<string, string>(); }
         }
 
         internal static string GetLocalAddress()
@@ -58,19 +84,39 @@ namespace PsdLayoutTool2
         [InitializeOnLoadMethod]
         private static void RegisterShutdown()
         {
-            AssemblyReloadEvents.beforeAssemblyReload -= Stop;
-            AssemblyReloadEvents.beforeAssemblyReload += Stop;
+            // Release the socket but keep the resume port: a recompile should not
+            // take the service down for whoever is browsing it.
+            AssemblyReloadEvents.beforeAssemblyReload -= Shutdown;
+            AssemblyReloadEvents.beforeAssemblyReload += Shutdown;
             EditorApplication.quitting -= Stop;
             EditorApplication.quitting += Stop;
             EditorApplication.update -= RefreshPreviews;
             EditorApplication.update += RefreshPreviews;
+            EditorApplication.delayCall += Resume;
+        }
+
+        /// <summary>Restarts the service after an assembly reload if it was running before.
+        /// Runs through delayCall so the AssetDatabase is ready to build the catalog.</summary>
+        private static void Resume()
+        {
+            if (IsRunning) return;
+            int port = SessionState.GetInt(ResumePortKey, 0);
+            if (port < 1 || port > 65535) return;
+            Start(port);
         }
 
         private static void RefreshPreviews()
         {
             if (!IsRunning || EditorApplication.timeSinceStartup < nextPreviewRefresh) return;
-            nextPreviewRefresh = EditorApplication.timeSinceStartup + 2d;
-            try { payload = BuildPayload(); } catch { }
+            nextPreviewRefresh = EditorApplication.timeSinceStartup + RefreshIntervalSeconds;
+            Refresh();
+        }
+
+        /// <summary>Rebuilds the catalog snapshot and publishes it together with the
+        /// lookup tables under one lock, so a served item id always resolves.</summary>
+        private static void Refresh()
+        {
+            try { BuildPayload(); } catch (Exception exception) { Error = exception.Message; }
         }
         private static void Listen()
         {
@@ -102,14 +148,13 @@ namespace PsdLayoutTool2
                 if (path == "/api/catalog") { lock (Sync) Write(stream, 200, "application/json; charset=utf-8", Encoding.UTF8.GetBytes(JsonUtility.ToJson(payload))); return; }
                 if (path.StartsWith("/asset/", StringComparison.Ordinal))
                 {
-                    string id = Uri.UnescapeDataString(path.Substring(7)); string file;
-                    byte[] preview;
-                    lock (Sync)
-                    {
-                        if (previewImages.TryGetValue(id, out preview)) { Write(stream, 200, "image/png", preview); return; }
-                        texturePaths.TryGetValue(id, out file);
-                    }
-                    if (!string.IsNullOrEmpty(file) && File.Exists(file)) { Write(stream, 200, "image/png", File.ReadAllBytes(file)); return; }
+                    string id = Uri.UnescapeDataString(path.Substring(7));
+                    PreviewEntry entry;
+                    lock (Sync) { PreviewCache.TryGetValue(id, out entry); }
+
+                    // Only ever serve re-encoded PNG. Source files may be .psd/.tga/.exr,
+                    // which no browser can decode even though the URL claims image/png.
+                    if (entry != null && entry.png != null) { Write(stream, 200, "image/png", entry.png); return; }
                 }
                 Write(stream, 404, "text/plain", Encoding.UTF8.GetBytes("Not found"));
             }
@@ -119,50 +164,140 @@ namespace PsdLayoutTool2
         {
             PsdCommonAssetCatalog catalog = PsdCommonAssetCatalog.Load();
             if (catalog == null || catalog.needsRefresh) catalog = PsdCommonAssetCatalog.CreateOrRefresh();
-            var result = new Payload(); var paths = new Dictionary<string, string>(); var previews = new Dictionary<string, byte[]>(); string root = Directory.GetParent(Application.dataPath).FullName;
+            var result = new Payload();
+            var paths = new Dictionary<string, string>();
+            var live = new HashSet<string>();
+            string root = Directory.GetParent(Application.dataPath).FullName;
+            int budget = MaxEncodesPerRefresh;
+
             foreach (PsdCommonPrefabCatalogEntry entry in catalog.prefabs)
             {
-                Add(result, paths, entry.guid, "Prefab", entry.key, entry.assetPath, 0, 0, false, root);
-                Texture2D thumbnail = AssetPreview.GetAssetPreview(entry.prefab);
-                if (thumbnail == null)
-                {
-                    AssetPreview.GetAssetPreview(entry.prefab);
-                    continue;
-                }
-                if (thumbnail != null)
-                {
-                    byte[] png = EncodeThumbnail(thumbnail);
-                    if (png != null)
-                    {
-                        previews[entry.guid] = png;
-                        result.items[result.items.Count - 1].image = "/asset/" + Uri.EscapeDataString(entry.guid);
-                    }
-                }
+                if (entry == null || entry.prefab == null || string.IsNullOrEmpty(entry.guid)) continue;
+                Item item = Add(result, paths, entry.guid, "Prefab", entry.key, entry.assetPath, 0, 0, root);
+                live.Add(entry.guid);
+                EnsurePreview(entry.guid, item, paths, ref budget, () => AssetPreview.GetAssetPreview(entry.prefab), Rect.zero);
             }
+
             foreach (PsdCommonTextureCatalogEntry entry in catalog.textures)
-                Add(result, paths, entry.guid, "Texture", entry.key, entry.assetPath, entry.sprite.rect.width, entry.sprite.rect.height, true, root);
-            lock (Sync) { texturePaths = paths; previewImages = previews; }
+            {
+                if (entry == null || entry.sprite == null || string.IsNullOrEmpty(entry.guid)) continue;
+                Sprite sprite = entry.sprite;
+                Item item = Add(result, paths, entry.guid, "Texture", entry.key, entry.assetPath, sprite.rect.width, sprite.rect.height, root);
+                live.Add(entry.guid);
+                EnsurePreview(entry.guid, item, paths, ref budget, () => sprite.texture, sprite.rect);
+            }
+
+            lock (Sync)
+            {
+                // Drop only entries whose asset left the catalog; keep every other PNG.
+                var stale = new List<string>();
+                foreach (KeyValuePair<string, PreviewEntry> pair in PreviewCache)
+                    if (!live.Contains(pair.Key)) stale.Add(pair.Key);
+                foreach (string key in stale) PreviewCache.Remove(key);
+
+                texturePaths = paths;
+                payload = result;
+            }
             return result;
         }
 
-        private static byte[] EncodeThumbnail(Texture2D source)
+        /// <summary>Encodes a preview PNG if missing or outdated, then points the item at it.
+        /// Leaves <see cref="Item.image"/> empty while the async preview is not ready, so the
+        /// page shows no element rather than a broken image; the next refresh fills it in.</summary>
+        private static void EnsurePreview(string id, Item item, Dictionary<string, string> paths, ref int budget, Func<Texture> resolve, Rect region)
         {
-            try
+            string version = DescribeVersion(paths, id);
+            PreviewEntry cached;
+            lock (Sync) { PreviewCache.TryGetValue(id, out cached); }
+            if (cached != null && cached.png != null && cached.version == version)
             {
-                var target = RenderTexture.GetTemporary(source.width, source.height, 0, RenderTextureFormat.ARGB32);
-                Graphics.Blit(source, target); RenderTexture previous = RenderTexture.active; RenderTexture.active = target;
-                var readable = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
-                readable.ReadPixels(new Rect(0, 0, source.width, source.height), 0, 0); readable.Apply();
-                byte[] png = readable.EncodeToPNG(); UnityEngine.Object.DestroyImmediate(readable); RenderTexture.active = previous; RenderTexture.ReleaseTemporary(target); return png;
+                item.image = "/asset/" + Uri.EscapeDataString(id);
+                return;
             }
-            catch { return null; }
+
+            if (budget <= 0) return;
+            Texture source = null;
+            try { source = resolve(); } catch { }
+            if (source == null) return;
+
+            budget--;
+            byte[] png = EncodeThumbnail(source, region);
+            if (png == null) return;
+            lock (Sync) { PreviewCache[id] = new PreviewEntry { png = png, version = version }; }
+            item.image = "/asset/" + Uri.EscapeDataString(id);
         }
 
-        private static void Add(Payload result, Dictionary<string, string> paths, string id, string kind, string name, string assetPath, float width, float height, bool image, string root)
+        private static string DescribeVersion(Dictionary<string, string> paths, string id)
         {
-            string fullPath = Path.Combine(root, assetPath); long bytes = File.Exists(fullPath) ? new FileInfo(fullPath).Length : 0;
-            result.items.Add(new Item { id = id, kind = kind, name = name, path = assetPath, size = image ? width + " x " + height + " px | " + bytes / 1024 + " KB" : bytes / 1024 + " KB", image = image ? "/asset/" + Uri.EscapeDataString(id) : string.Empty });
-            if (image) paths[id] = fullPath;
+            string file;
+            if (!paths.TryGetValue(id, out file) || string.IsNullOrEmpty(file)) return "0";
+            try
+            {
+                var info = new FileInfo(file);
+                if (!info.Exists) return "0";
+                return info.Length + ":" + info.LastWriteTimeUtc.Ticks;
+            }
+            catch { return "0"; }
+        }
+
+        /// <summary>Re-encodes any readable or unreadable texture to PNG through the GPU.
+        /// Uses an sRGB render target so colors match the Editor under Linear color space,
+        /// and reads back only <paramref name="region"/> when the asset is an atlas sub-sprite.</summary>
+        private static byte[] EncodeThumbnail(Texture source, Rect region)
+        {
+            RenderTexture target = null;
+            RenderTexture previous = RenderTexture.active;
+            Texture2D readable = null;
+            try
+            {
+                int width = source.width, height = source.height;
+                if (width <= 0 || height <= 0) return null;
+
+                target = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                Graphics.Blit(source, target);
+                RenderTexture.active = target;
+
+                Rect read = region.width > 0f && region.height > 0f
+                    ? new Rect(
+                        Mathf.Clamp(region.x, 0f, width),
+                        Mathf.Clamp(region.y, 0f, height),
+                        Mathf.Min(region.width, width - Mathf.Clamp(region.x, 0f, width)),
+                        Mathf.Min(region.height, height - Mathf.Clamp(region.y, 0f, height)))
+                    : new Rect(0f, 0f, width, height);
+                if (read.width < 1f || read.height < 1f) return null;
+
+                readable = new Texture2D((int)read.width, (int)read.height, TextureFormat.RGBA32, false);
+                readable.ReadPixels(read, 0, 0);
+                readable.Apply();
+                return readable.EncodeToPNG();
+            }
+            catch { return null; }
+            finally
+            {
+                // Restore the active target on every path; an early return used to leave it dangling.
+                RenderTexture.active = previous;
+                if (readable != null) UnityEngine.Object.DestroyImmediate(readable);
+                if (target != null) RenderTexture.ReleaseTemporary(target);
+            }
+        }
+
+        private static Item Add(Payload result, Dictionary<string, string> paths, string id, string kind, string name, string assetPath, float width, float height, string root)
+        {
+            string fullPath = string.IsNullOrEmpty(assetPath) ? string.Empty : Path.Combine(root, assetPath);
+            long bytes = !string.IsNullOrEmpty(fullPath) && File.Exists(fullPath) ? new FileInfo(fullPath).Length : 0;
+            bool sized = width > 0f && height > 0f;
+            var item = new Item
+            {
+                id = id,
+                kind = kind,
+                name = name,
+                path = assetPath,
+                size = sized ? width + " x " + height + " px | " + bytes / 1024 + " KB" : bytes / 1024 + " KB",
+                image = string.Empty
+            };
+            result.items.Add(item);
+            if (!string.IsNullOrEmpty(fullPath)) paths[id] = fullPath;
+            return item;
         }
 
         private static void Write(NetworkStream stream, int status, string type, byte[] body)

@@ -187,6 +187,9 @@ namespace PsdLayoutTool2
                 ValidateRequiredComponentFamilyDecisions(plan, context);
                 ResolveExistingNodeReferences(plan, context);
                 NormalizeStatefulInstanceMappings(plan, context);
+                NormalizeDirectChildVerificationNames(plan);
+                WriteRequiredComponentFamilies(plan, context);
+                WriteContainmentFindings(plan, context);
                 RemoveCandidateDecisionMetadata(plan);
                 plan["version"] = 1;
                 plan.Remove("snapshotFingerprint");
@@ -218,6 +221,11 @@ namespace PsdLayoutTool2
             if (!TryValidateCurrentSnapshot(context, out string snapshotError))
             {
                 return new PsdHierarchyChatCleanupExecutionResult(false, snapshotError);
+            }
+
+            if (ResolveExecutionBackend() == PsdHierarchyCleanupExecutionBackend.NativeUnity)
+            {
+                return PsdHierarchyNativeCleanupExecutor.Validate(runnerPlanJson);
             }
 
             string runnerPath = ToFullPath(context.projectRoot, CleanupRunnerRelativePath);
@@ -262,6 +270,25 @@ namespace PsdLayoutTool2
             if (!TryValidateCurrentSnapshot(context, out string snapshotError))
             {
                 return new PsdHierarchyChatCleanupExecutionResult(false, snapshotError);
+            }
+
+            if (ResolveExecutionBackend() == PsdHierarchyCleanupExecutionBackend.NativeUnity)
+            {
+                try
+                {
+                    PsdHierarchyCleanupReplayProfile.Persist(
+                        context.sourcePsdAssetPath,
+                        context.targetPrefabAssetPath,
+                        runnerPlanJson);
+                }
+                catch (Exception exception)
+                {
+                    return new PsdHierarchyChatCleanupExecutionResult(
+                        false,
+                        "Prefab was not changed because the cleanup replay Profile could not be saved: " + exception.Message);
+                }
+
+                return PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
             }
 
             string runnerPath = ToFullPath(context.projectRoot, CleanupRunnerRelativePath);
@@ -375,6 +402,11 @@ namespace PsdLayoutTool2
             string projectRoot,
             string runnerPlanJson)
         {
+            if (ResolveExecutionBackend() == PsdHierarchyCleanupExecutionBackend.NativeUnity)
+            {
+                return PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
+            }
+
             string runnerPath = ToFullPath(projectRoot, CleanupRunnerRelativePath);
             if (!File.Exists(runnerPath))
                 return new PsdHierarchyChatCleanupExecutionResult(false, "Prefab cleanup replay runner was not found: " + runnerPath);
@@ -493,6 +525,18 @@ namespace PsdLayoutTool2
                     false,
                     "AI 返回的计划未通过源路径预检：" + SummarizeFailure(detail));
             }
+        }
+
+        private static PsdHierarchyCleanupExecutionBackend ResolveExecutionBackend()
+        {
+            PsdHierarchyCleanupExecutionSettingsSnapshot settings =
+                PsdLayoutProjectSettings.instance.ResolveHierarchyCleanupExecutionSettings();
+            if (!settings.TryValidate(out string error))
+            {
+                throw new InvalidOperationException("Invalid Prefab cleanup execution backend: " + error);
+            }
+
+            return settings.backend;
         }
 
         internal static string ExtractReviewText(string assistantReply)
@@ -762,6 +806,35 @@ namespace PsdLayoutTool2
             }
         }
 
+        private static void NormalizeDirectChildVerificationNames(JObject plan)
+        {
+            if (!(plan?["verify"] is JObject verify) || !(verify["directChildren"] is JArray directChildren))
+            {
+                return;
+            }
+
+            foreach (JObject directChildCheck in directChildren.OfType<JObject>())
+            {
+                if (!(directChildCheck["children"] is JArray children) ||
+                    children.Any(child => child.Type != JTokenType.String || string.IsNullOrWhiteSpace(child.Value<string>())))
+                {
+                    continue;
+                }
+
+                var uniqueChildren = new JArray();
+                var seenNames = new HashSet<string>(StringComparer.Ordinal);
+                foreach (string childName in children.Values<string>())
+                {
+                    if (seenNames.Add(childName))
+                    {
+                        uniqueChildren.Add(childName);
+                    }
+                }
+
+                directChildCheck["children"] = uniqueChildren;
+            }
+        }
+
         private static void RemoveCandidateDecisionMetadata(JObject plan)
         {
             if (!(plan["componentFamilyDecisions"] is JArray decisions))
@@ -772,6 +845,103 @@ namespace PsdLayoutTool2
             foreach (JObject decision in decisions.OfType<JObject>())
             {
                 decision.Remove("candidateId");
+            }
+        }
+
+        /// <summary>
+        /// Carries the authoritative snapshot candidates that must be extracted into the
+        /// version 1 runner plan, so the shared plan validator can enforce the same rule
+        /// without access to the chat context.
+        /// </summary>
+        private static void WriteRequiredComponentFamilies(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            var required = new JArray();
+            if (context.componentFamilyCandidates != null)
+            {
+                foreach (PsdHierarchyComponentFamilyCandidate candidate in context.componentFamilyCandidates)
+                {
+                    if (candidate == null || !candidate.requiresExtraction)
+                    {
+                        continue;
+                    }
+
+                    string label = "候选家族 " + candidate.id;
+                    var sources = new JArray();
+                    for (int index = 0; index < candidate.sources.Count; index++)
+                    {
+                        sources.Add(ResolveNodeReference(
+                            candidate.sources[index],
+                            label + ".sources[" + index + "]",
+                            context));
+                    }
+
+                    required.Add(new JObject
+                    {
+                        ["candidateId"] = candidate.id,
+                        ["parent"] = ResolveNodeReference(candidate.parent, label + ".parent", context),
+                        ["sources"] = sources,
+                    });
+                }
+            }
+
+            if (required.Count > 0)
+            {
+                plan["requiredComponentFamilies"] = required;
+            }
+            else
+            {
+                plan.Remove("requiredComponentFamilies");
+            }
+        }
+
+        /// <summary>
+        /// Carries the measured geometry containment findings into the version 1 runner
+        /// plan so the shared validator can require an explicit resolution for each one.
+        /// </summary>
+        private static void WriteContainmentFindings(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            var findings = new JArray();
+            foreach (JObject finding in (context.containmentFindings ?? new JArray()).OfType<JObject>())
+            {
+                string candidateId = finding.Value<string>("innerCandidateId") ?? string.Empty;
+                string label = "几何包含结论 " + candidateId;
+                var mapping = new JArray();
+                foreach (JObject entry in (finding["mapping"] as JArray ?? new JArray()).OfType<JObject>())
+                {
+                    mapping.Add(new JObject
+                    {
+                        ["source"] = ResolveNodeReference(
+                            entry.Value<string>("source"), label + ".mapping.source", context),
+                        ["containedBy"] = ResolveNodeReference(
+                            entry.Value<string>("containedBy"), label + ".mapping.containedBy", context),
+                    });
+                }
+
+                if (mapping.Count == 0)
+                {
+                    continue;
+                }
+
+                findings.Add(new JObject
+                {
+                    ["innerCandidateId"] = candidateId,
+                    ["innerParent"] = ResolveNodeReference(
+                        finding.Value<string>("innerParent"), label + ".innerParent", context),
+                    ["mapping"] = mapping,
+                });
+            }
+
+            if (findings.Count > 0)
+            {
+                plan["containmentFindings"] = findings;
+            }
+            else
+            {
+                plan.Remove("containmentFindings");
             }
         }
 

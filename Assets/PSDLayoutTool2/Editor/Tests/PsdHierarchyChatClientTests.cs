@@ -286,6 +286,17 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void PlanRepairPromptRequiresUniqueOrderedDirectChildVerificationNames()
+        {
+            string prompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(
+                "verify.directChildren[6].children must not contain duplicates.");
+
+            Assert.That(prompt, Does.Contain("verify.directChildren"));
+            Assert.That(prompt, Does.Contain("unique"));
+            Assert.That(prompt, Does.Contain("sibling order"));
+        }
+
+        [Test]
         public void PlanRepairPromptReplaysMandatoryComponentFamilyRecordsExactly()
         {
             var context = new PsdHierarchyChatContext(

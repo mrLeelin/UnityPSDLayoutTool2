@@ -169,6 +169,7 @@ namespace PsdLayoutTool2
             nodePathsById = ParseNodePaths(this.hierarchySnapshotJson);
             directChildrenByPath = ParseDirectChildren(this.hierarchySnapshotJson);
             componentFamilyCandidates = ParseComponentFamilyCandidates(this.hierarchySnapshotJson);
+            containmentFindings = ParseContainmentFindings(this.hierarchySnapshotJson);
         }
 
         internal readonly string projectRoot;
@@ -182,6 +183,10 @@ namespace PsdLayoutTool2
         internal readonly string hierarchySnapshotFingerprint;
         internal readonly string hierarchySnapshotFullPath;
         internal readonly IReadOnlyList<PsdHierarchyComponentFamilyCandidate> componentFamilyCandidates;
+
+        // Kept as raw snapshot JSON: the plan writer copies these entries through to the
+        // runner plan unchanged apart from node-reference resolution.
+        internal readonly JArray containmentFindings;
         private readonly Dictionary<string, string> nodePathsById;
         private readonly Dictionary<string, IReadOnlyList<PsdHierarchySnapshotChild>> directChildrenByPath;
 
@@ -392,6 +397,27 @@ namespace PsdLayoutTool2
 
             return candidates;
         }
+
+        private static JArray ParseContainmentFindings(string snapshotJson)
+        {
+            if (string.IsNullOrWhiteSpace(snapshotJson))
+            {
+                return new JArray();
+            }
+
+            try
+            {
+                JObject snapshot = JObject.Parse(snapshotJson);
+                return snapshot["containmentFindings"] is JArray entries
+                    ? (JArray)entries.DeepClone()
+                    : new JArray();
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                // Invalid snapshots are rejected by the context builder.
+                return new JArray();
+            }
+        }
     }
 
     internal static class PsdHierarchyChatContextBuilder
@@ -503,6 +529,7 @@ namespace PsdLayoutTool2
                     ["nodeReferenceSyntax"] = "node:<id>",
                     ["nodes"] = nodes,
                     ["componentFamilyCandidates"] = componentFamilyCandidates,
+                    ["containmentFindings"] = BuildContainmentFindings(nodes, componentFamilyCandidates),
                 };
                 snapshotJson = snapshot.ToString(Formatting.None);
 
@@ -569,6 +596,25 @@ namespace PsdLayoutTool2
                     ["localScale"] = new JArray(rect.localScale.x, rect.localScale.y, rect.localScale.z),
                     ["rotationZ"] = rect.localEulerAngles.z,
                 };
+
+                // The axis-aligned world box is what containment questions are asked
+                // against; deriving it later from local rects would have to re-walk the
+                // parent chain and would break on any rotated or scaled ancestor.
+                var corners = new Vector3[4];
+                rect.GetWorldCorners(corners);
+                float minX = corners[0].x;
+                float minY = corners[0].y;
+                float maxX = corners[0].x;
+                float maxY = corners[0].y;
+                for (int cornerIndex = 1; cornerIndex < corners.Length; cornerIndex++)
+                {
+                    minX = Mathf.Min(minX, corners[cornerIndex].x);
+                    minY = Mathf.Min(minY, corners[cornerIndex].y);
+                    maxX = Mathf.Max(maxX, corners[cornerIndex].x);
+                    maxY = Mathf.Max(maxY, corners[cornerIndex].y);
+                }
+
+                entry["worldRect"] = new JArray(minX, minY, maxX, maxY);
             }
 
             string displayedText = ReadDisplayedText(node);
@@ -705,9 +751,10 @@ namespace PsdLayoutTool2
                     bool hasCommonDirectChild = HasCommonDirectChildName(group, childrenByParentId);
                     bool requiresExtraction = identicalStructure || hasCommonDirectChild;
                     string suggestedAssetName = ToSuggestedAssetName(groupEntry.Key);
+                    string familyCandidateId = "family_" + candidateIndex.ToString("D3");
                     candidates.Add(new JObject
                     {
-                        ["id"] = "family_" + candidateIndex.ToString("D3"),
+                        ["id"] = familyCandidateId,
                         ["kind"] = "numbered_repeated",
                         ["parent"] = "node:" + parentNode.Value<string>("id"),
                         ["sources"] = new JArray(sources),
@@ -725,10 +772,238 @@ namespace PsdLayoutTool2
                                     : "no common direct-child member; variant or manual review is required"),
                     });
                     candidateIndex++;
+                    if (identicalStructure)
+                    {
+                        continue;
+                    }
+
+                    // A family where only one member differs would otherwise offer no clean
+                    // component boundary at all, so the identical members are also published
+                    // as their own subset candidate.
+                    int subsetIndex = 1;
+                    foreach (List<JObject> subset in BuildStructureSubsets(group, nodeById, childrenByParentId))
+                    {
+                        string[] subsetSources = subset.Select(node => "node:" + node.Value<string>("id")).ToArray();
+
+                        // A subset and its family compete for the same sources, so only one of
+                        // them can be an obligation. The family wins when it is already
+                        // extractable; the subset is forced only when the family is not.
+                        bool subsetExtractable = subsetSources.Length >= 2 && !requiresExtraction;
+                        candidates.Add(new JObject
+                        {
+                            ["id"] = familyCandidateId + "_s" + subsetIndex.ToString("D2"),
+                            ["kind"] = "numbered_structure_subset",
+                            ["familyCandidateId"] = familyCandidateId,
+                            ["parent"] = "node:" + parentNode.Value<string>("id"),
+                            ["sources"] = new JArray(subsetSources),
+                            ["suggestedAssetName"] = suggestedAssetName,
+                            ["instanceCount"] = subsetSources.Length,
+                            ["recommendedMode"] = subsetSources.Length >= 2 ? "component" : "skip",
+                            ["requiresExtraction"] = subsetExtractable,
+                            ["evidence"] = new JArray(
+                                "subset of " + familyCandidateId + " sharing one recursive structure",
+                                subsetSources.Length < 2
+                                    ? "only member with this structure, so it has no peer to share a component Prefab with"
+                                    : subsetExtractable
+                                        ? "the full family has no clean component boundary, so this subset is the largest one"
+                                        : "usable as a narrower component boundary if the family-level extraction is rejected"),
+                        });
+                        subsetIndex++;
+                    }
                 }
             }
 
             return candidates;
+        }
+
+        /// <summary>
+        /// Groups one numbered family into buckets that share a recursive structure
+        /// signature, ordered by first sibling index so output is deterministic.
+        /// </summary>
+        private static List<List<JObject>> BuildStructureSubsets(
+            List<JObject> group,
+            Dictionary<string, JObject> nodeById,
+            Dictionary<string, List<JObject>> childrenByParentId)
+        {
+            var buckets = new Dictionary<string, List<JObject>>(StringComparer.Ordinal);
+            var order = new List<string>();
+            foreach (JObject node in group)
+            {
+                string key = BuildStructureSignature(node.Value<string>("id"), nodeById, childrenByParentId);
+                if (!buckets.TryGetValue(key, out List<JObject> bucket))
+                {
+                    bucket = new List<JObject>();
+                    buckets.Add(key, bucket);
+                    order.Add(key);
+                }
+
+                bucket.Add(node);
+            }
+
+            return order.Select(key => buckets[key]).ToList();
+        }
+
+        // Geometry says these nodes belong to a repeated unit even though the hierarchy
+        // groups them elsewhere. Like the candidate report this is measured, not guessed,
+        // so the plan validator can treat it as a hard requirement.
+        internal static JArray BuildContainmentFindings(JArray nodes, JArray candidates)
+        {
+            var findings = new JArray();
+            var nodeById = nodes
+                .OfType<JObject>()
+                .Where(node => !string.IsNullOrWhiteSpace(node.Value<string>("id")))
+                .ToDictionary(node => node.Value<string>("id"), StringComparer.Ordinal);
+            List<JObject> families = candidates
+                .OfType<JObject>()
+                .Where(candidate => string.Equals(
+                    candidate.Value<string>("kind"), "numbered_repeated", StringComparison.Ordinal))
+                .ToList();
+            foreach (JObject inner in families)
+            {
+                List<JObject> innerNodes = ResolveFamilyNodes(inner, nodeById);
+                if (innerNodes == null)
+                {
+                    continue;
+                }
+
+                foreach (JObject outer in families)
+                {
+                    if (ReferenceEquals(inner, outer) ||
+                        string.Equals(
+                            inner.Value<string>("parent"),
+                            outer.Value<string>("parent"),
+                            StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    List<JObject> outerNodes = ResolveFamilyNodes(outer, nodeById);
+                    if (outerNodes == null || outerNodes.Count != innerNodes.Count)
+                    {
+                        continue;
+                    }
+
+                    var mapping = new JArray();
+                    var usedOuterIds = new HashSet<string>(StringComparer.Ordinal);
+                    double maxAreaRatio = 0d;
+                    foreach (JObject innerNode in innerNodes)
+                    {
+                        JObject container = null;
+                        double bestRatio = 0d;
+                        foreach (JObject outerNode in outerNodes)
+                        {
+                            if (usedOuterIds.Contains(outerNode.Value<string>("id")) ||
+                                !TryGetAreaRatioIfContained(innerNode, outerNode, out double ratio))
+                            {
+                                continue;
+                            }
+
+                            if (container == null || ratio < bestRatio)
+                            {
+                                container = outerNode;
+                                bestRatio = ratio;
+                            }
+                        }
+
+                        if (container == null || bestRatio > ContainmentAreaRatioLimit)
+                        {
+                            mapping = null;
+                            break;
+                        }
+
+                        usedOuterIds.Add(container.Value<string>("id"));
+                        maxAreaRatio = Math.Max(maxAreaRatio, bestRatio);
+                        mapping.Add(new JObject
+                        {
+                            ["source"] = "node:" + innerNode.Value<string>("id"),
+                            ["containedBy"] = "node:" + container.Value<string>("id"),
+                        });
+                    }
+
+                    if (mapping == null || mapping.Count != innerNodes.Count)
+                    {
+                        continue;
+                    }
+
+                    findings.Add(new JObject
+                    {
+                        ["innerParent"] = inner.Value<string>("parent"),
+                        ["innerCandidateId"] = inner.Value<string>("id"),
+                        ["outerCandidateId"] = outer.Value<string>("id"),
+                        ["maxAreaRatio"] = Math.Round(maxAreaRatio, 4),
+                        ["mapping"] = mapping,
+                        ["evidence"] = new JArray(
+                            "every member is fully inside a distinct member of the outer family",
+                            "equal cardinality with a one-to-one containment mapping",
+                            "each member covers at most " +
+                                (ContainmentAreaRatioLimit * 100d).ToString("0.#") +
+                                "% of its container area"),
+                    });
+                }
+            }
+
+            return findings;
+        }
+
+        private const double ContainmentAreaRatioLimit = 0.25d;
+
+        private static List<JObject> ResolveFamilyNodes(
+            JObject candidate,
+            IReadOnlyDictionary<string, JObject> nodeById)
+        {
+            var resolved = new List<JObject>();
+            foreach (string source in (candidate.Value<JArray>("sources") ?? new JArray())
+                .Select(token => token?.ToString()))
+            {
+                if (string.IsNullOrEmpty(source) || !source.StartsWith("node:", StringComparison.Ordinal) ||
+                    !nodeById.TryGetValue(source.Substring("node:".Length), out JObject node) ||
+                    node["worldRect"] == null)
+                {
+                    return null;
+                }
+
+                resolved.Add(node);
+            }
+
+            return resolved.Count >= 2 ? resolved : null;
+        }
+
+        private static bool TryGetAreaRatioIfContained(JObject inner, JObject outer, out double ratio)
+        {
+            ratio = 0d;
+            if (!TryReadWorldRect(inner, out double[] innerRect) ||
+                !TryReadWorldRect(outer, out double[] outerRect))
+            {
+                return false;
+            }
+
+            const double tolerance = 0.01d;
+            if (innerRect[0] < outerRect[0] - tolerance || innerRect[1] < outerRect[1] - tolerance ||
+                innerRect[2] > outerRect[2] + tolerance || innerRect[3] > outerRect[3] + tolerance)
+            {
+                return false;
+            }
+
+            double outerArea = (outerRect[2] - outerRect[0]) * (outerRect[3] - outerRect[1]);
+            if (outerArea <= 0d)
+            {
+                return false;
+            }
+
+            ratio = (innerRect[2] - innerRect[0]) * (innerRect[3] - innerRect[1]) / outerArea;
+            return true;
+        }
+
+        private static bool TryReadWorldRect(JObject node, out double[] rect)
+        {
+            rect = null;
+            if (!(node?["worldRect"] is JArray values) || values.Count != 4)
+            {
+                return false;
+            }
+
+            rect = values.Select(value => value.Value<double>()).ToArray();
+            return true;
         }
 
         private static bool HasCommonDirectChildName(
@@ -1199,6 +1474,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.");
             builder.AppendLine(PlanIdentifierContract);
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.");
+            builder.AppendLine("Every verify.directChildren entry must use a non-empty, unique list of direct-child names in post-apply sibling order. List each child name exactly once; never duplicate a name as a placeholder or count.");
             builder.AppendLine("For every statefulComponentExtractions instance, commonSourceNames and stateSourceNames together must cover all direct children exactly once. commonSourceNames must contain one observed direct-child name for every common.members entry; stateSourceNames must do the same for the selected states[].members entry. When one side is complete, derive the other as the ordered direct-child complement. Re-read the authoritative snapshot instead of guessing or dropping a member.");
             builder.AppendLine("Enforce this exact equation for every stateful instance: directChildCount == common.members.Count + selectedState.members.Count. If it fails, rebuild common.members, the affected states[].members, and every corresponding instance mapping; changing only commonSourceNames or stateSourceNames cannot repair a contract-count mismatch. Never place the same observed source child in both Common and the selected state.");
 

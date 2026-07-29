@@ -279,6 +279,67 @@ namespace PsdLayoutTool2
                 GetProfilePath(prefabPath, sourceGuid));
         }
 
+        internal static bool IsMissingTargetRecoveryEligible(string prefabPath, string sourceGuid)
+        {
+            PsdHierarchyCleanupReplayProfile profile = Load(prefabPath, sourceGuid);
+            if (profile == null || string.IsNullOrEmpty(profile.targetPrefabGuid)) return false;
+
+            try
+            {
+                string normalizedTarget = NormalizeAssetPath(prefabPath);
+                profile.ValidateBinding(sourceGuid, normalizedTarget);
+                return AssetDatabase.LoadAssetAtPath<GameObject>(normalizedTarget) == null;
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        internal static bool TryArchiveForMissingTargetRecovery(
+            string prefabPath,
+            string sourceGuid,
+            out string archivedProfilePath,
+            out string failureReason)
+        {
+            archivedProfilePath = string.Empty;
+            failureReason = string.Empty;
+            string normalizedTarget = NormalizeAssetPath(prefabPath);
+            string profilePath = GetProfilePath(normalizedTarget, sourceGuid);
+            PsdHierarchyCleanupReplayProfile profile =
+                AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(profilePath);
+            if (profile == null)
+            {
+                failureReason = "No cleanup replay Profile exists for this PSD.";
+                return false;
+            }
+            if (!IsMissingTargetRecoveryEligible(normalizedTarget, sourceGuid))
+            {
+                failureReason =
+                    "The cleanup replay Profile still has a loadable Prefab target or an invalid binding and cannot be reset.";
+                return false;
+            }
+
+            const string archiveFolder =
+                "Assets/PSDLayoutTool2Settings/OrphanedHierarchyCleanupReplayProfiles";
+            EnsureAssetFolder(archiveFolder);
+            string archiveFileName = Path.GetFileNameWithoutExtension(profilePath) +
+                ".orphaned-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff") + ".asset";
+            archivedProfilePath = AssetDatabase.GenerateUniqueAssetPath(
+                archiveFolder + "/" + archiveFileName);
+            string moveError = AssetDatabase.MoveAsset(profilePath, archivedProfilePath);
+            if (!string.IsNullOrEmpty(moveError))
+            {
+                failureReason = "Could not archive the orphaned cleanup replay Profile: " + moveError;
+                archivedProfilePath = string.Empty;
+                return false;
+            }
+
+            AssetDatabase.ImportAsset(archivedProfilePath,
+                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            return true;
+        }
+
         public static PsdHierarchyCleanupReplayProfile Persist(
             string sourcePsdAssetPath,
             string prefabPath,
