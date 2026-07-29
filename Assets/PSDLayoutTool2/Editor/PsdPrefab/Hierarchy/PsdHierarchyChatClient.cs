@@ -423,10 +423,13 @@ namespace PsdLayoutTool2
     internal static class PsdHierarchyChatContextBuilder
     {
         internal const string DefaultSkillRelativePath =
-            "Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/SKILL.md";
+            ".agents/skills/prefab-hierarchy-cleanup/SKILL.md";
 
         internal const string DefaultPlanFormatRelativePath =
-            "Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/references/plan-format.md";
+            ".agents/skills/prefab-hierarchy-cleanup/references/plan-format.md";
+
+        private const string LegacyPackageRootRelativePath = "Assets/UnityPSDLayoutTool2";
+        private const string ScriptAssetPathMarker = "/Assets/PSDLayoutTool2/";
 
         internal const long MaxContextFileBytes = 512 * 1024;
 
@@ -452,13 +455,25 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            string skillFullPath = ToFullPath(projectRoot, DefaultSkillRelativePath);
+            if (!TryResolvePackageFilePath(
+                    projectRoot,
+                    FindSourceScriptAssetPath(),
+                    DefaultSkillRelativePath,
+                    out string skillFullPath))
+            {
+                error = "AI 整理技能不存在。请确认 Unity PSD Layout Tool 2 已完整安装：" + skillFullPath;
+                return false;
+            }
+
             if (!TryReadContextFile(skillFullPath, "AI 整理技能", out string skillContent, out error))
             {
                 return false;
             }
 
-            string planFormatFullPath = PlanFormatFullPath(projectRoot);
+            string planFormatFullPath = Path.Combine(
+                Path.GetDirectoryName(skillFullPath),
+                "references",
+                "plan-format.md");
             if (!TryReadContextFile(planFormatFullPath, "整理计划格式", out string planFormatContent, out error))
             {
                 return false;
@@ -1283,7 +1298,92 @@ namespace PsdLayoutTool2
 
         internal static string PlanFormatFullPath(string projectRoot)
         {
-            return ToFullPath(projectRoot, DefaultPlanFormatRelativePath);
+            TryResolvePackageFilePath(
+                projectRoot,
+                FindSourceScriptAssetPath(),
+                DefaultPlanFormatRelativePath,
+                out string fullPath);
+            return fullPath;
+        }
+
+        internal static bool TryResolvePackageFilePath(
+            string projectRoot,
+            string sourceScriptAssetPath,
+            string packageRelativePath,
+            out string fullPath)
+        {
+            fullPath = string.Empty;
+            foreach (string packageRoot in GetPackageRootCandidates(projectRoot, sourceScriptAssetPath))
+            {
+                string candidate = Path.GetFullPath(Path.Combine(
+                    packageRoot,
+                    (packageRelativePath ?? string.Empty).Replace('/', Path.DirectorySeparatorChar)));
+                if (string.IsNullOrEmpty(fullPath))
+                {
+                    fullPath = candidate;
+                }
+
+                if (File.Exists(candidate))
+                {
+                    fullPath = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static IEnumerable<string> GetPackageRootCandidates(
+            string projectRoot,
+            string sourceScriptAssetPath)
+        {
+            var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string sourcePackageRoot = GetPackageRootFromScriptAssetPath(projectRoot, sourceScriptAssetPath);
+            if (!string.IsNullOrEmpty(sourcePackageRoot) && candidates.Add(sourcePackageRoot))
+            {
+                yield return sourcePackageRoot;
+            }
+
+            string normalizedProjectRoot = Path.GetFullPath(projectRoot);
+            if (candidates.Add(normalizedProjectRoot))
+            {
+                yield return normalizedProjectRoot;
+            }
+
+            string legacyPackageRoot = Path.Combine(
+                normalizedProjectRoot,
+                LegacyPackageRootRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (candidates.Add(legacyPackageRoot))
+            {
+                yield return legacyPackageRoot;
+            }
+        }
+
+        private static string GetPackageRootFromScriptAssetPath(string projectRoot, string sourceScriptAssetPath)
+        {
+            string normalizedAssetPath = (sourceScriptAssetPath ?? string.Empty).Replace('\\', '/');
+            int markerIndex = normalizedAssetPath.IndexOf(ScriptAssetPathMarker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0)
+            {
+                return string.Empty;
+            }
+
+            string packageRootRelativePath = normalizedAssetPath.Substring(0, markerIndex);
+            return ToFullPath(projectRoot, packageRootRelativePath);
+        }
+
+        private static string FindSourceScriptAssetPath()
+        {
+            foreach (string guid in AssetDatabase.FindAssets("PsdHierarchyChatClient t:Script"))
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (assetPath.EndsWith("/PsdHierarchyChatClient.cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    return assetPath;
+                }
+            }
+
+            return string.Empty;
         }
 
         private static bool TryReadContextFile(string fullPath, string label, out string content, out string error)

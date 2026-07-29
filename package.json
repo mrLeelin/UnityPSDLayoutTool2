@@ -1,6 +1,6 @@
 {
   "name": "com.mrleelin.unity-psd-layout-tool-2",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Unity PSD Layout Tool 2",
   "description": "Import Photoshop PSD layers into Unity, export layer textures, build layouts, and generate reusable prefabs.",
   "unity": "6000.3",

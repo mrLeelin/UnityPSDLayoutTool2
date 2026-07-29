@@ -29,7 +29,7 @@ namespace PsdLayoutTool2
     internal static class PsdHierarchyChatCleanupExecution
     {
         internal const string CleanupRunnerRelativePath =
-            "Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/scripts/run_prefab_hierarchy_cleanup.ps1";
+            ".agents/skills/prefab-hierarchy-cleanup/scripts/run_prefab_hierarchy_cleanup.ps1";
 
         private static readonly string[] RequiredArrayProperties =
         {
@@ -228,7 +228,7 @@ namespace PsdLayoutTool2
                 return PsdHierarchyNativeCleanupExecutor.Validate(runnerPlanJson);
             }
 
-            string runnerPath = ToFullPath(context.projectRoot, CleanupRunnerRelativePath);
+            string runnerPath = ResolveRunnerPath(context);
             if (!File.Exists(runnerPath))
             {
                 return new PsdHierarchyChatCleanupExecutionResult(false, "找不到 Prefab 整理计划预检器：" + runnerPath);
@@ -291,7 +291,7 @@ namespace PsdLayoutTool2
                 return PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
             }
 
-            string runnerPath = ToFullPath(context.projectRoot, CleanupRunnerRelativePath);
+            string runnerPath = ResolveRunnerPath(context);
             if (!File.Exists(runnerPath))
             {
                 return new PsdHierarchyChatCleanupExecutionResult(false, "找不到 Prefab 整理执行器：" + runnerPath);
@@ -407,7 +407,7 @@ namespace PsdLayoutTool2
                 return PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
             }
 
-            string runnerPath = ToFullPath(projectRoot, CleanupRunnerRelativePath);
+            string runnerPath = ResolveRunnerPath(projectRoot);
             if (!File.Exists(runnerPath))
                 return new PsdHierarchyChatCleanupExecutionResult(false, "Prefab cleanup replay runner was not found: " + runnerPath);
 
@@ -1804,6 +1804,30 @@ namespace PsdLayoutTool2
         private static string NormalizeAssetPath(string path)
         {
             return (path ?? string.Empty).Trim().Replace('\\', '/');
+        }
+
+        private static string ResolveRunnerPath(PsdHierarchyChatContext context)
+        {
+            if (context != null && !string.IsNullOrEmpty(context.skillFullPath))
+            {
+                string skillDirectory = Path.GetDirectoryName(context.skillFullPath);
+                if (!string.IsNullOrEmpty(skillDirectory))
+                {
+                    return Path.Combine(skillDirectory, "scripts", "run_prefab_hierarchy_cleanup.ps1");
+                }
+            }
+
+            return ResolveRunnerPath(context == null ? string.Empty : context.projectRoot);
+        }
+
+        private static string ResolveRunnerPath(string projectRoot)
+        {
+            PsdHierarchyChatContextBuilder.TryResolvePackageFilePath(
+                projectRoot,
+                string.Empty,
+                CleanupRunnerRelativePath,
+                out string runnerPath);
+            return runnerPath;
         }
 
         private static string ToFullPath(string projectRoot, string relativePath)

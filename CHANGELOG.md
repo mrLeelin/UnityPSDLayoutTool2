@@ -2,6 +2,13 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.4] - 2026-07-29
+
+### Fixed
+
+- Resolved AI hierarchy cleanup skills and runner scripts from the installed package location, so renamed, nested, and UPM package installs no longer depend on `Assets/UnityPSDLayoutTool2`.
+- Added a path-resolution regression test for packages nested under a renamed Assets directory.
+
 ## [0.1.3] - 2026-07-24
 
 ### Added

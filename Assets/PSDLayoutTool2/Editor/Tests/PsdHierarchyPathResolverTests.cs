@@ -283,5 +283,40 @@ namespace PsdLayoutTool2.Tests
             Assert.That(atlas, Is.Not.Null);
             Assert.That(atlas.GetPackables(), Has.Length.EqualTo(1));
         }
+
+        [TestCase(PsdImporter.SpriteAtlasVersion.V1, AtlasV1AssetPath)]
+        [TestCase(PsdImporter.SpriteAtlasVersion.V2, AtlasV2AssetPath)]
+        public void CreateOrUpdateDisablesRotationAndTightPackingForNewCanvasAtlases(
+            PsdImporter.SpriteAtlasVersion version,
+            string atlasAssetPath)
+        {
+            PsdGeneratedSpriteAtlas.CreateOrUpdate(atlasAssetPath, TextureFolderPath, version);
+            SpriteAtlas atlas = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(atlasAssetPath);
+
+            SpriteAtlasPackingSettings packingSettings = atlas.GetPackingSettings();
+            Assert.That(packingSettings.enableRotation, Is.False);
+            Assert.That(packingSettings.enableTightPacking, Is.False);
+        }
+
+        [TestCase(PsdImporter.SpriteAtlasVersion.V1, AtlasV1AssetPath)]
+        [TestCase(PsdImporter.SpriteAtlasVersion.V2, AtlasV2AssetPath)]
+        public void CreateOrUpdatePreservesPackingSettingsForExistingAtlases(
+            PsdImporter.SpriteAtlasVersion version,
+            string atlasAssetPath)
+        {
+            PsdGeneratedSpriteAtlas.CreateOrUpdate(atlasAssetPath, TextureFolderPath, version);
+            SpriteAtlas atlas = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(atlasAssetPath);
+            SpriteAtlasPackingSettings packingSettings = atlas.GetPackingSettings();
+            packingSettings.enableRotation = true;
+            packingSettings.enableTightPacking = true;
+            atlas.SetPackingSettings(packingSettings);
+            EditorUtility.SetDirty(atlas);
+            AssetDatabase.SaveAssets();
+
+            PsdGeneratedSpriteAtlas.CreateOrUpdate(atlasAssetPath, TextureFolderPath, version);
+            packingSettings = atlas.GetPackingSettings();
+            Assert.That(packingSettings.enableRotation, Is.True);
+            Assert.That(packingSettings.enableTightPacking, Is.True);
+        }
     }
 }

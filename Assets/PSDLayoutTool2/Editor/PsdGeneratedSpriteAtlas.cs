@@ -68,6 +68,7 @@ namespace PsdLayoutTool2
             {
                 atlas = new SpriteAtlas();
                 AssetDatabase.CreateAsset(atlas, atlasAssetPath);
+                ApplyCanvasPackingDefaults(atlas);
             }
 
             if (!ContainsPackable(atlas, textureFolderAssetPath))
@@ -93,10 +94,12 @@ namespace PsdLayoutTool2
             }
 
             bool shouldSave = false;
+            bool created = false;
             if (atlasAsset == null)
             {
                 atlasAsset = new SpriteAtlasAsset();
                 shouldSave = true;
+                created = true;
             }
 
             SpriteAtlas atlas = existingAsset as SpriteAtlas;
@@ -114,7 +117,25 @@ namespace PsdLayoutTool2
                     ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
             }
 
-            return AssetDatabase.LoadAssetAtPath<SpriteAtlas>(atlasAssetPath);
+            SpriteAtlas resultAtlas = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(atlasAssetPath);
+            if (created && resultAtlas != null)
+            {
+                ApplyCanvasPackingDefaults(resultAtlas);
+                EditorUtility.SetDirty(resultAtlas);
+                AssetDatabase.SaveAssets();
+            }
+
+            return resultAtlas;
+        }
+
+        private static void ApplyCanvasPackingDefaults(SpriteAtlas atlas)
+        {
+            // This atlas is generated for the imported Canvas. Rotation and tight packing
+            // can invalidate the expected UI sprite geometry.
+            SpriteAtlasPackingSettings packingSettings = atlas.GetPackingSettings();
+            packingSettings.enableRotation = false;
+            packingSettings.enableTightPacking = false;
+            atlas.SetPackingSettings(packingSettings);
         }
 
         private static bool ContainsPackable(SpriteAtlas atlas, string assetPath)
