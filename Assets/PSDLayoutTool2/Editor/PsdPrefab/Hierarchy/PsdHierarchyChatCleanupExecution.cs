@@ -6,8 +6,10 @@ namespace PsdLayoutTool2
     using System.IO;
     using System.Linq;
     using System.Text;
+    using System.Text.RegularExpressions;
     using System.Threading.Tasks;
     using Newtonsoft.Json.Linq;
+    using UnityEditor;
 
     internal readonly struct PsdHierarchyChatCleanupExecutionResult
     {
@@ -147,6 +149,19 @@ namespace PsdLayoutTool2
                 return false;
             }
 
+            try
+            {
+                var plan = JObject.Parse(planJson);
+                ValidateAndNormalizeVersionTwoPlan(plan, context);
+                planJson = plan.ToString(Newtonsoft.Json.Formatting.None);
+            }
+            catch (Exception exception) when (exception is Newtonsoft.Json.JsonException || exception is InvalidDataException)
+            {
+                planJson = string.Empty;
+                error = "AI 返回的计划不能安全执行：" + exception.Message;
+                return false;
+            }
+
             if (!TryPrepareRunnerPlan(context, planJson, out _, out error))
             {
                 planJson = string.Empty;
@@ -173,20 +188,14 @@ namespace PsdLayoutTool2
             try
             {
                 var plan = JObject.Parse(planJson ?? string.Empty);
-                ValidateRootPlanShape(plan, 2L, true);
-                ValidatePlanTarget(plan, context.targetPrefabAssetPath);
-
-                string fingerprint = ReadRequiredString(plan, "snapshotFingerprint");
-                if (string.IsNullOrWhiteSpace(context.hierarchySnapshotFingerprint) ||
-                    !string.Equals(fingerprint, context.hierarchySnapshotFingerprint, StringComparison.Ordinal))
-                {
-                    throw new InvalidDataException("计划引用的层级快照已经失效，请重新分析当前 Prefab。");
-                }
+                ValidateAndNormalizeVersionTwoPlan(plan, context);
 
                 NormalizeSingleStateVariantExtractions(plan, context);
                 ValidateAllExistingNodeReferences(plan, context);
                 ValidateRequiredComponentFamilyDecisions(plan, context);
                 ResolveExistingNodeReferences(plan, context);
+                DerivePrefabNameFromAssetRenameTargets(plan);
+                CaptureCurrentAssetRenameGuids(plan);
                 NormalizeStatefulInstanceMappings(plan, context);
                 NormalizeDirectChildVerificationNames(plan);
                 WriteRequiredComponentFamilies(plan, context);
@@ -826,6 +835,478 @@ namespace PsdLayoutTool2
             }
         }
 
+        private static void NormalizeRequiredVariantCandidates(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            PsdHierarchyComponentFamilyCandidate[] candidates = context.componentFamilyCandidates?
+                .Where(candidate => candidate != null &&
+                                    candidate.requiresExtraction &&
+                                    string.Equals(candidate.recommendedMode, "variant", StringComparison.Ordinal))
+                .ToArray() ?? Array.Empty<PsdHierarchyComponentFamilyCandidate>();
+            if (candidates.Length == 0)
+            {
+                return;
+            }
+
+            var decisions = plan["componentFamilyDecisions"] as JArray;
+            var variants = plan["variantComponentExtractions"] as JArray;
+            if (decisions == null || variants == null)
+            {
+                throw new InvalidDataException(
+                    "Deterministic component-family repair failed: componentFamilyDecisions and " +
+                    "variantComponentExtractions must both be arrays.");
+            }
+
+            foreach (PsdHierarchyComponentFamilyCandidate candidate in candidates)
+            {
+                JObject decision = decisions
+                    .OfType<JObject>()
+                    .FirstOrDefault(item => string.Equals(
+                        item.Value<string>("candidateId"), candidate.id, StringComparison.Ordinal));
+
+                // The snapshot already proved that this family needs a variant boundary.
+                // Canonicalize every AI-selected mode so a skip or an unsafe component
+                // guess cannot reach the runner and repeat the RectTransform-count failure.
+                RemoveCandidateOwnedExtractions(plan, candidate, decision?.Value<string>("extractionId"));
+
+                string extractionId = CreateUniqueExtractionId(plan, candidate.suggestedAssetName + "Variant");
+                string assetPath = CreateAvailableVariantAssetPath(plan, context, candidate.suggestedAssetName);
+                JObject extraction = BuildDeterministicVariantExtraction(
+                    context,
+                    candidate,
+                    extractionId,
+                    assetPath);
+
+                var normalizedDecision = new JObject
+                {
+                    ["candidateId"] = candidate.id,
+                    ["parent"] = candidate.parent,
+                    ["sources"] = new JArray(candidate.sources),
+                    ["mode"] = "variant",
+                    ["extractionId"] = extractionId,
+                    ["reason"] =
+                        "Deterministically repaired from the authoritative snapshot; every recursive structure " +
+                        "maps to an observed variant state.",
+                };
+                if (decision == null)
+                {
+                    decisions.Add(normalizedDecision);
+                }
+                else
+                {
+                    decision.Replace(normalizedDecision);
+                }
+
+                variants.Add(extraction);
+            }
+        }
+
+        private static JObject BuildDeterministicVariantExtraction(
+            PsdHierarchyChatContext context,
+            PsdHierarchyComponentFamilyCandidate candidate,
+            string extractionId,
+            string assetPath)
+        {
+            JObject snapshot;
+            try
+            {
+                snapshot = JObject.Parse(context.hierarchySnapshotJson);
+            }
+            catch (Newtonsoft.Json.JsonException exception)
+            {
+                throw BuildDeterministicVariantRepairError(candidate, "snapshot JSON is invalid", exception);
+            }
+
+            var nodes = snapshot["nodes"] as JArray;
+            if (nodes == null)
+            {
+                throw BuildDeterministicVariantRepairError(candidate, "snapshot.nodes is missing", null);
+            }
+
+            var nodeById = nodes
+                .OfType<JObject>()
+                .Where(node => !string.IsNullOrWhiteSpace(node.Value<string>("id")))
+                .ToDictionary(node => node.Value<string>("id"), StringComparer.Ordinal);
+            var childrenByParentId = nodes
+                .OfType<JObject>()
+                .Where(node => !string.IsNullOrWhiteSpace(node.Value<string>("parentId")))
+                .GroupBy(node => node.Value<string>("parentId"), StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderBy(node => node.Value<int?>("siblingIndex") ?? int.MaxValue).ToList(),
+                    StringComparer.Ordinal);
+
+            var stateIdBySignature = new Dictionary<string, string>(StringComparer.Ordinal);
+            var states = new JArray();
+            var instances = new JArray();
+            IReadOnlyDictionary<string, string> instanceNamesBySource =
+                BuildDeterministicVariantInstanceNames(context, candidate, nodeById);
+            foreach (string source in candidate.sources)
+            {
+                string nodeId = ReadNodeId(source, candidate);
+                if (!nodeById.TryGetValue(nodeId, out JObject node))
+                {
+                    throw BuildDeterministicVariantRepairError(
+                        candidate,
+                        "source " + source + " is missing from snapshot.nodes",
+                        null);
+                }
+
+                string signature = BuildSnapshotStructureSignature(nodeId, nodeById, childrenByParentId);
+                if (!stateIdBySignature.TryGetValue(signature, out string stateId))
+                {
+                    stateId = "state_" + (stateIdBySignature.Count + 1);
+                    stateIdBySignature.Add(signature, stateId);
+                    states.Add(new JObject
+                    {
+                        ["id"] = stateId,
+                        ["source"] = source,
+                        ["name"] = "[State_" + stateIdBySignature.Count + "]",
+                    });
+                }
+
+                instances.Add(new JObject
+                {
+                    ["source"] = source,
+                    ["name"] = instanceNamesBySource[source],
+                    ["state"] = stateId,
+                });
+            }
+
+            if (states.Count < 2)
+            {
+                throw BuildDeterministicVariantRepairError(
+                    candidate,
+                    "recommendedMode=variant but fewer than two distinct recursive structures were observed",
+                    null);
+            }
+
+            return new JObject
+            {
+                ["id"] = extractionId,
+                ["template"] = candidate.sources[0],
+                ["assetPath"] = assetPath,
+                ["commonName"] = "[Common]",
+                ["statesName"] = "[States]",
+                ["defaultState"] = states[0].Value<string>("id"),
+                ["states"] = states,
+                ["instances"] = instances,
+            };
+        }
+
+        private static IReadOnlyDictionary<string, string> BuildDeterministicVariantInstanceNames(
+            PsdHierarchyChatContext context,
+            PsdHierarchyComponentFamilyCandidate candidate,
+            IReadOnlyDictionary<string, JObject> nodeById)
+        {
+            var observedNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string source in candidate.sources)
+            {
+                string nodeId = ReadNodeId(source, candidate);
+                if (!nodeById.TryGetValue(nodeId, out JObject node))
+                {
+                    throw BuildDeterministicVariantRepairError(
+                        candidate,
+                        "source " + source + " is missing from snapshot.nodes while deriving instance names",
+                        null);
+                }
+
+                string observedName = node.Value<string>("name");
+                if (string.IsNullOrWhiteSpace(observedName) && context.TryGetNodePath(nodeId, out string path))
+                {
+                    int separator = path.LastIndexOf('/');
+                    observedName = separator >= 0 ? path.Substring(separator + 1) : path;
+                }
+
+                if (string.IsNullOrWhiteSpace(observedName))
+                {
+                    throw BuildDeterministicVariantRepairError(
+                        candidate,
+                        "source " + source + " has no observed node name",
+                        null);
+                }
+
+                observedNames.Add(source, observedName);
+            }
+
+            var instanceNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            var usedNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string source in candidate.sources)
+            {
+                string observedName = observedNames[source];
+                if (IsBracketedSemanticItemName(observedName) && usedNames.Add(observedName))
+                {
+                    instanceNames.Add(source, observedName);
+                }
+            }
+
+            string semanticBase = candidate.suggestedAssetName;
+            if (string.IsNullOrWhiteSpace(semanticBase) ||
+                !Regex.IsMatch(semanticBase, "^[A-Za-z][A-Za-z0-9]*$"))
+            {
+                throw BuildDeterministicVariantRepairError(
+                    candidate,
+                    "suggestedAssetName=" + (semanticBase ?? "<null>") +
+                    " cannot produce a bracketed English semantic item name",
+                    null);
+            }
+
+            int suffix = 1;
+            foreach (string source in candidate.sources)
+            {
+                if (instanceNames.ContainsKey(source))
+                {
+                    continue;
+                }
+
+                string generatedName;
+                do
+                {
+                    generatedName = "[" + semanticBase + "_" + suffix + "]";
+                    suffix++;
+                }
+                while (!usedNames.Add(generatedName));
+
+                instanceNames.Add(source, generatedName);
+            }
+
+            return instanceNames;
+        }
+
+        private static bool IsBracketedSemanticItemName(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) &&
+                   value.Length >= 3 &&
+                   value[0] == '[' &&
+                   value[value.Length - 1] == ']';
+        }
+
+        private static InvalidDataException BuildDeterministicVariantRepairError(
+            PsdHierarchyComponentFamilyCandidate candidate,
+            string reason,
+            Exception innerException)
+        {
+            string message =
+                "Deterministic component-family repair failed: candidateId=" + candidate.id +
+                "; asset=" + candidate.suggestedAssetName +
+                "; recommendedMode=" + candidate.recommendedMode +
+                "; sources=" + string.Join(",", candidate.sources) +
+                "; reason=" + reason + ".";
+            return innerException == null
+                ? new InvalidDataException(message)
+                : new InvalidDataException(message, innerException);
+        }
+
+        private static string ReadNodeId(
+            string source,
+            PsdHierarchyComponentFamilyCandidate candidate)
+        {
+            const string prefix = "node:";
+            if (string.IsNullOrWhiteSpace(source) || !source.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                throw BuildDeterministicVariantRepairError(
+                    candidate,
+                    "source reference is not node:<id>: " + (source ?? "<null>"),
+                    null);
+            }
+
+            return source.Substring(prefix.Length);
+        }
+
+        private static string BuildSnapshotStructureSignature(
+            string nodeId,
+            IReadOnlyDictionary<string, JObject> nodeById,
+            IReadOnlyDictionary<string, List<JObject>> childrenByParentId)
+        {
+            if (!nodeById.TryGetValue(nodeId, out JObject node))
+            {
+                return string.Empty;
+            }
+
+            string components = string.Join(",", (node["components"] as JArray)?.Values<string>() ??
+                                                  Enumerable.Empty<string>());
+            if (!childrenByParentId.TryGetValue(nodeId, out List<JObject> children) || children.Count == 0)
+            {
+                return "(" + components + ")";
+            }
+
+            return "(" + components + "[" + string.Join(",", children.Select(child =>
+                BuildSnapshotStructureSignature(
+                    child.Value<string>("id"),
+                    nodeById,
+                    childrenByParentId))) + "])";
+        }
+
+        private static void RemoveCandidateOwnedExtractions(
+            JObject plan,
+            PsdHierarchyComponentFamilyCandidate candidate,
+            string extractionId)
+        {
+            foreach (string propertyName in new[]
+                     {
+                         "componentExtractions",
+                         "stateComponentExtractions",
+                         "variantComponentExtractions",
+                         "statefulComponentExtractions",
+                     })
+            {
+                if (!(plan[propertyName] is JArray entries))
+                {
+                    continue;
+                }
+
+                for (int index = entries.Count - 1; index >= 0; index--)
+                {
+                    if (!(entries[index] is JObject entry))
+                    {
+                        continue;
+                    }
+
+                    bool idMatches = !string.IsNullOrWhiteSpace(extractionId) &&
+                                     string.Equals(entry.Value<string>("id"), extractionId, StringComparison.Ordinal);
+                    if (idMatches || ExtractionSourcesMatch(entry, propertyName, candidate.sources))
+                    {
+                        entries.RemoveAt(index);
+                    }
+                }
+            }
+        }
+
+        private static bool ExtractionSourcesMatch(
+            JObject extraction,
+            string propertyName,
+            IReadOnlyList<string> candidateSources)
+        {
+            IEnumerable<string> sources;
+            if (string.Equals(propertyName, "componentExtractions", StringComparison.Ordinal))
+            {
+                sources = (extraction["instances"] as JArray)?.Values<string>() ?? Enumerable.Empty<string>();
+            }
+            else if (string.Equals(propertyName, "stateComponentExtractions", StringComparison.Ordinal))
+            {
+                sources = (extraction["states"] as JArray)?.OfType<JObject>()
+                    .Select(state => state.Value<string>("source")) ?? Enumerable.Empty<string>();
+            }
+            else
+            {
+                sources = (extraction["instances"] as JArray)?.OfType<JObject>()
+                    .Select(instance => instance.Value<string>("source")) ?? Enumerable.Empty<string>();
+            }
+
+            return sources.SequenceEqual(candidateSources, StringComparer.Ordinal);
+        }
+
+        private static string CreateUniqueExtractionId(JObject plan, string suggestedName)
+        {
+            var usedIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string propertyName in new[]
+                     {
+                         "componentExtractions",
+                         "stateComponentExtractions",
+                         "variantComponentExtractions",
+                         "statefulComponentExtractions",
+                     })
+            {
+                if (plan[propertyName] is JArray entries)
+                {
+                    foreach (string id in entries.OfType<JObject>()
+                                 .Select(entry => entry.Value<string>("id"))
+                                 .Where(id => !string.IsNullOrWhiteSpace(id)))
+                    {
+                        usedIds.Add(id);
+                    }
+                }
+            }
+
+            string baseId = ToLowerSnakeCaseIdentifier(suggestedName);
+            string candidateId = baseId;
+            int suffix = 2;
+            while (usedIds.Contains(candidateId))
+            {
+                candidateId = baseId + "_" + suffix;
+                suffix++;
+            }
+
+            return candidateId;
+        }
+
+        private static string ToLowerSnakeCaseIdentifier(string value)
+        {
+            string separated = Regex.Replace(value ?? string.Empty, "([a-z0-9])([A-Z])", "$1_$2");
+            string normalized = Regex.Replace(separated, "[^A-Za-z0-9]+", "_")
+                .Trim(new[] { '_' })
+                .ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                normalized = "component_variant";
+            }
+
+            if (char.IsDigit(normalized[0]))
+            {
+                normalized = "component_" + normalized;
+            }
+
+            return normalized;
+        }
+
+        private static string CreateAvailableVariantAssetPath(
+            JObject plan,
+            PsdHierarchyChatContext context,
+            string suggestedAssetName)
+        {
+            string target = NormalizeAssetPath(context.targetPrefabAssetPath);
+            int separator = target.LastIndexOf('/');
+            if (separator <= 0)
+            {
+                throw new InvalidDataException(
+                    "Deterministic component-family repair failed: target Prefab has no asset directory: " + target);
+            }
+
+            var usedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string propertyName in new[]
+                     {
+                         "componentExtractions",
+                         "stateComponentExtractions",
+                         "variantComponentExtractions",
+                         "statefulComponentExtractions",
+                     })
+            {
+                if (plan[propertyName] is JArray entries)
+                {
+                    foreach (string path in entries.OfType<JObject>()
+                                 .Select(entry => NormalizeAssetPath(entry.Value<string>("assetPath")))
+                                 .Where(path => !string.IsNullOrWhiteSpace(path)))
+                    {
+                        usedPaths.Add(path);
+                    }
+                }
+            }
+
+            string directory = target.Substring(0, separator) + "/Common/";
+            string baseName = string.IsNullOrWhiteSpace(suggestedAssetName)
+                ? "ComponentVariant"
+                : suggestedAssetName + "Variant";
+            for (int suffix = 1; suffix <= 999; suffix++)
+            {
+                string assetName = suffix == 1 ? baseName : baseName + suffix;
+                string assetPath = directory + assetName + ".prefab";
+                string fullPath = Path.Combine(
+                    context.projectRoot,
+                    assetPath.Replace('/', Path.DirectorySeparatorChar));
+                if (!usedPaths.Contains(assetPath) &&
+                    !File.Exists(fullPath) &&
+                    !File.Exists(fullPath + ".meta"))
+                {
+                    return assetPath;
+                }
+            }
+
+            throw new InvalidDataException(
+                "Deterministic component-family repair failed: no unused Common Prefab asset path for " +
+                suggestedAssetName + ".");
+        }
+
         private static void NormalizeSingleStateVariantExtractions(
             JObject plan,
             PsdHierarchyChatContext context)
@@ -976,6 +1457,155 @@ namespace PsdLayoutTool2
             foreach (JObject decision in decisions.OfType<JObject>())
             {
                 decision.Remove("candidateId");
+            }
+        }
+
+        private static void CaptureCurrentAssetRenameGuids(JObject plan)
+        {
+            foreach (string propertyName in new[] { "textureRenames", "spriteAtlasRenames" })
+            {
+                if (!(plan[propertyName] is JArray renames))
+                {
+                    continue;
+                }
+
+                for (int index = 0; index < renames.Count; index++)
+                {
+                    if (!(renames[index] is JObject rename))
+                    {
+                        throw new InvalidDataException(propertyName + "[" + index + "] must be an object.");
+                    }
+
+                    string sourcePath = ReadRequiredString(rename, "from").Replace('\\', '/');
+                    if (AssetDatabase.LoadMainAssetAtPath(sourcePath) == null)
+                    {
+                        throw new InvalidDataException(
+                            propertyName + "[" + index + "].from asset did not load: " + sourcePath);
+                    }
+
+                    string currentGuid = AssetDatabase.AssetPathToGUID(sourcePath);
+                    if (string.IsNullOrWhiteSpace(currentGuid))
+                    {
+                        throw new InvalidDataException(
+                            propertyName + "[" + index + "].from has no Unity GUID: " + sourcePath);
+                    }
+
+                    rename["from"] = sourcePath;
+                    rename["expectedGuid"] = currentGuid;
+                }
+            }
+        }
+
+        private static void ValidateAndNormalizeVersionTwoPlan(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            ValidateRootPlanShape(plan, 2L, true);
+            ValidatePlanTarget(plan, context.targetPrefabAssetPath);
+
+            string fingerprint = ReadRequiredString(plan, "snapshotFingerprint");
+            if (string.IsNullOrWhiteSpace(context.hierarchySnapshotFingerprint) ||
+                !string.Equals(fingerprint, context.hierarchySnapshotFingerprint, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("计划引用的层级快照已经失效，请重新分析当前 Prefab。");
+            }
+
+            NormalizeRequiredVariantCandidates(plan, context);
+        }
+
+        private static void DerivePrefabNameFromAssetRenameTargets(JObject plan)
+        {
+            var candidates = new HashSet<string>(StringComparer.Ordinal);
+            var reviewedTargets = new List<string>();
+
+            CollectPrefabNameCandidates(
+                plan,
+                "textureRenames",
+                true,
+                candidates,
+                reviewedTargets);
+            CollectPrefabNameCandidates(
+                plan,
+                "spriteAtlasRenames",
+                false,
+                candidates,
+                reviewedTargets);
+
+            if (reviewedTargets.Count == 0)
+            {
+                return;
+            }
+
+            string submittedPrefabName = ReadRequiredString(plan, "prefabName");
+            string candidateList = string.Join(", ", candidates.OrderBy(value => value, StringComparer.Ordinal));
+            string targetList = string.Join("; ", reviewedTargets);
+            if (candidates.Count != 1)
+            {
+                throw new InvalidDataException(
+                    "prefabName derivation failed before runner preflight: " +
+                    "reviewed asset rename targets produced conflicting candidates; " +
+                    "submittedPrefabName=" + submittedPrefabName + "; " +
+                    "candidates=" + candidateList + "; " +
+                    "reviewedTargets=" + targetList + "; " +
+                    "required=one PascalCase name ending with View.");
+            }
+
+            string derivedPrefabName = candidates.Single();
+            if (!Regex.IsMatch(derivedPrefabName, "^[A-Z][A-Za-z0-9]*View$", RegexOptions.CultureInvariant))
+            {
+                throw new InvalidDataException(
+                    "prefabName derivation failed before runner preflight: " +
+                    "derived candidate does not match PascalCase and end with View; " +
+                    "submittedPrefabName=" + submittedPrefabName + "; " +
+                    "candidate=" + derivedPrefabName + "; " +
+                    "reviewedTargets=" + targetList + "; " +
+                    "required=^[A-Z][A-Za-z0-9]*View$.");
+            }
+
+            plan["prefabName"] = derivedPrefabName;
+        }
+
+        private static void CollectPrefabNameCandidates(
+            JObject plan,
+            string propertyName,
+            bool useTexturePrefix,
+            ISet<string> candidates,
+            ICollection<string> reviewedTargets)
+        {
+            if (!(plan[propertyName] is JArray renames))
+            {
+                return;
+            }
+
+            for (int index = 0; index < renames.Count; index++)
+            {
+                if (!(renames[index] is JObject rename))
+                {
+                    throw new InvalidDataException(propertyName + "[" + index + "] must be an object.");
+                }
+
+                string toName = ReadRequiredString(rename, "toName");
+                string label = propertyName + "[" + index + "].toName=" + toName;
+                reviewedTargets.Add(label);
+
+                if (!useTexturePrefix)
+                {
+                    candidates.Add(toName);
+                    continue;
+                }
+
+                int separatorIndex = toName.IndexOf('_');
+                if (separatorIndex <= 0)
+                {
+                    string submittedPrefabName = ReadRequiredString(plan, "prefabName");
+                    throw new InvalidDataException(
+                        "prefabName derivation failed before runner preflight: " +
+                        label + " has no '<PrefabName>_' prefix; " +
+                        "submittedPrefabName=" + submittedPrefabName + "; " +
+                        "required=texture toName must start with one PascalCase name ending with View followed by underscore.");
+                }
+
+                candidates.Add(toName.Substring(0, separatorIndex));
             }
         }
 

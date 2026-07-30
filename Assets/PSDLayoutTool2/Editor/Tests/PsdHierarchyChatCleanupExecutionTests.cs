@@ -3,6 +3,7 @@ namespace PsdLayoutTool2.Tests
     using System.Linq;
     using Newtonsoft.Json.Linq;
     using NUnit.Framework;
+    using UnityEditor;
 
     public sealed class PsdHierarchyChatCleanupExecutionTests
     {
@@ -105,6 +106,156 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 error,
                 Is.EqualTo("Plan source path was not found for renames[0].target: DayMarkers/20"));
+        }
+
+        [Test]
+        public void RunnerPlanCapturesCurrentUnityGuidInsteadOfTrustingAiAssetRenameGuid()
+        {
+            const string assetPath =
+                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = assetPath,
+                    ["toName"] = "ExampleView_OuterBackgroundFrame",
+                    ["expectedGuid"] = "905d7b156324ebf4cb8e9c8717f3dc84",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            string expectedGuid = AssetDatabase.AssetPathToGUID(assetPath);
+            Assert.That(expectedGuid, Is.Not.Empty);
+            Assert.That(
+                JObject.Parse(runnerPlanJson)["textureRenames"]?[0]?["expectedGuid"]?.Value<string>(),
+                Is.EqualTo(expectedGuid));
+        }
+
+        [Test]
+        public void RunnerPlanRejectsMissingAssetRenameSourceBeforeExternalPreflight()
+        {
+            const string missingAssetPath =
+                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/missing_texture.png";
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = missingAssetPath,
+                    ["toName"] = "ExampleView_MissingTexture",
+                    ["expectedGuid"] = "00000000000000000000000000000000",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("textureRenames[0].from"));
+            Assert.That(error, Does.Contain(missingAssetPath));
+        }
+
+        [Test]
+        public void RunnerPlanDerivesPrefabNameFromReviewedAssetRenameTargets()
+        {
+            const string assetPath =
+                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["prefabName"] = "7日任务拆分";
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = assetPath,
+                    ["toName"] = "SevenDayTaskView_OuterBackgroundFrame",
+                    ["expectedGuid"] = string.Empty,
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            Assert.That(
+                JObject.Parse(runnerPlanJson).Value<string>("prefabName"),
+                Is.EqualTo("SevenDayTaskView"));
+        }
+
+        [Test]
+        public void RunnerPlanRejectsConflictingPrefabNamesFromReviewedAssetRenameTargets()
+        {
+            const string assetPath =
+                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["prefabName"] = "7日任务拆分";
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = assetPath,
+                    ["toName"] = "SevenDayTaskView_OuterBackgroundFrame",
+                    ["expectedGuid"] = string.Empty,
+                },
+                new JObject
+                {
+                    ["from"] = assetPath,
+                    ["toName"] = "OtherView_OuterBackgroundFrame",
+                    ["expectedGuid"] = string.Empty,
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(
+                error,
+                Is.EqualTo(
+                    "prefabName derivation failed before runner preflight: " +
+                    "reviewed asset rename targets produced conflicting candidates; " +
+                    "submittedPrefabName=7日任务拆分; " +
+                    "candidates=OtherView, SevenDayTaskView; " +
+                    "reviewedTargets=" +
+                    "textureRenames[0].toName=SevenDayTaskView_OuterBackgroundFrame; " +
+                    "textureRenames[1].toName=OtherView_OuterBackgroundFrame; " +
+                    "required=one PascalCase name ending with View."));
         }
 
         [Test]
@@ -282,6 +433,119 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanDeterministicallyRepairsSkipForMandatoryVariantFamily()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "AI could not find a shared direct child.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateDistinctVariantCandidateContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            JObject decision = (JObject)runnerPlan["componentFamilyDecisions"][0];
+            Assert.That(decision.Value<string>("mode"), Is.EqualTo("variant"));
+            Assert.That(decision.Value<string>("extractionId"), Is.EqualTo("task_item_variant"));
+            JObject extraction = (JObject)runnerPlan["variantComponentExtractions"][0];
+            Assert.That(extraction.Value<string>("template"), Is.EqualTo("Root/TaskList/[TaskItem_1]"));
+            Assert.That(extraction.Value<string>("assetPath"), Does.EndWith("/Common/TaskItemVariant.prefab"));
+            Assert.That(((JArray)extraction["states"]).Count, Is.EqualTo(3));
+            Assert.That(((JArray)extraction["instances"]).Count, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void VersionTwoPlanDerivesUniqueBracketedNameForInvalidVariantInstance()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray(
+                        "node:n000003",
+                        "node:n000004",
+                        "node:n000005",
+                        "node:n000006",
+                        "node:n000007"),
+                    ["mode"] = "skip",
+                    ["reason"] = "AI skipped the mandatory family.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateInvalidVariantInstanceNameContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            var extraction = (JObject)runnerPlan["variantComponentExtractions"][0];
+            Assert.That(
+                ((JArray)extraction["instances"])
+                .OfType<JObject>()
+                .Select(instance => instance.Value<string>("name")),
+                Is.EqualTo(new[]
+                {
+                    "[TaskRow_4]",
+                    "[TaskRow_3]",
+                    "[TaskRow_1]",
+                    "[TaskRow_2]",
+                    "[TaskRow_5]",
+                }));
+        }
+
+        [Test]
+        public void ContextPlanExtractionReturnsTheDeterministicallyRepairedVariantJson()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "AI skipped the mandatory family.",
+                },
+            };
+            string reply = "review\n```json\n" + plan.ToString() + "\n```";
+
+            bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                reply,
+                CreateDistinctVariantCandidateContext(),
+                out string approvedPlanJson,
+                out string error);
+
+            Assert.That(extracted, Is.True, error);
+            var approvedPlan = JObject.Parse(approvedPlanJson);
+            Assert.That(approvedPlan.Value<long>("version"), Is.EqualTo(2));
+            Assert.That(
+                approvedPlan["componentFamilyDecisions"][0].Value<string>("mode"),
+                Is.EqualTo("variant"));
+            Assert.That(((JArray)approvedPlan["variantComponentExtractions"]).Count, Is.EqualTo(1));
+        }
+
+        [Test]
         public void VersionTwoPlanAcceptsMandatoryExtractionAndStripsCandidateMetadataForTheRunner()
         {
             var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
@@ -388,7 +652,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void VersionTwoPlanRejectsSingleStateVariantForARequiredNonComponentFamily()
+        public void VersionTwoPlanReportsDetailedErrorWhenRequiredVariantCannotBeReconstructed()
         {
             var plan = JObject.Parse(
                 CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
@@ -438,7 +702,12 @@ namespace PsdLayoutTool2.Tests
                 out string error);
 
             Assert.That(prepared, Is.False);
-            Assert.That(error, Does.Contain("has one visual state").And.Contain("requires variant"));
+            Assert.That(error, Does.Contain("candidateId=family_001"));
+            Assert.That(error, Does.Contain("asset=TaskItem"));
+            Assert.That(error, Does.Contain("sources=node:n000003,node:n000004,node:n000005"));
+            Assert.That(
+                error,
+                Does.Contain("reason=recommendedMode=variant but fewer than two distinct recursive structures were observed"));
         }
 
         [Test]
@@ -794,6 +1063,73 @@ namespace PsdLayoutTool2.Tests
                 recommendedModeJson +
                 "\"parent\":\"node:n000002\",\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\"]," +
                 "\"requiresExtraction\":true}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateDistinctVariantCandidateContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root\",\"name\":\"Root\",\"parentId\":\"\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/TaskList\",\"name\":\"TaskList\",\"parentId\":\"n000001\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000003\",\"path\":\"Root/TaskList/[TaskItem_1]\",\"name\":\"[TaskItem_1]\",\"parentId\":\"n000002\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000004\",\"path\":\"Root/TaskList/[TaskItem_2]\",\"name\":\"[TaskItem_2]\",\"parentId\":\"n000002\",\"siblingIndex\":1,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000005\",\"path\":\"Root/TaskList/[TaskItem_3]\",\"name\":\"[TaskItem_3]\",\"parentId\":\"n000002\",\"siblingIndex\":2,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000006\",\"path\":\"Root/TaskList/[TaskItem_1]/Background\",\"name\":\"Background\",\"parentId\":\"n000003\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Image\"]}," +
+                "{\"id\":\"n000007\",\"path\":\"Root/TaskList/[TaskItem_2]/Content\",\"name\":\"Content\",\"parentId\":\"n000004\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Text\"]}," +
+                "{\"id\":\"n000008\",\"path\":\"Root/TaskList/[TaskItem_3]/LockIcon\",\"name\":\"LockIcon\",\"parentId\":\"n000005\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Image\"]}," +
+                "{\"id\":\"n000009\",\"path\":\"Root/TaskList/[TaskItem_3]/LockIcon/Overlay\",\"name\":\"Overlay\",\"parentId\":\"n000008\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}]," +
+                "\"componentFamilyCandidates\":[{\"id\":\"family_001\",\"suggestedAssetName\":\"TaskItem\"," +
+                "\"recommendedMode\":\"variant\",\"parent\":\"node:n000002\"," +
+                "\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\"],\"requiresExtraction\":true}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateInvalidVariantInstanceNameContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root\",\"name\":\"Root\",\"parentId\":\"\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/TaskList\",\"name\":\"TaskList\",\"parentId\":\"n000001\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000003\",\"path\":\"Root/TaskList/[TaskRow_4]\",\"name\":\"[TaskRow_4]\",\"parentId\":\"n000002\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000004\",\"path\":\"Root/TaskList/[TaskRow_3]\",\"name\":\"[TaskRow_3]\",\"parentId\":\"n000002\",\"siblingIndex\":1,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000005\",\"path\":\"Root/TaskList/[TaskRow_1]\",\"name\":\"[TaskRow_1]\",\"parentId\":\"n000002\",\"siblingIndex\":2,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000006\",\"path\":\"Root/TaskList/[TaskRow_2]\",\"name\":\"[TaskRow_2]\",\"parentId\":\"n000002\",\"siblingIndex\":3,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000007\",\"path\":\"Root/TaskList/1\",\"name\":\"1\",\"parentId\":\"n000002\",\"siblingIndex\":4,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000008\",\"path\":\"Root/TaskList/[TaskRow_4]/Background\",\"name\":\"Background\",\"parentId\":\"n000003\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Image\"]}," +
+                "{\"id\":\"n000009\",\"path\":\"Root/TaskList/[TaskRow_3]/Content\",\"name\":\"Content\",\"parentId\":\"n000004\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Text\"]}," +
+                "{\"id\":\"n000010\",\"path\":\"Root/TaskList/[TaskRow_1]/LockIcon\",\"name\":\"LockIcon\",\"parentId\":\"n000005\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Image\"]}," +
+                "{\"id\":\"n000011\",\"path\":\"Root/TaskList/[TaskRow_1]/LockIcon/Overlay\",\"name\":\"Overlay\",\"parentId\":\"n000010\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000012\",\"path\":\"Root/TaskList/[TaskRow_2]/Progress\",\"name\":\"Progress\",\"parentId\":\"n000006\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Text\"]}," +
+                "{\"id\":\"n000013\",\"path\":\"Root/TaskList/[TaskRow_2]/Progress/Value\",\"name\":\"Value\",\"parentId\":\"n000012\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000014\",\"path\":\"Root/TaskList/1/Reward\",\"name\":\"Reward\",\"parentId\":\"n000007\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Image\"]}," +
+                "{\"id\":\"n000015\",\"path\":\"Root/TaskList/1/Reward/Amount\",\"name\":\"Amount\",\"parentId\":\"n000014\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
+                "{\"id\":\"n000016\",\"path\":\"Root/TaskList/1/Reward/Amount/Label\",\"name\":\"Label\",\"parentId\":\"n000015\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}]," +
+                "\"componentFamilyCandidates\":[{\"id\":\"family_001\",\"suggestedAssetName\":\"TaskRow\"," +
+                "\"recommendedMode\":\"variant\",\"parent\":\"node:n000002\"," +
+                "\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\",\"node:n000006\",\"node:n000007\"],\"requiresExtraction\":true}]}";
             return new PsdHierarchyChatContext(
                 "E:/Project/Demo/monsterhunter",
                 "Assets/UI/Source.psd",

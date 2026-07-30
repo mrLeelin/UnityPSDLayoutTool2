@@ -57,7 +57,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertEqual(candidate["recommendedMode"], "stateful")
         self.assertEqual(candidate["instances"], [card.path for card in cards])
 
-    def test_numbered_family_without_common_direct_members_is_required_variant(self):
+    def test_numbered_family_without_common_direct_members_is_mandatory_variant(self):
         root = self.make_candidate_node("Root", 0, 1)
         parent = self.make_candidate_node("Root/[TaskItems]", 0, 3)
         root.children.append(parent)
@@ -591,6 +591,167 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         )
         self.assertIn("Repeated unit structure differs for component extraction", generated)
 
+    def test_preflight_runs_runtime_safety_checks_for_every_extraction_mode(self):
+        component_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        component_sources = [
+            "RewardPanel/Root/Title",
+            "RewardPanel/Root/Subtitle",
+        ]
+        component_plan["componentExtractions"] = [
+            {
+                "id": "reward_label",
+                "template": component_sources[0],
+                "assetPath": "Assets/UI/Common/RewardLabel.prefab",
+                "instances": component_sources,
+            }
+        ]
+        component_plan["componentFamilyDecisions"] = [
+            {
+                "parent": "RewardPanel/Root",
+                "sources": component_sources,
+                "mode": "component",
+                "extractionId": "reward_label",
+                "reason": "Both labels share one reusable component contract.",
+            }
+        ]
+
+        state_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        state_sources = [
+            "RewardPanel/Root/Title",
+            "RewardPanel/Root/Subtitle",
+        ]
+        state_extraction = {
+            "id": "reward_state",
+            "template": state_sources[0],
+            "assetPath": "Assets/UI/Common/RewardState.prefab",
+            "defaultState": "primary",
+            "states": [
+                {
+                    "id": "primary",
+                    "source": state_sources[0],
+                    "name": "[State_Primary]",
+                },
+                {
+                    "id": "secondary",
+                    "source": state_sources[1],
+                    "name": "[State_Secondary]",
+                },
+            ],
+        }
+        state_plan["stateComponentExtractions"] = [state_extraction]
+        state_plan["componentFamilyDecisions"] = [
+            {
+                "parent": state_extraction["template"].rsplit("/", 1)[0],
+                "sources": [state["source"] for state in state_extraction["states"]],
+                "mode": "state",
+                "extractionId": state_extraction["id"],
+                "reason": "The sibling roots are mutually exclusive visual states.",
+            }
+        ]
+
+        variant_plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
+        variant_extraction = variant_plan["variantComponentExtractions"][0]
+        variant_plan["componentFamilyDecisions"] = [
+            {
+                "parent": variant_extraction["template"].rsplit("/", 1)[0],
+                "sources": [instance["source"] for instance in variant_extraction["instances"]],
+                "mode": "variant",
+                "extractionId": variant_extraction["id"],
+                "reason": "The visible rows share one component with observed variants.",
+            }
+        ]
+
+        stateful_plan = self.load_plan("seven-day-task-view-day-reward-items.in-place.plan.json")
+        stateful_extraction = stateful_plan["statefulComponentExtractions"][0]
+        stateful_plan["componentFamilyDecisions"] = [
+            {
+                "parent": stateful_extraction["template"].rsplit("/", 1)[0],
+                "sources": [instance["source"] for instance in stateful_extraction["instances"]],
+                "mode": "stateful",
+                "extractionId": stateful_extraction["id"],
+                "reason": "The repeated units have common members and explicit states.",
+            }
+        ]
+
+        cases = (
+            (component_plan, "preflightComponentInstance0_0", False),
+            (state_plan, "preflightStateSource0_0", False),
+            (variant_plan, "preflightVariantInstance0_0", False),
+            (stateful_plan, "preflightStatefulInstance0_0", True),
+        )
+        for raw_plan, variable, requires_member_check in cases:
+            with self.subTest(variable=variable):
+                generated = render(normalize_plan(raw_plan, "preflight"), "preflight")
+                self.assertIn(f"AssertNoNestedPrefabRoots({variable});", generated)
+                self.assertIn(
+                    f"AssertNoExternalReferences(root.transform, {variable});",
+                    generated,
+                )
+                if variable == "preflightVariantInstance0_0":
+                    self.assertIn(
+                        'AssertVariantSourceCompatible("task_item", "in_progress",',
+                        generated,
+                    )
+                if requires_member_check:
+                    self.assertIn(f"AssertDirectSourceMembers({variable},", generated)
+
+    def test_variant_failures_include_actionable_structure_details(self):
+        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
+        extraction = plan["variantComponentExtractions"][0]
+        plan["componentFamilyDecisions"] = [
+            {
+                "parent": extraction["template"].rsplit("/", 1)[0],
+                "sources": [instance["source"] for instance in extraction["instances"]],
+                "mode": "variant",
+                "extractionId": extraction["id"],
+                "reason": "The visible rows share one component with observed variants.",
+            }
+        ]
+
+        generated = render(normalize_plan(plan, "apply"), "apply")
+
+        self.assertIn("Variant extraction structure mismatch", generated)
+        self.assertIn("extractionId=", generated)
+        self.assertIn("instance=", generated)
+        self.assertIn("state=", generated)
+        self.assertIn("source=", generated)
+        self.assertIn("expectedRectTransforms=", generated)
+        self.assertIn("actualRectTransforms=", generated)
+
+    def test_apply_wraps_all_component_prefab_writes_in_one_transaction(self):
+        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
+        extraction = plan["variantComponentExtractions"][0]
+        plan["componentFamilyDecisions"] = [
+            {
+                "parent": extraction["template"].rsplit("/", 1)[0],
+                "sources": [instance["source"] for instance in extraction["instances"]],
+                "mode": "variant",
+                "extractionId": extraction["id"],
+                "reason": "The visible rows share one component with observed variants.",
+            }
+        ]
+
+        generated = render(normalize_plan(plan, "apply"), "apply")
+
+        begin_call = "var componentAssetTransaction = BeginComponentAssetTransaction("
+        commit_call = "CommitComponentAssetTransaction(componentAssetTransaction);"
+        rollback_call = "RollbackComponentAssetTransaction(componentAssetTransaction);"
+        self.assertIn(begin_call, generated)
+        self.assertIn(commit_call, generated)
+        self.assertIn(rollback_call, generated)
+
+        begin = generated.index(begin_call)
+        create = generated.index("CreateVariantComponentPrefab(", begin)
+        prefab_save = generated.index("PrefabUtility.SaveAsPrefabAsset(root, outputPath)")
+        commit = generated.index(commit_call, prefab_save)
+        self.assertLess(begin, create)
+        self.assertLess(create, prefab_save)
+        self.assertLess(prefab_save, commit)
+
     def test_verify_ignores_preexisting_missing_sprites_inside_nested_prefabs(self):
         raw_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
@@ -831,6 +992,17 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         )
         self.assertIn("if (replayAssetAlreadyRenamed0)", generated)
         self.assertIn("var replayRenameError0 = AssetDatabase.RenameAsset", generated)
+
+    def test_guid_invariant_failure_reports_expected_and_actual_identity(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+
+        generated = render(normalize_plan(raw_plan, "apply"), "apply")
+
+        self.assertIn("GUID invariant failed: path=", generated)
+        self.assertIn(";expectedGuid=", generated)
+        self.assertIn(";actualGuid=", generated)
 
     def test_apply_saves_prefab_only_after_transactional_asset_renames(self):
         raw_plan = json.loads(

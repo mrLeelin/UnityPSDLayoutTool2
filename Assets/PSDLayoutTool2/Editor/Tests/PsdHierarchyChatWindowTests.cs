@@ -27,6 +27,38 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void SamePrefabFingerprintWithChangedCandidateAnalysisRequiresConversationReset()
+        {
+            const string fingerprint = "same-prefab-fingerprint";
+            var staleContext = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                "{\"fingerprint\":\"same-prefab-fingerprint\",\"componentFamilyCandidates\":[{\"id\":\"family_001\",\"sources\":[\"node:n1\",\"node:n2\",\"node:n3\",\"node:n4\"]}]}",
+                fingerprint,
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/same-prefab-fingerprint.json");
+            var refreshedContext = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                "{\"fingerprint\":\"same-prefab-fingerprint\",\"componentFamilyCandidates\":[{\"id\":\"family_001\",\"sources\":[\"node:n1\",\"node:n2\",\"node:n3\",\"node:n4\",\"node:n5\"]}]}",
+                fingerprint,
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/same-prefab-fingerprint.json");
+
+            Assert.That(
+                PsdHierarchyChatWindow.HasAuthoritativeAnalysisChanged(staleContext, refreshedContext),
+                Is.True);
+        }
+
+        [Test]
         public void WindowBuildsOnlyChatControls()
         {
             PsdHierarchyChatWindow window = ScriptableObject.CreateInstance<PsdHierarchyChatWindow>();

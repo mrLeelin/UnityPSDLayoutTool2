@@ -69,8 +69,13 @@ namespace PsdLayoutTool2.Tests
 
             JArray candidates = PsdHierarchyChatContextBuilder.BuildComponentFamilyCandidates(nodes);
 
-            Assert.That(candidates.Count, Is.EqualTo(1));
-            JObject candidate = (JObject)candidates[0];
+            JObject candidate = candidates
+                .OfType<JObject>()
+                .Single(item => item.Value<string>("suggestedAssetName") == "TaskItem"
+                    && ((JArray)item["sources"]).Values<string>().SequenceEqual(new[]
+                    {
+                        "node:n000003", "node:n000004", "node:n000005",
+                    }));
             Assert.That(candidate.Value<string>("id"), Is.EqualTo("family_001"));
             Assert.That(candidate.Value<string>("suggestedAssetName"), Is.EqualTo("TaskItem"));
             Assert.That(candidate.Value<bool>("requiresExtraction"), Is.True);
@@ -310,6 +315,10 @@ namespace PsdLayoutTool2.Tests
             Assert.That(instructions, Does.Contain("already confirmed for in-place cleanup"));
             Assert.That(instructions, Does.Contain(".cleaned.prefab"));
             Assert.That(instructions, Does.Contain("include the complete reviewed extraction contract"));
+            Assert.That(instructions, Does.Contain("requiresExtraction:false are advisory"));
+            Assert.That(instructions, Does.Contain("do not force a variant solely because sibling names repeat"));
+            Assert.That(instructions, Does.Contain("one observed state for every distinct recursive structure"));
+            Assert.That(instructions, Does.Contain("must not be skipped"));
             Assert.That(instructions, Does.Contain("Return an auditable analysis summary"));
             Assert.That(instructions, Does.Contain("风险与保留项"));
         }
@@ -491,6 +500,21 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void InitialAndRepairPromptsTreatPrefabNameAsUnityDerivedForPrivateAssetRenames()
+        {
+            PsdHierarchyChatContext context = CreateSmallContext();
+            string initialPrompt = context.BuildInstructions();
+            string repairPrompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(
+                "prefabName must be PascalCase and end with View when renaming private assets.");
+
+            Assert.That(initialPrompt, Does.Contain("Unity derives the internal prefabName"));
+            Assert.That(initialPrompt, Does.Contain("textureRenames[].toName"));
+            Assert.That(initialPrompt, Does.Contain("spriteAtlasRenames[].toName"));
+            Assert.That(repairPrompt, Does.Contain("Do not repair prefabName by guessing"));
+            Assert.That(repairPrompt, Does.Contain("reviewed toName values"));
+        }
+
+        [Test]
         public void ClaudeDirectPromptSuppliesTheCanonicalExecutablePlanContract()
         {
             const string planFormat =
@@ -530,6 +554,9 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("snapshot-123.json"));
             Assert.That(prompt, Does.Contain("node:<id>"));
             Assert.That(prompt, Does.Contain("wrappers[].id must use lower snake_case").And.Contain("screen_root"));
+            Assert.That(prompt, Does.Contain("Unity derives the internal prefabName"));
+            Assert.That(prompt, Does.Contain("one observed state for every distinct recursive structure"));
+            Assert.That(prompt, Does.Contain("must not be skipped"));
             Assert.That(prompt, Does.Not.Contain("Target Prefab: E:/Project"));
         }
 

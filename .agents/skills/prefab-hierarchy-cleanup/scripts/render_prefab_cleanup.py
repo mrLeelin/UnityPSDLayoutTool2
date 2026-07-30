@@ -1041,6 +1041,55 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
                 [
                     f"    var {instance_var} = FindByPath(root, {csharp(instance)}).transform;",
                     f"    if (!string.Equals({signature_var}, StructureSignature({instance_var}), StringComparison.Ordinal)) throw new InvalidOperationException(\"Repeated unit structure differs for component extraction: \" + {instance_var}.name);",
+                    f"    AssertNoNestedPrefabRoots({instance_var});",
+                    f"    AssertNoExternalReferences(root.transform, {instance_var});",
+                ]
+            )
+
+    for index, extraction in enumerate(plan["state_component_extractions"]):
+        for state_index, state in enumerate(extraction["states"]):
+            source_var = f"preflightStateSource{index}_{state_index}"
+            lines.extend(
+                [
+                    f"    var {source_var} = FindByPath(root, {csharp(state['source'])}).transform;",
+                    f"    AssertNoNestedPrefabRoots({source_var});",
+                    f"    AssertNoExternalReferences(root.transform, {source_var});",
+                ]
+            )
+
+    for index, extraction in enumerate(plan["variant_component_extractions"]):
+        state_source_vars: dict[str, str] = {}
+        for state_index, state in enumerate(extraction["states"]):
+            state_source_var = f"preflightVariantStateSource{index}_{state_index}"
+            state_source_vars[state["id"]] = state_source_var
+            lines.extend(
+                [
+                    f"    var {state_source_var} = FindByPath(root, {csharp(state['source'])}).transform;",
+                    f"    AssertNoNestedPrefabRoots({state_source_var});",
+                    f"    AssertNoExternalReferences(root.transform, {state_source_var});",
+                ]
+            )
+        for instance_index, instance in enumerate(extraction["instances"]):
+            instance_var = f"preflightVariantInstance{index}_{instance_index}"
+            state_source_var = state_source_vars[instance["state"]]
+            lines.extend(
+                [
+                    f"    var {instance_var} = FindByPath(root, {csharp(instance['source'])}).transform;",
+                    f"    AssertNoNestedPrefabRoots({instance_var});",
+                    f"    AssertNoExternalReferences(root.transform, {instance_var});",
+                    f"    AssertVariantSourceCompatible({csharp(extraction['id'])}, {csharp(instance['state'])}, {instance_var}, {state_source_var});",
+                ]
+            )
+
+    for index, extraction in enumerate(plan["stateful_component_extractions"]):
+        for instance_index, instance in enumerate(extraction["instances"]):
+            instance_var = f"preflightStatefulInstance{index}_{instance_index}"
+            lines.extend(
+                [
+                    f"    var {instance_var} = FindByPath(root, {csharp(instance['source'])}).transform;",
+                    f"    AssertNoNestedPrefabRoots({instance_var});",
+                    f"    AssertNoExternalReferences(root.transform, {instance_var});",
+                    f"    AssertDirectSourceMembers({instance_var}, {csharp_string_array(instance['commonSourceNames'])}, {csharp_string_array(instance['stateSourceNames'])});",
                 ]
             )
 
@@ -1413,6 +1462,14 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    var parts = new List<string>(); AppendStructureSignature(node, parts); return string.Join(\"|\", parts.ToArray());",
         "}",
         "",
+        "void AssertVariantSourceCompatible(string extractionId, string stateId, Transform instance, Transform stateSource)",
+        "{",
+        "    var expectedRectTransforms = instance.GetComponentsInChildren<RectTransform>(true).Length; var actualRectTransforms = stateSource.GetComponentsInChildren<RectTransform>(true).Length;",
+        "    var expectedSignature = StructureSignature(instance); var actualSignature = StructureSignature(stateSource);",
+        "    if (expectedRectTransforms == actualRectTransforms && string.Equals(expectedSignature, actualSignature, StringComparison.Ordinal)) return;",
+        "    throw new InvalidOperationException(\"Variant extraction structure mismatch: extractionId=\" + extractionId + \";instance=\" + instance.name + \";state=\" + stateId + \";source=\" + TransformPath(instance) + \";stateSource=\" + TransformPath(stateSource) + \";expectedRectTransforms=\" + expectedRectTransforms + \";actualRectTransforms=\" + actualRectTransforms + \";expectedSignature=\" + expectedSignature + \";actualSignature=\" + actualSignature);",
+        "}",
+        "",
         "void AssertNoNestedPrefabRoots(Transform source)",
         "{",
         "    foreach (var node in source.GetComponentsInChildren<Transform>(true))",
@@ -1514,15 +1571,66 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "void AssertHierarchyCorners(Transform node, List<Vector3[]> beforeCorners, string label)",
         "{",
         "    var afterCorners = new List<Vector3[]>(); CaptureHierarchyCorners(node, afterCorners);",
-        "    if (afterCorners.Count != beforeCorners.Count) throw new InvalidOperationException(\"Component extraction changed RectTransform count: \" + label);",
+        "    if (afterCorners.Count != beforeCorners.Count) throw new InvalidOperationException(\"Component extraction changed RectTransform count: label=\" + label + \";expectedRectTransforms=\" + beforeCorners.Count + \";actualRectTransforms=\" + afterCorners.Count + \";source=\" + TransformPath(node));",
         "    var maxDelta = 0f; for (var nodeIndex = 0; nodeIndex < beforeCorners.Count; nodeIndex++) for (var cornerIndex = 0; cornerIndex < 4; cornerIndex++) maxDelta = Mathf.Max(maxDelta, Vector3.Distance(beforeCorners[nodeIndex][cornerIndex], afterCorners[nodeIndex][cornerIndex]));",
-        "    if (maxDelta > 0.01f) throw new InvalidOperationException(\"Component extraction world-corner invariant failed for \" + label + \": \" + maxDelta);",
+        "    if (maxDelta > 0.01f) throw new InvalidOperationException(\"Component extraction world-corner invariant failed: label=\" + label + \";source=\" + TransformPath(node) + \";maxDelta=\" + maxDelta + \";tolerance=0.01\");",
         "}",
         "",
         "void EnsureAssetFolder(string assetPath)",
         "{",
         "    var directory = assetPath.Substring(0, assetPath.LastIndexOf('/')); var parts = directory.Split('/'); var current = parts[0];",
         "    for (var index = 1; index < parts.Length; index++) { var next = current + \"/\" + parts[index]; if (!AssetDatabase.IsValidFolder(next)) AssetDatabase.CreateFolder(current, parts[index]); current = next; }",
+        "}",
+        "",
+        "void RollbackComponentAssetTransaction(List<KeyValuePair<string, string>> transaction)",
+        "{",
+        "    for (var index = transaction.Count - 1; index >= 0; index--)",
+        "    {",
+        "        var pair = transaction[index];",
+        "        if (AssetDatabase.LoadMainAssetAtPath(pair.Key) != null && !AssetDatabase.DeleteAsset(pair.Key)) Debug.LogError(\"Component Prefab rollback could not delete: \" + pair.Key);",
+        "        if (string.IsNullOrEmpty(pair.Value) || AssetDatabase.LoadMainAssetAtPath(pair.Value) == null) continue;",
+        "        var restoreError = AssetDatabase.MoveAsset(pair.Value, pair.Key);",
+        "        if (!string.IsNullOrEmpty(restoreError)) Debug.LogError(\"Component Prefab rollback could not restore \" + pair.Key + \": \" + restoreError);",
+        "    }",
+        "    AssetDatabase.SaveAssets();",
+        "}",
+        "",
+        "List<KeyValuePair<string, string>> BeginComponentAssetTransaction(string[] assetPaths)",
+        "{",
+        "    var transaction = new List<KeyValuePair<string, string>>();",
+        "    try",
+        "    {",
+        "        foreach (var assetPath in assetPaths.Distinct(StringComparer.Ordinal))",
+        "        {",
+        "            EnsureAssetFolder(assetPath);",
+        "            var backupPath = string.Empty;",
+        "            if (AssetDatabase.LoadMainAssetAtPath(assetPath) != null)",
+        "            {",
+        "                var directory = assetPath.Substring(0, assetPath.LastIndexOf('/') + 1);",
+        "                backupPath = directory + Path.GetFileNameWithoutExtension(assetPath) + \".__PsdCleanupBackup_\" + Guid.NewGuid().ToString(\"N\") + Path.GetExtension(assetPath);",
+        "                var backupError = AssetDatabase.MoveAsset(assetPath, backupPath);",
+        "                if (!string.IsNullOrEmpty(backupError)) throw new InvalidOperationException(\"Could not stage existing component Prefab: \" + assetPath + \". \" + backupError);",
+        "            }",
+        "            transaction.Add(new KeyValuePair<string, string>(assetPath, backupPath));",
+        "        }",
+        "        return transaction;",
+        "    }",
+        "    catch",
+        "    {",
+        "        RollbackComponentAssetTransaction(transaction);",
+        "        throw;",
+        "    }",
+        "}",
+        "",
+        "void CommitComponentAssetTransaction(List<KeyValuePair<string, string>> transaction)",
+        "{",
+        "    foreach (var pair in transaction) if (AssetDatabase.LoadAssetAtPath<GameObject>(pair.Key) == null) throw new InvalidOperationException(\"Component Prefab was not created: \" + pair.Key);",
+        "    foreach (var pair in transaction)",
+        "    {",
+        "        if (string.IsNullOrEmpty(pair.Value) || AssetDatabase.LoadMainAssetAtPath(pair.Value) == null) continue;",
+        "        if (!AssetDatabase.DeleteAsset(pair.Value)) Debug.LogWarning(\"Committed component Prefab but could not delete its transaction backup: \" + pair.Value);",
+        "    }",
+        "    AssetDatabase.SaveAssets();",
         "}",
         "",
         "GameObject CreateComponentPrefab(Transform template, string assetPath)",
@@ -1620,13 +1728,14 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    finally { Object.DestroyImmediate(builder); }",
         "}",
         "",
-        "GameObject ReplaceVariantSourceWithComponent(Transform source, string instanceName, string activeStateName, GameObject componentAsset)",
+        "GameObject ReplaceVariantSourceWithComponent(string extractionId, Transform source, string instanceName, string activeStateName, GameObject componentAsset)",
         "{",
         "    var parent = source.parent; if (parent == null) throw new InvalidOperationException(\"Cannot replace the Prefab root with a variant component instance\"); var siblingIndex = source.GetSiblingIndex();",
-        "    var beforeCorners = new List<Vector3[]>(); CaptureHierarchyCorners(source, beforeCorners);",
+        "    var sourcePath = TransformPath(source); var expectedSignature = StructureSignature(source); var beforeCorners = new List<Vector3[]>(); CaptureHierarchyCorners(source, beforeCorners);",
         "    var instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject; if (instance == null) throw new InvalidOperationException(\"Failed to instantiate variant component Prefab: \" + componentAsset.name);",
         "    var destination = instance.transform; destination.SetParent(parent, false); destination.SetSiblingIndex(siblingIndex); destination.name = instanceName; destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag; CopyTransformData(source, destination); destination.gameObject.SetActive(source.gameObject.activeSelf);",
         "    var states = destination.Find(\"[States]\"); if (states == null) throw new InvalidOperationException(\"Variant component has no [States] container: \" + destination.name); var activeState = states.Find(activeStateName); if (activeState == null) throw new InvalidOperationException(\"Variant component state was not found: \" + activeStateName); CopyStateRootData(source, activeState); for (var index = 0; index < states.childCount; index++) states.GetChild(index).gameObject.SetActive(states.GetChild(index).name == activeStateName); AssertVariantState(destination, activeStateName, destination.name);",
+        "    var actualSignature = StructureSignature(activeState); var actualRectTransforms = activeState.GetComponentsInChildren<RectTransform>(true).Length; if (beforeCorners.Count != actualRectTransforms || !string.Equals(expectedSignature, actualSignature, StringComparison.Ordinal)) throw new InvalidOperationException(\"Variant extraction structure mismatch: extractionId=\" + extractionId + \";instance=\" + instanceName + \";state=\" + activeStateName + \";source=\" + sourcePath + \";stateSource=\" + TransformPath(activeState) + \";componentAsset=\" + AssetDatabase.GetAssetPath(componentAsset) + \";expectedRectTransforms=\" + beforeCorners.Count + \";actualRectTransforms=\" + actualRectTransforms + \";expectedSignature=\" + expectedSignature + \";actualSignature=\" + actualSignature);",
         "    Object.DestroyImmediate(source.gameObject); AssertHierarchyCorners(states.GetChild(FindStateIndex(states, activeStateName)), beforeCorners, destination.name); return instance;",
         "}",
         "",
@@ -1712,7 +1821,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "void AssertGuid(string assetPath, string expectedGuid)",
         "{",
         "    var actualGuid = AssetDatabase.AssetPathToGUID(assetPath);",
-        "    if (!string.Equals(actualGuid, expectedGuid, StringComparison.Ordinal)) throw new InvalidOperationException(\"GUID invariant failed for \" + assetPath);",
+        "    if (!string.Equals(actualGuid, expectedGuid, StringComparison.Ordinal)) throw new InvalidOperationException(\"GUID invariant failed: path=\" + assetPath + \";expectedGuid=\" + expectedGuid + \";actualGuid=\" + actualGuid);",
         "}",
         "",
         "Dictionary<Object, Object> RefreshRenamedAsset(string sourcePath, string targetPath, string expectedTargetGuid)",
@@ -1812,6 +1921,26 @@ def render(plan: dict[str, Any], mode: str) -> str:
                     f"AssertGuid({csharp(source)}, {csharp(rename['expectedGuid'])});",
                 ]
             )
+    component_asset_paths = [
+        extraction["assetPath"]
+        for key in (
+            "component_extractions",
+            "state_component_extractions",
+            "variant_component_extractions",
+            "stateful_component_extractions",
+        )
+        for extraction in plan[key]
+    ]
+    use_component_asset_transaction = mode == "apply" and bool(component_asset_paths)
+    if use_component_asset_transaction:
+        lines.extend(
+            [
+                f"var componentAssetTransaction = BeginComponentAssetTransaction({csharp_string_array(component_asset_paths)});",
+                "try",
+                "{",
+            ]
+        )
+
     lines.extend(["var root = PrefabUtility.LoadPrefabContents(prefabPath);", "try", "{"])
 
     if mode == "reapply":
@@ -2091,7 +2220,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
             lines.append(f"    var {component_asset_var} = CreateVariantComponentPrefab({template_var}, new[] {{ {source_array} }}, new[] {{ {state_names} }}, {default_state_index}, {csharp(extraction['assetPath'])});")
         state_names_by_id = {state["id"]: state["name"] for state in extraction["states"]}
         for instance, instance_var in zip(extraction["instances"], instance_vars):
-            lines.append(f"    ReplaceVariantSourceWithComponent({instance_var}, {csharp(instance['name'])}, {csharp(state_names_by_id[instance['state']])}, {component_asset_var});")
+            lines.append(f"    ReplaceVariantSourceWithComponent({csharp(extraction['id'])}, {instance_var}, {csharp(instance['name'])}, {csharp(state_names_by_id[instance['state']])}, {component_asset_var});")
     for extraction_index, extraction in enumerate(plan["stateful_component_extractions"]):
         template_var, common_source_var, state_source_vars, instance_vars = stateful_extraction_vars[extraction_index]
         default_state_index = next(index for index, state in enumerate(extraction["states"]) if state["id"] == extraction["defaultState"])
@@ -2202,6 +2331,19 @@ def render(plan: dict[str, Any], mode: str) -> str:
             "}",
         ]
     )
+
+    if use_component_asset_transaction:
+        lines.extend(
+            [
+                "CommitComponentAssetTransaction(componentAssetTransaction);",
+                "}",
+                "catch",
+                "{",
+                "    RollbackComponentAssetTransaction(componentAssetTransaction);",
+                "    throw;",
+                "}",
+            ]
+        )
 
     for index, rename in enumerate(all_assets):
         if mode == "reapply":

@@ -401,8 +401,8 @@ def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
                         if has_common_direct_child
                         else "variant"
                     ),
-                    # A repeated family is reusable even when its instances have no
-                    # direct child in common: that case is represented as a variant.
+                    # Passing the repeated-family checks establishes the reusable
+                    # boundary. Structural differences select the extraction mode.
                     "requiresExtraction": True,
                     "sizeDeltaOverridesAllowed": True,
                     "nestedPrefabInsideAnySource": False,
@@ -425,10 +425,9 @@ def numbered_component_candidates(root: Node) -> list[dict[str, object]]:
                         "instances": [node.path for node in subset],
                         "instanceCount": len(subset),
                         "recommendedMode": "component" if len(subset) >= 2 else "skip",
-                        # A subset and its family compete for the same sources, so the
-                        # subset is an obligation only when the family itself is not.
-                        "requiresExtraction": len(subset) >= 2
-                        and not (identical_structure or has_common_direct_child),
+                        # The complete family owns the extraction obligation. Subsets
+                        # remain diagnostic alternatives and must not compete with it.
+                        "requiresExtraction": False,
                         "evidence": (
                             "only member of "
                             + family_name

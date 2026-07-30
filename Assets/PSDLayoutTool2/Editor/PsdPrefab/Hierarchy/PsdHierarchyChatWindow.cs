@@ -284,7 +284,86 @@ namespace PsdLayoutTool2
             }
 
             SetPendingPlan(string.Empty);
+            if (!TryRefreshContextBeforeNewRequest(out string refreshError))
+            {
+                AppendMessage(
+                    "system",
+                    "发送前无法刷新当前 Prefab 权威快照：" + refreshError +
+                    "。本轮未请求 AI，也未修改 Prefab。");
+                SetSending(false, "快照刷新失败");
+                return;
+            }
+
             SendMessage(PsdHierarchyChatClient.ResolveUserPrompt(prompt), false);
+        }
+
+        private bool TryRefreshContextBeforeNewRequest(out string error)
+        {
+            PsdHierarchyChatContext previousContext = context;
+            if (!PsdHierarchyChatContextBuilder.TryCreate(
+                    previousContext.sourcePsdAssetPath,
+                    previousContext.targetPrefabAssetPath,
+                    out PsdHierarchyChatContext refreshedContext,
+                    out error))
+            {
+                return false;
+            }
+
+            context = refreshedContext;
+            if (HasAuthoritativeAnalysisChanged(previousContext, refreshedContext))
+            {
+                ResetFailedPlanConversation();
+                AppendMessage(
+                    "system",
+                    BuildAuthoritativeAnalysisRefreshNotice(previousContext, refreshedContext));
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
+        internal static bool HasAuthoritativeAnalysisChanged(
+            PsdHierarchyChatContext previousContext,
+            PsdHierarchyChatContext refreshedContext)
+        {
+            if (previousContext == null || refreshedContext == null)
+            {
+                return true;
+            }
+
+            return !string.Equals(
+                       previousContext.hierarchySnapshotJson,
+                       refreshedContext.hierarchySnapshotJson,
+                       StringComparison.Ordinal) ||
+                   !string.Equals(
+                       previousContext.skillContent,
+                       refreshedContext.skillContent,
+                       StringComparison.Ordinal) ||
+                   !string.Equals(
+                       previousContext.planFormatContent,
+                       refreshedContext.planFormatContent,
+                       StringComparison.Ordinal);
+        }
+
+        private static string BuildAuthoritativeAnalysisRefreshNotice(
+            PsdHierarchyChatContext previousContext,
+            PsdHierarchyChatContext refreshedContext)
+        {
+            string oldFingerprint = string.IsNullOrWhiteSpace(previousContext.hierarchySnapshotFingerprint)
+                ? "<empty>"
+                : previousContext.hierarchySnapshotFingerprint;
+            string newFingerprint = string.IsNullOrWhiteSpace(refreshedContext.hierarchySnapshotFingerprint)
+                ? "<empty>"
+                : refreshedContext.hierarchySnapshotFingerprint;
+            int oldCandidateCount = previousContext.componentFamilyCandidates?.Count ?? 0;
+            int newCandidateCount = refreshedContext.componentFamilyCandidates?.Count ?? 0;
+            string reason = string.Equals(oldFingerprint, newFingerprint, StringComparison.Ordinal)
+                ? "Prefab 文件指纹相同，但候选分析结果或整理规则已变化；旧候选不会继续参与本轮计划。"
+                : "Prefab 文件内容已变化；旧节点引用和旧候选不会继续参与本轮计划。";
+            return "检测到发送前的权威分析内容已变化，已刷新当前 Prefab 快照并清空旧 AI 会话。" +
+                   "旧快照 fingerprint=" + oldFingerprint + "，候选数=" + oldCandidateCount +
+                   "；新快照 fingerprint=" + newFingerprint + "，候选数=" + newCandidateCount + "。" +
+                   reason;
         }
 
         private async void SendMessage(

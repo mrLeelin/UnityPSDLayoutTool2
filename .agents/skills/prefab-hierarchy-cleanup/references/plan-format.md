@@ -89,7 +89,7 @@ The bundled PowerShell/Python runner remains compatible with existing version 1 
 
 `output.mode` must be `in_place`, and `output.assetPath` must exactly equal `prefabAssetPath`. This cleanup never creates a `.cleaned.prefab`, duplicate, or replacement for the target Prefab.
 
-All asset paths are project-relative paths beginning with `Assets/`. `prefabName` must use PascalCase and end with `View` when Texture or SpriteAtlas assets are renamed.
+All asset paths are project-relative paths beginning with `Assets/`. For a direct version 1 runner plan, `prefabName` must use PascalCase and end with `View` when Texture or SpriteAtlas assets are renamed. In a Unity AI chat version 2 plan, the field remains required for schema stability but is not trusted for private-asset execution; Unity derives the internal value from the reviewed rename targets described below.
 
 ### Operations
 
@@ -386,7 +386,7 @@ Use `statefulComponentExtractions` for repeated items that contain real shared c
 
 ## Private Asset Renames
 
-List only assets proven private to the current Prefab. `toName` has no extension and must use the exact `PrefabName_` prefix.
+List only assets proven private to the current Prefab. `toName` has no extension. Every Texture `toName` must use the exact `PrefabName_` prefix, and every SpriteAtlas `toName` must equal that same `PrefabName`.
 
 ```json
 {
@@ -407,7 +407,9 @@ List only assets proven private to the current Prefab. `toName` has no extension
 }
 ```
 
-Read each `expectedGuid` before presenting the plan. The runner checks it before and after `AssetDatabase.RenameAsset`; it fails if a renamed asset does not retain that GUID. This lets `-VerifyOnly` prove the actual saved state after an interrupted apply. Do not add shared assets to this list.
+For a direct version 1 runner plan, read each `expectedGuid` from Unity before presenting the plan. For a Unity AI chat version 2 plan, use an empty `expectedGuid` string: the chat execution bridge validates each `from` asset and injects its current `AssetDatabase` GUID while converting the reviewed plan. The runner still checks that captured GUID before and after `AssetDatabase.RenameAsset`; it fails if the asset identity changes between validation and apply. This lets `-VerifyOnly` prove the actual saved state after an interrupted apply. Do not add shared assets to this list.
+
+For that same version 2 conversion, Unity derives the internal `prefabName` from the reviewed `toName` values. Each Texture contributes the substring before its first underscore; each SpriteAtlas contributes its full `toName`. All candidates must be identical and match `^[A-Z][A-Za-z0-9]*View$`. The version 2 `prefabName` field is not used to override those reviewed targets. If the candidates conflict, a Texture lacks the required underscore, or the common candidate is invalid, conversion stops before the external runner and reports the submitted `prefabName`, every candidate, and each indexed `toName`. Direct version 1 runner plans remain explicit and are not normalized.
 
 When the full private Texture directory belongs to this Prefab, list every Texture in it. Set `verify.privateTextureDirectory`, `verify.requireAllPrivateTextureAssetsPrefixed`, and `verify.texturePathPrefix` so the final verification rejects any residual non-prefixed file.
 
