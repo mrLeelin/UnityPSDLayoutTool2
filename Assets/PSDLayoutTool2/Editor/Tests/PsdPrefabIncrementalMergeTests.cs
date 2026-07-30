@@ -20,6 +20,7 @@ namespace PsdLayoutTool2.Tests
         private const string SameNamePath = Folder + "/SameName/Target.prefab";
         private const string ProfilePath = Folder + "/Target.HierarchyProfile.asset";
         private const string TemporaryPath = Folder + "/Candidate.prefab";
+        private const string BindingSourceGuid = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
         [SetUp]
         public void SetUp()
@@ -59,9 +60,71 @@ namespace PsdLayoutTool2.Tests
             UnityEngine.Object.DestroyImmediate(profile);
         }
 
+        [Test]
+        public void BoundProfileFindsMovedPrefabByGuidAndMigratesItsRecordedPath()
+        {
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+
+            PsdHierarchyProfile profile = Profile();
+            profile.targetPrefabPath = TargetPath;
+            profile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+            AssetDatabase.CreateAsset(profile, ProfilePath);
+
+            string moveError = AssetDatabase.MoveAsset(TargetPath, SameNamePath);
+            Assert.That(moveError, Is.Empty);
+
+            Assert.That(PsdPrefabTransactionalSave.TryResolveBoundPrefabPath(
+                    ProfilePath, TargetPath, out string resolvedPath),
+                Is.True);
+            Assert.That(resolvedPath, Is.EqualTo(SameNamePath));
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath).targetPrefabPath,
+                Is.EqualTo(SameNamePath));
+        }
+
+        [Test]
+        public void BoundProfileDoesNotReplaceMissingConfiguredPrefabWithSameNameDifferentGuid()
+        {
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            PrefabUtility.SaveAsPrefabAsset(source, SameNamePath);
+            UnityEngine.Object.DestroyImmediate(source);
+
+            PsdHierarchyProfile profile = Profile();
+            profile.targetPrefabPath = TargetPath;
+            profile.targetPrefabGuid = AssetDatabase.AssetPathToGUID(TargetPath);
+            AssetDatabase.CreateAsset(profile, ProfilePath);
+            AssetDatabase.DeleteAsset(TargetPath);
+
+            Assert.That(PsdPrefabTransactionalSave.TryResolveBoundPrefabPath(
+                    ProfilePath, TargetPath, out string resolvedPath),
+                Is.False);
+            Assert.That(resolvedPath, Is.Empty);
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(ProfilePath).targetPrefabPath,
+                Is.EqualTo(TargetPath));
+        }
+
+        [Test]
+        public void InitialGenerationBindingFindsPrefabMovedBeforeAiOrganization()
+        {
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+
+            PsdPrefabTargetBinding.Persist(BindingSourceGuid, TargetPath);
+            Assert.That(AssetDatabase.MoveAsset(TargetPath, SameNamePath), Is.Empty);
+
+            Assert.That(PsdPrefabTargetBinding.TryResolveMovedTargetPrefabPath(
+                    BindingSourceGuid, TargetPath, out string resolvedPath),
+                Is.True);
+            Assert.That(resolvedPath, Is.EqualTo(SameNamePath));
+        }
+
         [TearDown]
         public void TearDown()
         {
+            AssetDatabase.DeleteAsset(PsdPrefabTargetBinding.GetProfilePath(BindingSourceGuid));
             AssetDatabase.DeleteAsset(Folder);
         }
 

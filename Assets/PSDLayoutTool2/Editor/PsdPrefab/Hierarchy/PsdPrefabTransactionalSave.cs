@@ -63,6 +63,37 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
+        /// Resolves a bound Prefab after it has been moved in the AssetDatabase.
+        /// A recorded GUID is authoritative; the stored path is migrated only
+        /// when that GUID still resolves to a Prefab asset.
+        /// </summary>
+        public static bool TryResolveBoundPrefabPath(
+            string profilePath,
+            string configuredPrefabPath,
+            out string prefabPath)
+        {
+            prefabPath = string.Empty;
+            if (string.IsNullOrEmpty(NormalizeAssetPath(configuredPrefabPath))) return false;
+            PsdHierarchyProfile profile = AssetDatabase.LoadAssetAtPath<PsdHierarchyProfile>(profilePath);
+            if (profile == null || string.IsNullOrEmpty(profile.targetPrefabGuid)) return false;
+
+            string resolvedPath = NormalizeAssetPath(AssetDatabase.GUIDToAssetPath(profile.targetPrefabGuid));
+            if (string.IsNullOrEmpty(resolvedPath) ||
+                AssetDatabase.LoadAssetAtPath<GameObject>(resolvedPath) == null)
+                return false;
+
+            if (!string.Equals(NormalizeAssetPath(profile.targetPrefabPath), resolvedPath, StringComparison.Ordinal))
+            {
+                profile.targetPrefabPath = resolvedPath;
+                EditorUtility.SetDirty(profile);
+                AssetDatabase.SaveAssetIfDirty(profile);
+            }
+
+            prefabPath = resolvedPath;
+            return true;
+        }
+
+        /// <summary>
         /// Reports whether the Profile can only be recovered by archiving it and
         /// creating a new Prefab baseline. This is a read-only preflight; the
         /// archive operation repeats the check before moving any asset.
@@ -513,6 +544,115 @@ namespace PsdLayoutTool2
                 if (existed) File.WriteAllBytes(path, bytes);
                 else DeleteFile(path);
             }
+        }
+    }
+
+    /// <summary>
+    /// Stores only the durable PSD-to-Prefab identity created by a normal
+    /// generation. It intentionally contains no hierarchy or AI decisions.
+    /// </summary>
+    public sealed class PsdPrefabTargetBinding : ScriptableObject
+    {
+        private const string ProfileFolder =
+            "Assets/PSDLayoutTool2Settings/PrefabTargetBindings";
+
+        [SerializeField] private string sourcePsdGuid = string.Empty;
+        [SerializeField] private string targetPrefabGuid = string.Empty;
+        [SerializeField] private string targetPrefabPath = string.Empty;
+
+        public static string GetProfilePath(string sourceGuid)
+        {
+            string normalizedSourceGuid = (sourceGuid ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(normalizedSourceGuid))
+                throw new ArgumentException("Source PSD GUID is required.", nameof(sourceGuid));
+            if (normalizedSourceGuid.Any(character =>
+                    !char.IsLetterOrDigit(character) && character != '-' && character != '_'))
+                throw new ArgumentException("Source PSD GUID contains unsafe path characters.", nameof(sourceGuid));
+            return ProfileFolder + "/" + normalizedSourceGuid + ".asset";
+        }
+
+        public static void Persist(string sourceGuid, string prefabPath)
+        {
+            string normalizedSourceGuid = (sourceGuid ?? string.Empty).Trim();
+            string normalizedPrefabPath = NormalizeAssetPath(prefabPath);
+            string prefabGuid = AssetDatabase.AssetPathToGUID(normalizedPrefabPath);
+            if (string.IsNullOrEmpty(prefabGuid) ||
+                AssetDatabase.LoadAssetAtPath<GameObject>(normalizedPrefabPath) == null)
+                throw new InvalidOperationException(
+                    "Cannot bind a PSD to a missing Prefab: " + normalizedPrefabPath);
+
+            string profilePath = GetProfilePath(normalizedSourceGuid);
+            PsdPrefabTargetBinding profile = AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(profilePath);
+            if (profile == null)
+            {
+                EnsureProfileFolder();
+                profile = CreateInstance<PsdPrefabTargetBinding>();
+                AssetDatabase.CreateAsset(profile, profilePath);
+            }
+
+            profile.sourcePsdGuid = normalizedSourceGuid;
+            profile.targetPrefabGuid = prefabGuid;
+            profile.targetPrefabPath = normalizedPrefabPath;
+            EditorUtility.SetDirty(profile);
+            AssetDatabase.SaveAssetIfDirty(profile);
+        }
+
+        /// <summary>
+        /// Resolves a moved Prefab from its Unity GUID and migrates only the
+        /// saved address. A deleted asset or a copied same-name Prefab fails
+        /// closed instead of changing the binding.
+        /// </summary>
+        public static bool TryResolveMovedTargetPrefabPath(
+            string sourceGuid,
+            string configuredPrefabPath,
+            out string prefabPath)
+        {
+            prefabPath = string.Empty;
+            if (string.IsNullOrEmpty((sourceGuid ?? string.Empty).Trim())) return false;
+
+            PsdPrefabTargetBinding profile;
+            try
+            {
+                profile = AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(GetProfilePath(sourceGuid));
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+
+            if (profile == null ||
+                !string.Equals(profile.sourcePsdGuid, (sourceGuid ?? string.Empty).Trim(), StringComparison.Ordinal) ||
+                string.IsNullOrEmpty(profile.targetPrefabGuid))
+                return false;
+
+            string resolvedPath = NormalizeAssetPath(AssetDatabase.GUIDToAssetPath(profile.targetPrefabGuid));
+            if (string.IsNullOrEmpty(resolvedPath) ||
+                AssetDatabase.LoadAssetAtPath<GameObject>(resolvedPath) == null)
+                return false;
+
+            if (!string.Equals(profile.targetPrefabPath, resolvedPath, StringComparison.Ordinal))
+            {
+                profile.targetPrefabPath = resolvedPath;
+                EditorUtility.SetDirty(profile);
+                AssetDatabase.SaveAssetIfDirty(profile);
+            }
+
+            prefabPath = resolvedPath;
+            return true;
+        }
+
+        private static void EnsureProfileFolder()
+        {
+            const string settingsFolder = "Assets/PSDLayoutTool2Settings";
+            if (!AssetDatabase.IsValidFolder(settingsFolder))
+                AssetDatabase.CreateFolder("Assets", "PSDLayoutTool2Settings");
+            if (!AssetDatabase.IsValidFolder(ProfileFolder))
+                AssetDatabase.CreateFolder(settingsFolder, "PrefabTargetBindings");
+        }
+
+        private static string NormalizeAssetPath(string path)
+        {
+            return (path ?? string.Empty).Replace('\\', '/').Trim();
         }
     }
 }

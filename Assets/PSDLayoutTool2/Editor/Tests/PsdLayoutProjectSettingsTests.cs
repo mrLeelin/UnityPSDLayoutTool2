@@ -409,6 +409,9 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(root.Q<TextField>("psd-project-settings-button-component-type"), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(FontSectionName), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(CommonNamingSectionName), Is.Not.Null);
+                Assert.That(
+                    root.Q<Button>(PsdLayoutProjectSettingsEditor.CommonCatalogRefreshButtonName),
+                    Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(FixedOutputContentName), Is.Null);
             }
             finally

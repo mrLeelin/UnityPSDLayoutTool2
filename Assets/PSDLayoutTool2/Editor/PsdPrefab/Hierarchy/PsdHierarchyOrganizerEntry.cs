@@ -44,6 +44,21 @@ namespace PsdLayoutTool2
                 return true;
             }
 
+            string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(psdAssetPath));
+            if (PsdPrefabTargetBinding.TryResolveMovedTargetPrefabPath(
+                    sourceGuid, targetPrefabPath, out string movedPrefabPath))
+            {
+                targetPrefabPath = movedPrefabPath;
+                return true;
+            }
+
+            if (PsdHierarchyCleanupReplayProfile.TryResolveMovedTargetPrefabPath(
+                    sourceGuid, targetPrefabPath, out movedPrefabPath))
+            {
+                targetPrefabPath = movedPrefabPath;
+                return true;
+            }
+
             if (TryFindUniqueDirectPrefabFallback(targetPrefabPath, prefabExists, out string fallbackPath))
             {
                 targetPrefabPath = fallbackPath;

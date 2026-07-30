@@ -13,6 +13,7 @@ namespace PsdLayoutTool2.Tests
             "Assets/PSDLayoutTool2Settings/ReplayProfileTests";
         private const string SourceAssetPath = TestFolder + "/Source.asset";
         private const string TargetPath = TestFolder + "/ExampleView.prefab";
+        private const string MovedTargetPath = TestFolder + "/Moved/ExampleView.prefab";
         private const string ComponentPath = TestFolder + "/Common/ReusableItem.prefab";
 
         [SetUp]
@@ -35,6 +36,8 @@ namespace PsdLayoutTool2.Tests
         {
             AssetDatabase.DeleteAsset(
                 PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid));
+            AssetDatabase.DeleteAsset(
+                PsdHierarchyCleanupReplayProfile.GetProfilePath(MovedTargetPath, SourceGuid));
             AssetDatabase.DeleteAsset(TestFolder);
         }
 
@@ -175,6 +178,27 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
                 SourceGuid, TargetPath, out string reason), Is.True, reason);
+        }
+
+        [Test]
+        public void StoredReplayProfileFindsMovedPrefabByGuidAndMigratesItsPath()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
+            EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
+            EnsureFolder(System.IO.Path.GetDirectoryName(MovedTargetPath).Replace('\\', '/'));
+            AssetDatabase.CreateAsset(profile, profilePath);
+            AssetDatabase.SaveAssetIfDirty(profile);
+
+            Assert.That(AssetDatabase.MoveAsset(TargetPath, MovedTargetPath), Is.Empty);
+
+            Assert.That(PsdHierarchyCleanupReplayProfile.TryResolveMovedTargetPrefabPath(
+                    SourceGuid, TargetPath, out string resolvedPath),
+                Is.True);
+            Assert.That(resolvedPath, Is.EqualTo(MovedTargetPath));
+            Assert.That(PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                    SourceGuid, MovedTargetPath, out string reason),
+                Is.True, reason);
         }
 
         [Test]

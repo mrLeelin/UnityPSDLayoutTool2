@@ -663,14 +663,7 @@
             string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
             string prefabPath;
             if (string.IsNullOrEmpty(sourceGuid) ||
-                !PsdGeneratedPrefabPathResolver.TryResolve(
-                    normalizedAssetPath,
-                    OutputMode,
-                    OutputFolderName,
-                    FixedOutputPath,
-                    PrefabOutputPath,
-                    PrefabMode,
-                    out prefabPath))
+                !TryResolveTargetPrefabPath(normalizedAssetPath, sourceGuid, out prefabPath))
                 return false;
 
             if (PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
@@ -678,6 +671,55 @@
                 return true;
 
             return TryResolveApplicableHierarchyProfile(sourceGuid, prefabPath, out _);
+        }
+
+        private static bool TryResolveTargetPrefabPath(
+            string psdAssetPath,
+            string sourceGuid,
+            out string prefabPath)
+        {
+            prefabPath = string.Empty;
+            if (!PsdGeneratedPrefabPathResolver.TryResolve(
+                    psdAssetPath,
+                    OutputMode,
+                    OutputFolderName,
+                    FixedOutputPath,
+                    PrefabOutputPath,
+                    PrefabMode,
+                    out string configuredPrefabPath))
+                return false;
+
+            if (string.IsNullOrEmpty(sourceGuid))
+            {
+                prefabPath = configuredPrefabPath;
+                return true;
+            }
+
+            if (PsdPrefabTargetBinding.TryResolveMovedTargetPrefabPath(
+                    sourceGuid, configuredPrefabPath, out string movedPrefabPath))
+            {
+                prefabPath = movedPrefabPath;
+                return true;
+            }
+
+            string profilePath = PsdPrefabTransactionalSave.GetProfilePath(
+                configuredPrefabPath, sourceGuid);
+            if (PsdPrefabTransactionalSave.TryResolveBoundPrefabPath(
+                    profilePath, configuredPrefabPath, out movedPrefabPath))
+            {
+                prefabPath = movedPrefabPath;
+                return true;
+            }
+
+            if (PsdHierarchyCleanupReplayProfile.TryResolveMovedTargetPrefabPath(
+                    sourceGuid, configuredPrefabPath, out movedPrefabPath))
+            {
+                prefabPath = movedPrefabPath;
+                return true;
+            }
+
+            prefabPath = configuredPrefabPath;
+            return true;
         }
 
         internal static PrefabSaveRoute ResolvePrefabSaveRoute(
@@ -725,14 +767,7 @@
             string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
             string prefabPath;
             if (string.IsNullOrEmpty(sourceGuid) ||
-                !PsdGeneratedPrefabPathResolver.TryResolve(
-                    normalizedAssetPath,
-                    OutputMode,
-                    OutputFolderName,
-                    FixedOutputPath,
-                    PrefabOutputPath,
-                    PrefabMode,
-                    out prefabPath))
+                !TryResolveTargetPrefabPath(normalizedAssetPath, sourceGuid, out prefabPath))
             {
                 failureReason = "Cannot resolve the PSD identity or configured Prefab output path.";
                 return false;
@@ -782,14 +817,7 @@
             string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
             string prefabPath;
             if (string.IsNullOrEmpty(sourceGuid) ||
-                !PsdGeneratedPrefabPathResolver.TryResolve(
-                    normalizedAssetPath,
-                    OutputMode,
-                    OutputFolderName,
-                    FixedOutputPath,
-                    PrefabOutputPath,
-                    PrefabMode,
-                    out prefabPath))
+                !TryResolveTargetPrefabPath(normalizedAssetPath, sourceGuid, out prefabPath))
                 return false;
 
             string hierarchyProfilePath = PsdPrefabTransactionalSave.GetProfilePath(prefabPath, sourceGuid);
@@ -932,13 +960,9 @@
 
                 string prefabRelativePath = string.Empty;
                 if (CreatePrefab &&
-                    !PsdGeneratedPrefabPathResolver.TryResolve(
+                    !TryResolveTargetPrefabPath(
                         normalizedAssetPath,
-                        OutputMode,
-                        OutputFolderName,
-                        FixedOutputPath,
-                        PrefabOutputPath,
-                        PrefabMode,
+                        AssetDatabase.AssetPathToGUID(normalizedAssetPath),
                         out prefabRelativePath))
                 {
                     throw new InvalidOperationException("Cannot resolve the generated Prefab path for PSD asset: " +
@@ -1206,6 +1230,7 @@
                         {
                             case PrefabSaveRoute.FullCandidateSave:
                                 PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath);
+                                PsdPrefabTargetBinding.Persist(sourceGuid, prefabRelativePath);
                                 break;
                             case PrefabSaveRoute.CleanupReplay:
                                 if (!PsdHierarchyCleanupReplayCoordinator.TryStageAndSchedule(

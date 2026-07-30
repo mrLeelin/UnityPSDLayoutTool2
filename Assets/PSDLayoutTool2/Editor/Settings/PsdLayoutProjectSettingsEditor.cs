@@ -19,6 +19,8 @@ namespace PsdLayoutTool2
         private const string FontSectionName = "psd-project-settings-font";
         private const string CommonNamingSectionName = "psd-project-settings-common-naming";
         private const string FixedOutputContentName = "psd-project-settings-fixed-output";
+        internal const string CommonCatalogRefreshButtonName =
+            "psd-project-settings-common-catalog-refresh";
 
         public override VisualElement CreateInspectorGUI()
         {
@@ -804,6 +806,15 @@ namespace PsdLayoutTool2
             section.Add(prefabPrefixField);
             section.Add(texturePrefixField);
             section.Add(validationBox);
+
+            var refreshCatalog = new Button(() => PsdCommonAssetCatalog.CreateOrRefresh())
+            {
+                name = CommonCatalogRefreshButtonName,
+                text = "生成 / 刷新公共资源映射表",
+                tooltip = "扫描项目中的公共 Prefab 和 Texture 资源，并更新公共资源映射表。",
+            };
+            refreshCatalog.style.marginTop = 6;
+            section.Add(refreshCatalog);
 
             void ApplyPrefixes(string prefabPrefix, string texturePrefix)
             {

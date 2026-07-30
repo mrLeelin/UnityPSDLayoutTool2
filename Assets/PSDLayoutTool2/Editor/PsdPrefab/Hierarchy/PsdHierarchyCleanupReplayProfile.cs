@@ -280,6 +280,68 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
+        /// Finds the active replay Profile for a moved Prefab by its persistent
+        /// GUID, then migrates both the Profile asset location and stored plan
+        /// target paths to the Prefab's current AssetDatabase path.
+        /// </summary>
+        internal static bool TryResolveMovedTargetPrefabPath(
+            string sourceGuid,
+            string configuredPrefabPath,
+            out string prefabPath)
+        {
+            prefabPath = string.Empty;
+            string normalizedSourceGuid = (sourceGuid ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(normalizedSourceGuid) ||
+                !AssetDatabase.IsValidFolder(ProfileFolder))
+                return false;
+
+            var matches = new List<KeyValuePair<string, PsdHierarchyCleanupReplayProfile>>();
+            foreach (string profileGuid in AssetDatabase.FindAssets(
+                         "t:PsdHierarchyCleanupReplayProfile", new[] { ProfileFolder }))
+            {
+                string profilePath = AssetDatabase.GUIDToAssetPath(profileGuid);
+                PsdHierarchyCleanupReplayProfile profile =
+                    AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(profilePath);
+                if (profile == null ||
+                    !string.Equals(profile.sourcePsdGuid, normalizedSourceGuid, StringComparison.Ordinal) ||
+                    string.IsNullOrEmpty(profile.targetPrefabGuid))
+                    continue;
+
+                string resolvedPath = NormalizeAssetPath(
+                    AssetDatabase.GUIDToAssetPath(profile.targetPrefabGuid));
+                if (string.IsNullOrEmpty(resolvedPath) ||
+                    AssetDatabase.LoadAssetAtPath<GameObject>(resolvedPath) == null ||
+                    string.Equals(resolvedPath, NormalizeAssetPath(profile.targetPrefabPath), StringComparison.Ordinal))
+                    continue;
+
+                matches.Add(new KeyValuePair<string, PsdHierarchyCleanupReplayProfile>(profilePath, profile));
+            }
+
+            if (matches.Count != 1) return false;
+
+            string oldProfilePath = matches[0].Key;
+            PsdHierarchyCleanupReplayProfile movedProfile = matches[0].Value;
+            string resolvedPrefabPath = NormalizeAssetPath(
+                AssetDatabase.GUIDToAssetPath(movedProfile.targetPrefabGuid));
+            string newProfilePath = GetProfilePath(resolvedPrefabPath, normalizedSourceGuid);
+            if (!string.Equals(oldProfilePath, newProfilePath, StringComparison.Ordinal))
+            {
+                if (AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(newProfilePath) != null)
+                    return false;
+                string moveError = AssetDatabase.MoveAsset(oldProfilePath, newProfilePath);
+                if (!string.IsNullOrEmpty(moveError)) return false;
+                movedProfile = AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(newProfilePath);
+                if (movedProfile == null) return false;
+            }
+
+            movedProfile.MigrateTargetPath(resolvedPrefabPath);
+            EditorUtility.SetDirty(movedProfile);
+            AssetDatabase.SaveAssetIfDirty(movedProfile);
+            prefabPath = resolvedPrefabPath;
+            return true;
+        }
+
+        /// <summary>
         /// Reports whether this exact PSD and Prefab pair has a replay Profile
         /// that can preserve the organized Prefab hierarchy during an update.
         /// </summary>
@@ -315,6 +377,29 @@ namespace PsdLayoutTool2
                 normalizedTarget,
                 out _,
                 out reason);
+        }
+
+        private void MigrateTargetPath(string newTargetPath)
+        {
+            string normalizedTarget = NormalizeAssetPath(newTargetPath);
+            targetPrefabPath = normalizedTarget;
+            runnerPlanJson = RewritePlanTarget(runnerPlanJson, normalizedTarget);
+            var migratedStages = new List<string>();
+            foreach (string stage in runnerPlanStages ?? new List<string>())
+                migratedStages.Add(RewritePlanTarget(stage, normalizedTarget));
+            runnerPlanStages = migratedStages;
+        }
+
+        private static string RewritePlanTarget(string planJson, string targetPath)
+        {
+            if (string.IsNullOrWhiteSpace(planJson)) return string.Empty;
+            JObject plan = JObject.Parse(planJson);
+            plan["prefabAssetPath"] = targetPath;
+            if (!(plan["output"] is JObject output))
+                throw new InvalidDataException("Cleanup replay plan output is missing.");
+            output["assetPath"] = targetPath;
+            return ParseAndValidatePlan(plan.ToString(Newtonsoft.Json.Formatting.None), targetPath)
+                .ToString(Newtonsoft.Json.Formatting.None);
         }
 
         internal static bool IsMissingTargetRecoveryEligible(string prefabPath, string sourceGuid)

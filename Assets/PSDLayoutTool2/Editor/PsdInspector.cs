@@ -270,18 +270,6 @@
                         path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
                         out hierarchyTargetPath,
                         out hierarchyUnavailableReason);
-                    if (hierarchyOrganizerAvailable && GUILayout.Button(
-                            new GUIContent(
-                                PsdHierarchyOrganizerEntry.AiButtonLabel,
-                                "在 Unity 编辑器中打开 AI 对话窗口，并把整理技能与当前目标 Prefab 发送给 AI。"),
-                            GUILayout.Height(24)))
-                    {
-                        string chatError;
-                        if (!PsdHierarchyOrganizerEntry.TryOpenChat(assetPath, out chatError))
-                        {
-                            EditorUtility.DisplayDialog("PSDLayoutTool2", chatError, "确定");
-                        }
-                    }
 
                     EditorGUILayout.BeginHorizontal();
                     if (GUILayout.Button(Localize("打开日志目录", "Open Log Folder")))
@@ -301,11 +289,6 @@
                         PsdNineSliceWindow.Open(AssetDatabase.GetAssetPath(Selection.activeObject));
                     }
 
-                    if (GUILayout.Button(Localize("生成/刷新公共资源映射表", "Generate / Refresh Common Asset Catalog")))
-                    {
-                        SettingsService.OpenProjectSettings("Project/PSD Layout Tool/Common Asset Catalog");
-                    }
-
                     if (GUILayout.Button(Localize("全量生成预制体", "Full Generate Prefab")))
                     {
                         GeneratePrefabWithMissingProfileRecovery(assetPath);
@@ -317,6 +300,36 @@
                     {
                         PsdImporter.UpdatePrefabIncrementally(assetPath);
                     }
+
+                    EditorGUILayout.BeginHorizontal();
+                    using (new EditorGUI.DisabledScope(!hierarchyOrganizerAvailable))
+                    {
+                        if (GUILayout.Button(
+                                new GUIContent(
+                                    Localize("定位 Prefab", "Ping Prefab"),
+                                    Localize(
+                                        "在 Project 窗口中高亮此 PSD 当前关联的 Prefab，保持当前 PSD Inspector 不变。",
+                                        "Highlights this PSD's currently associated Prefab in the Project window without changing the current PSD Inspector.")),
+                                GUILayout.Height(24)))
+                        {
+                            TryPingPrefab(hierarchyTargetPath);
+                        }
+                    }
+
+                    if (hierarchyOrganizerAvailable && GUILayout.Button(
+                            new GUIContent(
+                                PsdHierarchyOrganizerEntry.AiButtonLabel,
+                                "在 Unity 编辑器中打开 AI 对话窗口，并把整理技能与当前目标 Prefab 发送给 AI。"),
+                            GUILayout.Height(24)))
+                    {
+                        string chatError;
+                        if (!PsdHierarchyOrganizerEntry.TryOpenChat(assetPath, out chatError))
+                        {
+                            EditorUtility.DisplayDialog("PSDLayoutTool2", chatError, "确定");
+                        }
+                    }
+
+                    EditorGUILayout.EndHorizontal();
 
                     GUILayout.Space(3);
 
@@ -363,6 +376,22 @@
         internal static bool ShouldShowIncrementalUpdateButton(bool isIncrementalEligible)
         {
             return isIncrementalEligible;
+        }
+
+        /// <summary>
+        /// Highlights an associated Prefab in the Project window without
+        /// changing the active selection, so the PSD Inspector remains open.
+        /// </summary>
+        internal static bool TryPingPrefab(string prefabPath)
+        {
+            UnityEngine.Object prefab = AssetDatabase.LoadMainAssetAtPath(prefabPath);
+            if (prefab == null)
+            {
+                return false;
+            }
+
+            EditorGUIUtility.PingObject(prefab);
+            return true;
         }
 
         private static void ConfirmAndRecoverMissingProfile(string assetPath)
