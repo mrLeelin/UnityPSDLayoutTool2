@@ -422,6 +422,28 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void PingCommonAssetCatalogDoesNotChangeTheActiveInspectorSelection()
+        {
+            Object previouslySelected = Selection.activeObject;
+            var inspectorAnchor = new GameObject("PsdLayoutProjectSettingsInspectorAnchor");
+            PsdCommonAssetCatalog catalog = ScriptableObject.CreateInstance<PsdCommonAssetCatalog>();
+            try
+            {
+                Selection.activeObject = inspectorAnchor;
+
+                PsdLayoutProjectSettingsEditor.PingCommonAssetCatalog(catalog);
+
+                Assert.That(Selection.activeObject, Is.SameAs(inspectorAnchor));
+            }
+            finally
+            {
+                Selection.activeObject = previouslySelected;
+                Object.DestroyImmediate(catalog);
+                Object.DestroyImmediate(inspectorAnchor);
+            }
+        }
+
+        [Test]
         public void UiToolkitInspectorShowsFixedOutputControlsForFixedOutputMode()
         {
             var settings = ScriptableObject.CreateInstance<PsdLayoutProjectSettings>();

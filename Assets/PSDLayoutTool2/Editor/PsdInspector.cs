@@ -294,11 +294,21 @@
                         GeneratePrefabWithMissingProfileRecovery(assetPath);
                     }
 
-                    if (ShouldShowIncrementalUpdateButton(
-                            PsdImporter.IsIncrementalPrefabUpdateAvailable(assetPath)) &&
-                        GUILayout.Button(Localize("增量更新（保留整理）", "Incremental Update (Preserve Organization)")))
+                    bool incrementalUpdateAvailable =
+                        PsdImporter.IsIncrementalPrefabUpdateAvailable(assetPath);
+                    if (ShouldShowIncrementalUpdateButton(incrementalUpdateAvailable))
                     {
-                        PsdImporter.UpdatePrefabIncrementally(assetPath);
+                        using (new EditorGUI.DisabledScope(!incrementalUpdateAvailable))
+                        {
+                            if (GUILayout.Button(new GUIContent(
+                                    Localize("增量更新（保留整理）", "Incremental Update (Preserve Organization)"),
+                                    Localize(
+                                        "需要先对当前关联的 Prefab 完成 AI 整理，才能保留整理结果进行增量更新。",
+                                        "Organize the currently associated Prefab with AI before running an incremental update."))))
+                            {
+                                PsdImporter.UpdatePrefabIncrementally(assetPath);
+                            }
+                        }
                     }
 
                     EditorGUILayout.BeginHorizontal();
@@ -375,7 +385,7 @@
 
         internal static bool ShouldShowIncrementalUpdateButton(bool isIncrementalEligible)
         {
-            return isIncrementalEligible;
+            return true;
         }
 
         /// <summary>

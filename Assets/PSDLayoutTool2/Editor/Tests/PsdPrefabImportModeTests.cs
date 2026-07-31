@@ -46,10 +46,10 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void IncrementalButtonOnlyAppearsWhenAProfileIsAvailable()
+        public void IncrementalButtonRemainsVisibleWhenAProfileIsUnavailable()
         {
             Assert.That(PsdInspector.ShouldShowIncrementalUpdateButton(true), Is.True);
-            Assert.That(PsdInspector.ShouldShowIncrementalUpdateButton(false), Is.False);
+            Assert.That(PsdInspector.ShouldShowIncrementalUpdateButton(false), Is.True);
         }
 
         [Test]

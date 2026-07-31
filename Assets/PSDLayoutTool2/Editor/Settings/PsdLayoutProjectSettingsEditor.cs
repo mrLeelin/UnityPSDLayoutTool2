@@ -807,7 +807,10 @@ namespace PsdLayoutTool2
             section.Add(texturePrefixField);
             section.Add(validationBox);
 
-            var refreshCatalog = new Button(() => PsdCommonAssetCatalog.CreateOrRefresh())
+            var refreshCatalog = new Button(() =>
+            {
+                PingCommonAssetCatalog(PsdCommonAssetCatalog.CreateOrRefresh());
+            })
             {
                 name = CommonCatalogRefreshButtonName,
                 text = "生成 / 刷新公共资源映射表",
@@ -830,6 +833,14 @@ namespace PsdLayoutTool2
             prefabPrefixField.RegisterValueChangedCallback(change => ApplyPrefixes(change.newValue, texturePrefixField.value));
             texturePrefixField.RegisterValueChangedCallback(change => ApplyPrefixes(prefabPrefixField.value, change.newValue));
             return section;
+        }
+
+        internal static void PingCommonAssetCatalog(PsdCommonAssetCatalog catalog)
+        {
+            if (catalog != null)
+            {
+                EditorGUIUtility.PingObject(catalog);
+            }
         }
     }
 }
