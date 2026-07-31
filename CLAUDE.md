@@ -16,7 +16,6 @@
 - `Assets/PSDLayoutTool2/Editor/PsdInspector.cs` — 自定义 Inspector GUI
 - `Assets/PSDLayoutTool2/Editor/PsdLogger.cs` — 诊断日志写入器
 - `Assets/PSDLayoutTool2/Runtime/` — 运行时组件（`PsdPrefabNodeIdentity`、`PsdPrefabNodeKind`）
-- `PhotoshopPsdLayoutExporter/` — Photoshop UXP 插件（向 PSD XMP 写入 layerId、fingerprint）
 
 ### 验证版本
 
