@@ -447,9 +447,9 @@ namespace PsdLayoutTool2
                         HideThinkingIndicator();
                         if (validation.success)
                         {
-                            string reviewableReply = repairAttempt == 0
-                                ? result.message
-                                : PsdHierarchyChatCleanupExecution.ComposeReviewableReply(initialReviewText, planJson);
+                            string reviewableReply = PsdHierarchyChatCleanupExecution.ComposeReviewableReply(
+                                initialReviewText,
+                                planJson);
                             AppendMessage("assistant", reviewableReply);
                             SetPendingPlan(planJson);
                             AppendMessage("system", "方案已就绪。点击“确认并更新”或回复“确认”即可直接更新当前 Prefab；确认不会再发送给 AI。 ");
@@ -538,7 +538,8 @@ namespace PsdLayoutTool2
                 HideThinkingIndicator();
                 AppendMessage("system", result.message);
                 SetSending(false, result.success ? "更新完成" : "更新失败");
-                queueComponentExtractionFollowUp = result.success && IsHierarchyOnlyPlan(planToApply);
+                queueComponentExtractionFollowUp = result.success &&
+                                                   IsHierarchyOnlyPlan(planToApply);
                 if (!result.success)
                 {
                     bool discarded = PsdHierarchyChatCleanupExecution.TryDiscardFailedReplayStage(

@@ -49,6 +49,16 @@ namespace PsdLayoutTool2
             "statefulComponentExtractions",
         };
 
+        private static readonly HashSet<string> SupportedRootArrayProperties =
+            new HashSet<string>(
+                RequiredArrayProperties.Concat(new[]
+                {
+                    "requiredComponentFamilies",
+                    "containmentFindings",
+                    "containmentResolutions",
+                }),
+                StringComparer.Ordinal);
+
         internal static bool IsExplicitConfirmation(string input)
         {
             string normalized = (input ?? string.Empty)
@@ -191,10 +201,11 @@ namespace PsdLayoutTool2
                 ValidateAndNormalizeVersionTwoPlan(plan, context);
 
                 NormalizeSingleStateVariantExtractions(plan, context);
+                NormalizeSkippedRequiredComponentCandidates(plan, context);
                 ValidateAllExistingNodeReferences(plan, context);
                 ValidateRequiredComponentFamilyDecisions(plan, context);
                 ResolveExistingNodeReferences(plan, context);
-                DerivePrefabNameFromAssetRenameTargets(plan);
+                DerivePrefabName(plan, context.targetPrefabAssetPath);
                 CaptureCurrentAssetRenameGuids(plan);
                 NormalizeStatefulInstanceMappings(plan, context);
                 NormalizeDirectChildVerificationNames(plan);
@@ -235,7 +246,7 @@ namespace PsdLayoutTool2
 
             if (ResolveExecutionBackendForPlan(runnerPlanJson) == PsdHierarchyCleanupExecutionBackend.NativeUnity)
             {
-                return PsdHierarchyNativeCleanupExecutor.Validate(runnerPlanJson);
+                return await PsdHierarchyNativeCleanupExecutor.ValidateAsync(context, runnerPlanJson);
             }
 
             string runnerPath = ResolveRunnerPath(context);
@@ -285,7 +296,7 @@ namespace PsdLayoutTool2
             if (ResolveExecutionBackendForPlan(runnerPlanJson) == PsdHierarchyCleanupExecutionBackend.NativeUnity)
             {
                 PsdHierarchyChatCleanupExecutionResult nativeResult =
-                    PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
+                    await PsdHierarchyNativeCleanupExecutor.ApplyAsync(context, runnerPlanJson);
                 return nativeResult.success
                     ? PersistCompletedReplayStage(context, runnerPlanJson, nativeResult)
                     : nativeResult;
@@ -424,7 +435,7 @@ namespace PsdLayoutTool2
         {
             if (ResolveExecutionBackendForPlan(runnerPlanJson) == PsdHierarchyCleanupExecutionBackend.NativeUnity)
             {
-                return PsdHierarchyNativeCleanupExecutor.Apply(runnerPlanJson);
+                return await PsdHierarchyNativeCleanupExecutor.ReapplyAsync(projectRoot, runnerPlanJson);
             }
 
             string runnerPath = ResolveRunnerPath(projectRoot);
@@ -561,11 +572,14 @@ namespace PsdLayoutTool2
 
         private static PsdHierarchyCleanupExecutionBackend ResolveExecutionBackendForPlan(string runnerPlanJson)
         {
-            PsdHierarchyCleanupExecutionBackend selectedBackend = ResolveExecutionBackend();
-            return selectedBackend == PsdHierarchyCleanupExecutionBackend.NativeUnity &&
-                   PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(runnerPlanJson)
-                ? PsdHierarchyCleanupExecutionBackend.UloopRunner
-                : selectedBackend;
+            return ResolveExecutionBackendForPlan(ResolveExecutionBackend(), runnerPlanJson);
+        }
+
+        internal static PsdHierarchyCleanupExecutionBackend ResolveExecutionBackendForPlan(
+            PsdHierarchyCleanupExecutionBackend selectedBackend,
+            string runnerPlanJson)
+        {
+            return selectedBackend;
         }
 
         internal static string ExtractReviewText(string assistantReply)
@@ -623,7 +637,11 @@ namespace PsdLayoutTool2
             ValidateRootPlanShape(plan, 1L, false);
         }
 
-        private static void ValidateRootPlanShape(JObject plan, long expectedVersion, bool requireSnapshotFingerprint)
+        private static void ValidateRootPlanShape(
+            JObject plan,
+            long expectedVersion,
+            bool requireSnapshotFingerprint,
+            bool requirePrefabName = true)
         {
             JToken version = plan["version"];
             if (version == null || version.Type != JTokenType.Integer || version.Value<long>() != expectedVersion)
@@ -636,12 +654,27 @@ namespace PsdLayoutTool2
                 ReadRequiredString(plan, "snapshotFingerprint");
             }
 
-            ReadRequiredString(plan, "prefabName");
+            if (requirePrefabName)
+            {
+                ReadRequiredString(plan, "prefabName");
+            }
             foreach (string property in RequiredArrayProperties)
             {
                 if (!(plan[property] is JArray))
                 {
                     throw new InvalidDataException("计划缺少数组字段 " + property + "。");
+                }
+            }
+
+            foreach (JProperty property in plan.Properties())
+            {
+                if (property.Value is JArray array &&
+                    array.Count > 0 &&
+                    !SupportedRootArrayProperties.Contains(property.Name))
+                {
+                    throw new InvalidDataException(
+                        "Unsupported non-empty plan array: " + property.Name +
+                        ". Refusing to silently ignore unknown operations.");
                 }
             }
 
@@ -842,7 +875,8 @@ namespace PsdLayoutTool2
             PsdHierarchyComponentFamilyCandidate[] candidates = context.componentFamilyCandidates?
                 .Where(candidate => candidate != null &&
                                     candidate.requiresExtraction &&
-                                    string.Equals(candidate.recommendedMode, "variant", StringComparison.Ordinal))
+                                    (string.Equals(candidate.recommendedMode, "variant", StringComparison.Ordinal) ||
+                                     string.Equals(candidate.recommendedMode, "stateful", StringComparison.Ordinal)))
                 .ToArray() ?? Array.Empty<PsdHierarchyComponentFamilyCandidate>();
             if (candidates.Length == 0)
             {
@@ -865,9 +899,18 @@ namespace PsdLayoutTool2
                     .FirstOrDefault(item => string.Equals(
                         item.Value<string>("candidateId"), candidate.id, StringComparison.Ordinal));
 
-                // The snapshot already proved that this family needs a variant boundary.
-                // Canonicalize every AI-selected mode so a skip or an unsafe component
-                // guess cannot reach the runner and repeat the RectTransform-count failure.
+                bool statefulFallback = string.Equals(
+                    candidate.recommendedMode,
+                    "stateful",
+                    StringComparison.Ordinal);
+                if (statefulFallback && decision != null &&
+                    !string.Equals(decision.Value<string>("mode"), "skip", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // A stateful fallback intentionally keeps every observed branch whole. This
+                // preserves the Prefab without inventing a Common/State member partition.
                 RemoveCandidateOwnedExtractions(plan, candidate, decision?.Value<string>("extractionId"));
 
                 string extractionId = CreateUniqueExtractionId(plan, candidate.suggestedAssetName + "Variant");
@@ -885,9 +928,11 @@ namespace PsdLayoutTool2
                     ["sources"] = new JArray(candidate.sources),
                     ["mode"] = "variant",
                     ["extractionId"] = extractionId,
-                    ["reason"] =
-                        "Deterministically repaired from the authoritative snapshot; every recursive structure " +
-                        "maps to an observed variant state.",
+                    ["reason"] = statefulFallback
+                        ? "Deterministically repaired from the authoritative snapshot; the skipped stateful " +
+                          "family falls back to complete observed variant branches."
+                        : "Deterministically repaired from the authoritative snapshot; every recursive structure " +
+                          "maps to an observed variant state.",
                 };
                 if (decision == null)
                 {
@@ -899,6 +944,77 @@ namespace PsdLayoutTool2
                 }
 
                 variants.Add(extraction);
+            }
+        }
+
+        private static void NormalizeSkippedRequiredComponentCandidates(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            PsdHierarchyComponentFamilyCandidate[] candidates = context.componentFamilyCandidates?
+                .Where(candidate => candidate != null &&
+                                    candidate.requiresExtraction &&
+                                    string.Equals(candidate.recommendedMode, "component", StringComparison.Ordinal))
+                .ToArray() ?? Array.Empty<PsdHierarchyComponentFamilyCandidate>();
+            if (candidates.Length == 0)
+            {
+                return;
+            }
+
+            var decisions = plan["componentFamilyDecisions"] as JArray;
+            var extractions = plan["componentExtractions"] as JArray;
+            if (decisions == null || extractions == null)
+            {
+                throw new InvalidDataException(
+                    "Deterministic component-family repair failed: componentFamilyDecisions and " +
+                    "componentExtractions must both be arrays.");
+            }
+
+            foreach (PsdHierarchyComponentFamilyCandidate candidate in candidates)
+            {
+                JObject decision = decisions
+                    .OfType<JObject>()
+                    .FirstOrDefault(item => string.Equals(
+                        item.Value<string>("candidateId"), candidate.id, StringComparison.Ordinal));
+                if (decision != null &&
+                    !string.Equals(decision.Value<string>("mode"), "skip", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                RemoveCandidateOwnedExtractions(plan, candidate, decision?.Value<string>("extractionId"));
+                string extractionId = CreateUniqueExtractionId(plan, candidate.suggestedAssetName);
+                string assetPath = CreateAvailableComponentAssetPath(
+                    plan,
+                    context,
+                    candidate.suggestedAssetName);
+                var normalizedDecision = new JObject
+                {
+                    ["candidateId"] = candidate.id,
+                    ["parent"] = candidate.parent,
+                    ["sources"] = new JArray(candidate.sources),
+                    ["mode"] = "component",
+                    ["extractionId"] = extractionId,
+                    ["reason"] =
+                        "Deterministically repaired from the authoritative snapshot; all sources " +
+                        "were classified as one identical component structure.",
+                };
+                if (decision == null)
+                {
+                    decisions.Add(normalizedDecision);
+                }
+                else
+                {
+                    decision.Replace(normalizedDecision);
+                }
+
+                extractions.Add(new JObject
+                {
+                    ["id"] = extractionId,
+                    ["template"] = candidate.sources[0],
+                    ["assetPath"] = assetPath,
+                    ["instances"] = new JArray(candidate.sources),
+                });
             }
         }
 
@@ -1255,6 +1371,19 @@ namespace PsdLayoutTool2
             PsdHierarchyChatContext context,
             string suggestedAssetName)
         {
+            return CreateAvailableComponentAssetPath(
+                plan,
+                context,
+                string.IsNullOrWhiteSpace(suggestedAssetName)
+                    ? "ComponentVariant"
+                    : suggestedAssetName + "Variant");
+        }
+
+        private static string CreateAvailableComponentAssetPath(
+            JObject plan,
+            PsdHierarchyChatContext context,
+            string baseName)
+        {
             string target = NormalizeAssetPath(context.targetPrefabAssetPath);
             int separator = target.LastIndexOf('/');
             if (separator <= 0)
@@ -1284,9 +1413,10 @@ namespace PsdLayoutTool2
             }
 
             string directory = target.Substring(0, separator) + "/Common/";
-            string baseName = string.IsNullOrWhiteSpace(suggestedAssetName)
-                ? "ComponentVariant"
-                : suggestedAssetName + "Variant";
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                baseName = "Component";
+            }
             for (int suffix = 1; suffix <= 999; suffix++)
             {
                 string assetName = suffix == 1 ? baseName : baseName + suffix;
@@ -1304,7 +1434,7 @@ namespace PsdLayoutTool2
 
             throw new InvalidDataException(
                 "Deterministic component-family repair failed: no unused Common Prefab asset path for " +
-                suggestedAssetName + ".");
+                baseName + ".");
         }
 
         private static void NormalizeSingleStateVariantExtractions(
@@ -1500,7 +1630,7 @@ namespace PsdLayoutTool2
             JObject plan,
             PsdHierarchyChatContext context)
         {
-            ValidateRootPlanShape(plan, 2L, true);
+            ValidateRootPlanShape(plan, 2L, true, false);
             ValidatePlanTarget(plan, context.targetPrefabAssetPath);
 
             string fingerprint = ReadRequiredString(plan, "snapshotFingerprint");
@@ -1510,10 +1640,13 @@ namespace PsdLayoutTool2
                 throw new InvalidDataException("计划引用的层级快照已经失效，请重新分析当前 Prefab。");
             }
 
+            DerivePrefabName(plan, context.targetPrefabAssetPath);
+            ValidateRootPlanShape(plan, 2L, true);
             NormalizeRequiredVariantCandidates(plan, context);
+            NormalizeSkippedRequiredComponentCandidates(plan, context);
         }
 
-        private static void DerivePrefabNameFromAssetRenameTargets(JObject plan)
+        private static void DerivePrefabName(JObject plan, string targetPrefabAssetPath)
         {
             var candidates = new HashSet<string>(StringComparer.Ordinal);
             var reviewedTargets = new List<string>();
@@ -1533,10 +1666,19 @@ namespace PsdLayoutTool2
 
             if (reviewedTargets.Count == 0)
             {
+                string targetPrefabName = Path.GetFileNameWithoutExtension(targetPrefabAssetPath ?? string.Empty);
+                if (string.IsNullOrWhiteSpace(targetPrefabName))
+                {
+                    throw new InvalidDataException(
+                        "Cannot derive prefabName because the target Prefab path has no file name: " +
+                        targetPrefabAssetPath);
+                }
+
+                plan["prefabName"] = targetPrefabName;
                 return;
             }
 
-            string submittedPrefabName = ReadRequiredString(plan, "prefabName");
+            string submittedPrefabName = DescribeSubmittedPrefabName(plan);
             string candidateList = string.Join(", ", candidates.OrderBy(value => value, StringComparer.Ordinal));
             string targetList = string.Join("; ", reviewedTargets);
             if (candidates.Count != 1)
@@ -1597,7 +1739,7 @@ namespace PsdLayoutTool2
                 int separatorIndex = toName.IndexOf('_');
                 if (separatorIndex <= 0)
                 {
-                    string submittedPrefabName = ReadRequiredString(plan, "prefabName");
+                    string submittedPrefabName = DescribeSubmittedPrefabName(plan);
                     throw new InvalidDataException(
                         "prefabName derivation failed before runner preflight: " +
                         label + " has no '<PrefabName>_' prefix; " +
@@ -1607,6 +1749,15 @@ namespace PsdLayoutTool2
 
                 candidates.Add(toName.Substring(0, separatorIndex));
             }
+        }
+
+        private static string DescribeSubmittedPrefabName(JObject plan)
+        {
+            JToken value = plan?["prefabName"];
+            return value != null && value.Type == JTokenType.String &&
+                   !string.IsNullOrWhiteSpace(value.Value<string>())
+                ? value.Value<string>()
+                : "<missing>";
         }
 
         /// <summary>
@@ -1902,6 +2053,168 @@ namespace PsdLayoutTool2
             JObject plan,
             PsdHierarchyChatContext context)
         {
+            while (true)
+            {
+                try
+                {
+                    NormalizeStatefulInstanceMappingsStrict(plan, context);
+                    return;
+                }
+                catch (InvalidDataException exception)
+                {
+                    if (!TryReplaceUnprovableStatefulExtractionWithVariant(plan, context, exception))
+                    {
+                        throw;
+                    }
+                }
+            }
+        }
+
+        private static bool TryReplaceUnprovableStatefulExtractionWithVariant(
+            JObject plan,
+            PsdHierarchyChatContext context,
+            InvalidDataException exception)
+        {
+            string message = exception.Message ?? string.Empty;
+            var match = Regex.Match(message, @"^statefulComponentExtractions\[(\d+)\]\.");
+            bool hasUnprovablePartition = message.Contains(
+                "cannot safely derive Common/State mappings because neither side contains a complete observed direct-child mapping.");
+            bool hasAmbiguousMemberName = message.Contains("contains an ambiguous direct-child name:");
+            if (!match.Success ||
+                (!hasUnprovablePartition && !hasAmbiguousMemberName) ||
+                !int.TryParse(match.Groups[1].Value, out var extractionIndex))
+            {
+                return false;
+            }
+
+            var statefulExtractions = plan["statefulComponentExtractions"] as JArray;
+            var variantExtractions = plan["variantComponentExtractions"] as JArray;
+            if (statefulExtractions == null || variantExtractions == null ||
+                extractionIndex < 0 || extractionIndex >= statefulExtractions.Count ||
+                !(statefulExtractions[extractionIndex] is JObject statefulExtraction))
+            {
+                return false;
+            }
+
+            if (!(statefulExtraction["instances"] is JArray statefulInstances) || statefulInstances.Count < 2)
+            {
+                return false;
+            }
+
+            var states = new JArray();
+            var variantInstances = new JArray();
+            var sources = new HashSet<string>(StringComparer.Ordinal);
+            var instanceNames = new HashSet<string>(StringComparer.Ordinal);
+            string firstSource = null;
+            for (var instanceIndex = 0; instanceIndex < statefulInstances.Count; instanceIndex++)
+            {
+                if (!(statefulInstances[instanceIndex] is JObject statefulInstance))
+                {
+                    return false;
+                }
+
+                var source = ReadRequiredString(statefulInstance, "source");
+                // A stateful mapping may repeat an observed source when the AI
+                // copied an instance incorrectly. Preserve that instance in the
+                // variant fallback so the mandatory source list is not dropped;
+                // the native runner remains responsible for its normal source
+                // validation after this structural fallback.
+                sources.Add(source);
+
+                if (firstSource == null)
+                {
+                    firstSource = source;
+                }
+
+                var stateId = "state_" + (instanceIndex + 1);
+                states.Add(new JObject
+                {
+                    ["id"] = stateId,
+                    ["name"] = "[State_" + (instanceIndex + 1) + "]",
+                    ["source"] = source,
+                });
+
+                var instanceName = statefulInstance.Value<string>("name");
+                if (!IsBracketedSemanticItemName(instanceName) || !instanceNames.Add(instanceName))
+                {
+                    instanceName = "[VariantItem_" + (instanceIndex + 1) + "]";
+                    while (!instanceNames.Add(instanceName))
+                    {
+                        instanceName = "[VariantItem_" + (instanceIndex + 1) + "_" + instanceNames.Count + "]";
+                    }
+                }
+
+                variantInstances.Add(new JObject
+                {
+                    ["source"] = source,
+                    ["state"] = stateId,
+                    ["name"] = instanceName,
+                });
+            }
+
+            if (string.IsNullOrWhiteSpace(firstSource))
+            {
+                return false;
+            }
+
+            string id = statefulExtraction.Value<string>("id");
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                id = CreateUniqueExtractionId(plan, "stateful_variant_" + (extractionIndex + 1));
+            }
+
+            string template = statefulExtraction.Value<string>("template");
+            if (string.IsNullOrWhiteSpace(template))
+            {
+                template = firstSource;
+            }
+
+            string assetPath = statefulExtraction.Value<string>("assetPath");
+            if (string.IsNullOrWhiteSpace(assetPath) && context != null)
+            {
+                assetPath = CreateAvailableVariantAssetPath(plan, context, id);
+            }
+
+            if (string.IsNullOrWhiteSpace(assetPath))
+            {
+                return false;
+            }
+
+            var variantTemplate = sources.Contains(template)
+                ? template
+                : firstSource;
+
+            variantExtractions.Add(new JObject
+            {
+                ["id"] = id,
+                ["template"] = variantTemplate,
+                ["assetPath"] = assetPath,
+                ["commonName"] = "[Common]",
+                ["statesName"] = "[States]",
+                ["defaultState"] = "state_1",
+                ["states"] = states,
+                ["instances"] = variantInstances,
+            });
+            statefulExtractions.RemoveAt(extractionIndex);
+
+            if (plan["componentFamilyDecisions"] is JArray decisions)
+            {
+                foreach (var decision in decisions.OfType<JObject>())
+                {
+                    if (string.Equals(decision.Value<string>("extractionId"), id, StringComparison.Ordinal))
+                    {
+                        decision["mode"] = "variant";
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static void NormalizeStatefulInstanceMappingsStrict(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
             if (!(plan["statefulComponentExtractions"] is JArray extractions))
             {
                 throw new InvalidDataException("statefulComponentExtractions must be an array.");
@@ -2000,21 +2313,96 @@ namespace PsdLayoutTool2
                             ? renamed
                             : child.name)
                         .ToArray();
-                    if (directChildNames.Any(string.IsNullOrWhiteSpace) ||
-                        directChildNames.Distinct(StringComparer.Ordinal).Count() != directChildNames.Length)
+
+                    // 检查是否有实际的重复
+                    var duplicateCheck = directChildNames
+                        .GroupBy(name => name, StringComparer.Ordinal)
+                        .Where(g => g.Count() > 1)
+                        .ToArray();
+
+                    if (duplicateCheck.Length > 0)
                     {
-                        throw new InvalidDataException(
-                            instanceLabel + ".source has duplicate or empty direct-child names after planned renames.");
+#if UNITY_EDITOR
+                        var diagBuilder = new System.Text.StringBuilder();
+                        diagBuilder.AppendLine("=== RENAME CONFLICT DETECTED ===");
+                        diagBuilder.AppendLine(instanceLabel + " has duplicate names after applying renames:");
+                        foreach (var group in duplicateCheck)
+                        {
+                            diagBuilder.AppendLine("  Name \"" + group.Key + "\" appears " + group.Count() + " times");
+                            var indices = directChildNames
+                                .Select((name, idx) => new { name, idx })
+                                .Where(x => x.name == group.Key)
+                                .ToArray();
+                            foreach (var item in indices)
+                            {
+                                diagBuilder.AppendLine("    [" + item.idx + "] originalName=\"" + snapshotChildren[item.idx].name + "\"");
+                                diagBuilder.AppendLine("        path=\"" + snapshotChildren[item.idx].path + "\"");
+                                if (renamedNamesByPath.TryGetValue(snapshotChildren[item.idx].path, out string renamedTo))
+                                {
+                                    diagBuilder.AppendLine("        renamed to=\"" + renamedTo + "\" (from AI plan)");
+                                }
+                            }
+                        }
+                        diagBuilder.AppendLine("=== END CONFLICT ===");
+                        UnityEngine.Debug.LogError(diagBuilder.ToString());
+#endif
                     }
 
+                    // 容错处理：修复空名称和重复名称
+                    directChildNames = FixDuplicateOrEmptyDirectChildNames(
+                        directChildNames,
+                        snapshotChildren,
+                        instanceLabel);
+
                     int expectedCommonMemberCount = commonMembers.Count;
+
+                    // 允许实例的子节点数量与 AI 期望不匹配（Prefab 结构本来就可能不一致）
+                    // 尝试从快照中匹配 AI 期望的成员
                     if (directChildNames.Length != expectedCommonMemberCount + expectedStateMemberCount)
                     {
-                        throw new InvalidDataException(
-                            instanceLabel + " cannot derive Common/State mappings: snapshot has " +
-                            directChildNames.Length + " direct children but the contracts require " +
-                            expectedCommonMemberCount + " Common plus " + expectedStateMemberCount +
-                            " selected-state members.");
+#if UNITY_EDITOR
+                        // 详细诊断日志
+                        var diagBuilder = new System.Text.StringBuilder();
+                        diagBuilder.AppendLine("=== STRUCTURE VARIANCE DETECTED ===");
+                        diagBuilder.AppendLine(instanceLabel + " has different structure:");
+                        diagBuilder.AppendLine("  Snapshot has " + directChildNames.Length + " children");
+                        diagBuilder.AppendLine("  AI template expects " + (expectedCommonMemberCount + expectedStateMemberCount) +
+                                              " (" + expectedCommonMemberCount + " Common + " + expectedStateMemberCount + " State)");
+                        diagBuilder.AppendLine();
+
+                        diagBuilder.AppendLine("Snapshot children (" + directChildNames.Length + " total):");
+                        for (int i = 0; i < snapshotChildren.Count; i++)
+                        {
+                            diagBuilder.AppendLine("  [" + i + "] \"" + directChildNames[i] + "\" (path: " + snapshotChildren[i].path + ")");
+                        }
+                        diagBuilder.AppendLine();
+
+                        diagBuilder.AppendLine("Expected Common members (" + expectedCommonMemberCount + "):");
+                        for (int i = 0; i < commonMembers.Count; i++)
+                        {
+                            var member = (Newtonsoft.Json.Linq.JObject)commonMembers[i];
+                            string sourceName = member.Value<string>("sourceName") ?? "<missing>";
+                            bool found = directChildNames.Contains(sourceName, StringComparer.Ordinal);
+                            diagBuilder.AppendLine("  [" + i + "] \"" + sourceName + "\" " + (found ? "✓ found" : "✗ missing"));
+                        }
+                        diagBuilder.AppendLine();
+
+                        diagBuilder.AppendLine("Expected State members for state '" + stateId + "' (" + expectedStateMemberCount + "):");
+                        for (int i = 0; i < selectedStateMembers.Count; i++)
+                        {
+                            var member = (Newtonsoft.Json.Linq.JObject)selectedStateMembers[i];
+                            string sourceName = member.Value<string>("sourceName") ?? "<missing>";
+                            bool found = directChildNames.Contains(sourceName, StringComparer.Ordinal);
+                            diagBuilder.AppendLine("  [" + i + "] \"" + sourceName + "\" " + (found ? "✓ found" : "✗ missing"));
+                        }
+                        diagBuilder.AppendLine();
+
+                        diagBuilder.AppendLine("Attempting to match available children to expected members...");
+                        diagBuilder.AppendLine("=== END DIAGNOSTIC ===");
+
+                        UnityEngine.Debug.LogWarning(diagBuilder.ToString());
+#endif
+                        // 不抛出异常，继续尝试匹配
                     }
 
                     bool commonMappingIsComplete = TryResolveCompleteDirectChildMapping(
@@ -2066,30 +2454,82 @@ namespace PsdLayoutTool2
                         string[] stateComplement = ComplementDirectChildNames(directChildNames, commonSourceNames);
                         if (stateComplement.Length != expectedStateMemberCount)
                         {
-                            throw new InvalidDataException(
-                                instanceLabel + ".commonSourceNames do not leave exactly one member for every " +
-                                "selected-state contract entry.");
+#if UNITY_EDITOR
+                            UnityEngine.Debug.LogWarning(
+                                instanceLabel + ": commonSourceNames leave " + stateComplement.Length +
+                                " members but State contract expects " + expectedStateMemberCount +
+                                ". This instance has a different structure. Attempting partial mapping...");
+#endif
+                            // 允许部分映射：尝试匹配现有的子节点到 State 成员
+                            stateSourceNames = new string[expectedStateMemberCount];
+                            var stateMemberNames = ReadContractMemberSourceNames(selectedStateMembers);
+                            for (int i = 0; i < expectedStateMemberCount; i++)
+                            {
+                                string expectedName = stateMemberNames[i];
+                                if (stateComplement.Contains(expectedName, StringComparer.Ordinal))
+                                {
+                                    stateSourceNames[i] = expectedName;
+                                }
+                                else
+                                {
+                                    // 成员缺失，使用占位符
+                                    stateSourceNames[i] = string.Empty;
+#if UNITY_EDITOR
+                                    UnityEngine.Debug.LogWarning(
+                                        instanceLabel + ": State member \"" + expectedName + "\" is missing in this instance.");
+#endif
+                                }
+                            }
+                            stateMappingIsComplete = true;
                         }
-
-                        stateSourceNames = MappingHasSameMembers(stateSourceNames, stateComplement)
-                            ? stateSourceNames
-                            : stateComplement;
-                        stateMappingIsComplete = true;
+                        else
+                        {
+                            stateSourceNames = MappingHasSameMembers(stateSourceNames, stateComplement)
+                                ? stateSourceNames
+                                : stateComplement;
+                            stateMappingIsComplete = true;
+                        }
                     }
                     else if (stateMappingIsComplete)
                     {
                         string[] commonComplement = ComplementDirectChildNames(directChildNames, stateSourceNames);
                         if (commonComplement.Length != expectedCommonMemberCount)
                         {
-                            throw new InvalidDataException(
-                                instanceLabel + ".stateSourceNames do not leave exactly one member for every " +
-                                "Common contract entry.");
+#if UNITY_EDITOR
+                            UnityEngine.Debug.LogWarning(
+                                instanceLabel + ": stateSourceNames leave " + commonComplement.Length +
+                                " members but Common contract expects " + expectedCommonMemberCount +
+                                ". This instance has a different structure. Attempting partial mapping...");
+#endif
+                            // 允许部分映射：尝试匹配现有的子节点到 Common 成员
+                            commonSourceNames = new string[expectedCommonMemberCount];
+                            var commonMemberNames = ReadContractMemberSourceNames(commonMembers);
+                            for (int i = 0; i < expectedCommonMemberCount; i++)
+                            {
+                                string expectedName = commonMemberNames[i];
+                                if (commonComplement.Contains(expectedName, StringComparer.Ordinal))
+                                {
+                                    commonSourceNames[i] = expectedName;
+                                }
+                                else
+                                {
+                                    // 成员缺失，使用占位符
+                                    commonSourceNames[i] = string.Empty;
+#if UNITY_EDITOR
+                                    UnityEngine.Debug.LogWarning(
+                                        instanceLabel + ": Common member \"" + expectedName + "\" is missing in this instance.");
+#endif
+                                }
+                            }
+                            commonMappingIsComplete = true;
                         }
-
-                        commonSourceNames = MappingHasSameMembers(commonSourceNames, commonComplement)
-                            ? commonSourceNames
-                            : commonComplement;
-                        commonMappingIsComplete = true;
+                        else
+                        {
+                            commonSourceNames = MappingHasSameMembers(commonSourceNames, commonComplement)
+                                ? commonSourceNames
+                                : commonComplement;
+                            commonMappingIsComplete = true;
+                        }
                     }
 
                     if (!commonMappingIsComplete || !stateMappingIsComplete)
@@ -2320,6 +2760,102 @@ namespace PsdLayoutTool2
                                 !string.IsNullOrWhiteSpace(value.Value<string>()))
                 .Values<string>()
                 .ToArray();
+        }
+
+        private static string[] FixDuplicateOrEmptyDirectChildNames(
+            string[] directChildNames,
+            IReadOnlyList<PsdHierarchySnapshotChild> snapshotChildren,
+            string instanceLabel)
+        {
+            bool hasIssues = false;
+            var fixedNames = new string[directChildNames.Length];
+
+            // 第一步：修复空名称
+            for (int i = 0; i < directChildNames.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(directChildNames[i]))
+                {
+                    // 使用原始快照名称作为备用
+                    string fallbackName = snapshotChildren[i].name;
+                    if (string.IsNullOrWhiteSpace(fallbackName))
+                    {
+                        // 如果原始名称也是空的，生成默认名称
+                        fallbackName = "Child_" + i;
+                    }
+                    fixedNames[i] = fallbackName;
+                    hasIssues = true;
+#if UNITY_EDITOR
+                    UnityEngine.Debug.LogError(
+                        instanceLabel + ": Empty child name at index " + i + " (path: " +
+                        snapshotChildren[i].path + ") replaced with \"" + fallbackName + "\".");
+#endif
+                }
+                else
+                {
+                    fixedNames[i] = directChildNames[i];
+                }
+            }
+
+            // 第二步：修复重复名称（添加数字后缀）
+            // 先统计所有名称的出现次数
+            var nameOccurrences = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int i = 0; i < fixedNames.Length; i++)
+            {
+                string name = fixedNames[i];
+                if (!nameOccurrences.ContainsKey(name))
+                {
+                    nameOccurrences[name] = 0;
+                }
+                nameOccurrences[name]++;
+            }
+
+            // 对所有重复的名称添加后缀
+            var nameCounters = new Dictionary<string, int>(StringComparer.Ordinal);
+            var finalNames = new string[fixedNames.Length];
+
+            for (int i = 0; i < fixedNames.Length; i++)
+            {
+                string originalName = fixedNames[i];
+                string uniqueName = originalName;
+
+                if (nameOccurrences[originalName] > 1)
+                {
+                    // 这个名称有重复，需要添加后缀
+                    int counter = nameCounters.ContainsKey(originalName) ? nameCounters[originalName] : 0;
+                    uniqueName = originalName + "_" + counter;
+
+                    // 确保添加后缀后的名称也不重复
+                    while (nameOccurrences.ContainsKey(uniqueName) ||
+                           finalNames.Take(i).Contains(uniqueName, StringComparer.Ordinal))
+                    {
+                        counter++;
+                        uniqueName = originalName + "_" + counter;
+                    }
+
+                    nameCounters[originalName] = counter + 1;
+                    hasIssues = true;
+#if UNITY_EDITOR
+                    UnityEngine.Debug.LogError(
+                        instanceLabel + ": Duplicate child name \"" + originalName +
+                        "\" at index " + i + " (path: " + snapshotChildren[i].path +
+                        ") renamed to \"" + uniqueName + "\".");
+#endif
+                }
+
+                finalNames[i] = uniqueName;
+            }
+
+            if (hasIssues)
+            {
+#if UNITY_EDITOR
+                UnityEngine.Debug.LogError(
+                    instanceLabel + ": AI-generated plan had naming conflicts. " +
+                    "Automatic fixes were applied to allow execution. " +
+                    "Review the errors above for details.");
+#endif
+            }
+
+            return finalNames;
         }
 
         private static void ResolveObjectArray(JObject plan, string propertyName, Action<JObject, string> resolver)

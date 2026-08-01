@@ -4,44 +4,37 @@ namespace PsdLayoutTool2
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Threading.Tasks;
     using Newtonsoft.Json.Linq;
     using UnityEditor;
     using UnityEngine;
 
     /// <summary>
-    /// Executes the safe, hierarchy-only subset of a reviewed cleanup plan in
-    /// the current Unity Editor process. Complex component and asset operations
-    /// are delegated to the uLoop runner only when a reviewed plan actually
-    /// needs those operations.
+    /// Executes reviewed cleanup plans in the current Unity Editor process.
+    /// Hierarchy-only plans use the direct path; component and asset operations
+    /// use the generated Native payload path.
     /// </summary>
     internal static class PsdHierarchyNativeCleanupExecutor
     {
-        private static readonly string[] UloopOnlyProperties =
-        {
-            "textureRenames",
-            "spriteAtlasRenames",
-            "componentFamilyDecisions",
-            "componentExtractions",
-            "stateComponentExtractions",
-            "variantComponentExtractions",
-            "statefulComponentExtractions",
-            "requiredComponentFamilies",
-            "containmentFindings",
-            "containmentResolutions",
-        };
-
+        // Kept as a capability query for callers that need to describe a plan.
         internal static bool RequiresUloopRunner(string planJson)
         {
             try
             {
                 var plan = JObject.Parse(planJson ?? string.Empty);
-                return UloopOnlyProperties.Any(property =>
+                return new[]
+                {
+                    "textureRenames",
+                    "spriteAtlasRenames",
+                    "componentExtractions",
+                    "stateComponentExtractions",
+                    "variantComponentExtractions",
+                    "statefulComponentExtractions",
+                }.Any(property =>
                     plan[property] is JArray operations && operations.Count > 0);
             }
             catch
             {
-                // Let the native preflight report malformed JSON with its existing
-                // diagnostic instead of treating it as a backend-routing decision.
                 return false;
             }
         }
@@ -51,17 +44,6 @@ namespace PsdLayoutTool2
             try
             {
                 var plan = JObject.Parse(planJson ?? string.Empty);
-                foreach (string property in UloopOnlyProperties)
-                {
-                    JArray operations = plan[property] as JArray;
-                    if (operations != null && operations.Count > 0)
-                    {
-                        error = "Native Unity backend does not yet support " + property +
-                                ". Select the optional uLoop backend before applying this plan.";
-                        return false;
-                    }
-                }
-
                 JObject verify = plan["verify"] as JObject;
                 if (verify == null)
                 {
@@ -84,6 +66,13 @@ namespace PsdLayoutTool2
             if (!TryValidatePlanCapabilities(planJson, out string capabilityError))
             {
                 return new PsdHierarchyChatCleanupExecutionResult(false, capabilityError);
+            }
+
+            if (RequiresUloopRunner(planJson))
+            {
+                return new PsdHierarchyChatCleanupExecutionResult(
+                    false,
+                    "Complex Native Unity plans must run through the asynchronous Native payload executor.");
             }
 
             if (!TryReadPrefabPath(planJson, out string prefabPath, out string pathError))
@@ -151,6 +140,83 @@ namespace PsdLayoutTool2
             return new PsdHierarchyChatCleanupExecutionResult(
                 true,
                 "Prefab updated by the Native Unity backend." + VerifyPersistedPrefab(prefabPath, planJson));
+        }
+
+        internal static async Task<PsdHierarchyChatCleanupExecutionResult> ValidateAsync(
+            PsdHierarchyChatContext context,
+            string planJson)
+        {
+            if (!TryValidatePlanCapabilities(planJson, out string capabilityError))
+                return new PsdHierarchyChatCleanupExecutionResult(false, capabilityError);
+            if (!RequiresUloopRunner(planJson)) return Validate(planJson);
+
+            PsdHierarchyNativePayloadResult result = await PsdHierarchyNativePayloadExecutor.ExecuteAsync(
+                ResolveProjectRoot(context),
+                context?.skillFullPath,
+                planJson,
+                "preflight");
+            return new PsdHierarchyChatCleanupExecutionResult(result.success, result.message);
+        }
+
+        internal static async Task<PsdHierarchyChatCleanupExecutionResult> ApplyAsync(
+            PsdHierarchyChatContext context,
+            string planJson)
+        {
+            if (!RequiresUloopRunner(planJson)) return Apply(planJson);
+
+            PsdHierarchyChatCleanupExecutionResult preflight = await ValidateAsync(context, planJson);
+            if (!preflight.success) return preflight;
+
+            PsdHierarchyNativePayloadResult result = await PsdHierarchyNativePayloadExecutor.ExecuteAsync(
+                ResolveProjectRoot(context),
+                context?.skillFullPath,
+                planJson,
+                "apply");
+            return result.success
+                ? new PsdHierarchyChatCleanupExecutionResult(
+                    true,
+                    "Prefab updated by the Native Unity backend." +
+                    (string.IsNullOrWhiteSpace(result.message) ? string.Empty : Environment.NewLine + result.message))
+                : new PsdHierarchyChatCleanupExecutionResult(false, result.message);
+        }
+
+        internal static async Task<PsdHierarchyChatCleanupExecutionResult> ReapplyAsync(
+            string projectRoot,
+            string planJson)
+        {
+            if (!RequiresUloopRunner(planJson)) return Apply(planJson);
+            if (!TryValidatePlanCapabilities(planJson, out string capabilityError))
+                return new PsdHierarchyChatCleanupExecutionResult(false, capabilityError);
+
+            PsdHierarchyNativePayloadResult preflight = await PsdHierarchyNativePayloadExecutor.ExecuteAsync(
+                projectRoot,
+                string.Empty,
+                BuildReapplyPreflightPlan(planJson),
+                "preflight");
+            if (!preflight.success)
+                return new PsdHierarchyChatCleanupExecutionResult(false, preflight.message);
+
+            PsdHierarchyNativePayloadResult result = await PsdHierarchyNativePayloadExecutor.ExecuteAsync(
+                projectRoot,
+                string.Empty,
+                planJson,
+                "reapply");
+            return new PsdHierarchyChatCleanupExecutionResult(result.success, result.message);
+        }
+
+        internal static string BuildReapplyPreflightPlan(string planJson)
+        {
+            var plan = JObject.Parse(planJson ?? string.Empty);
+            plan["textureRenames"] = new JArray();
+            plan["spriteAtlasRenames"] = new JArray();
+            return plan.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
+        private static string ResolveProjectRoot(PsdHierarchyChatContext context)
+        {
+            if (!string.IsNullOrWhiteSpace(context?.projectRoot)) return context.projectRoot;
+            DirectoryInfo projectRoot = Directory.GetParent(Application.dataPath);
+            return projectRoot?.FullName ?? string.Empty;
         }
 
         private static bool TryReadPrefabPath(string planJson, out string prefabPath, out string error)

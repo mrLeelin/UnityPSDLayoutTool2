@@ -2,6 +2,17 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.5] - 2026-07-31
+
+### Fixed
+
+- The Common Asset Catalog refresh action now highlights the generated catalog without changing the active PSD Inspector.
+- The incremental update action remains visible when unavailable and is disabled until a valid preservation profile exists.
+
+### Removed
+
+- Removed the optional Photoshop UXP metadata exporter; Unity-native PSD import remains the supported workflow.
+
 ## [0.1.4] - 2026-07-29
 
 ### Fixed

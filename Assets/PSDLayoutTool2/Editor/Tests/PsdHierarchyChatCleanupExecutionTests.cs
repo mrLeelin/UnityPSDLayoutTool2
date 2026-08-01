@@ -210,6 +210,78 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanDerivesMissingPrefabNameFromReviewedAssetRenameTargets()
+        {
+            const string assetPath =
+                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan.Remove("prefabName");
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = assetPath,
+                    ["toName"] = "SevenDayTaskView_OuterBackgroundFrame",
+                    ["expectedGuid"] = string.Empty,
+                },
+            };
+
+            bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                "```json\n" + plan.ToString() + "\n```",
+                context,
+                out string approvedPlanJson,
+                out string error);
+
+            Assert.That(extracted, Is.True, error);
+            Assert.That(
+                JObject.Parse(approvedPlanJson).Value<string>("prefabName"),
+                Is.EqualTo("SevenDayTaskView"));
+        }
+
+        [Test]
+        public void VersionTwoHierarchyOnlyPlanDerivesMissingPrefabNameFromTargetPrefab()
+        {
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan.Remove("prefabName");
+            plan["textureRenames"] = new JArray();
+            plan["spriteAtlasRenames"] = new JArray();
+
+            bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                "```json\n" + plan.ToString() + "\n```",
+                context,
+                out string approvedPlanJson,
+                out string error);
+
+            Assert.That(extracted, Is.True, error);
+            Assert.That(JObject.Parse(approvedPlanJson).Value<string>("prefabName"), Is.Not.Empty);
+        }
+
+        [Test]
+        public void NativeBackendDoesNotAutomaticallySwitchToUloopForComponentExtraction()
+        {
+            var plan = JObject.Parse(CreatePlan(
+                "Assets/UI/Prefab/ExampleView.prefab",
+                true));
+            plan["componentExtractions"] = new JArray(new JObject());
+
+            PsdHierarchyCleanupExecutionBackend backend =
+                PsdHierarchyChatCleanupExecution.ResolveExecutionBackendForPlan(
+                    PsdHierarchyCleanupExecutionBackend.NativeUnity,
+                    plan.ToString());
+
+            Assert.That(backend, Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity));
+        }
+
+        [Test]
         public void RunnerPlanRejectsConflictingPrefabNamesFromReviewedAssetRenameTargets()
         {
             const string assetPath =
@@ -433,6 +505,44 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanDeterministicallyRepairsSkipForMandatoryComponentFamily()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "AI could not complete the extraction.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext("component"),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            JObject decision = (JObject)runnerPlan["componentFamilyDecisions"][0];
+            Assert.That(decision.Value<string>("mode"), Is.EqualTo("component"));
+            Assert.That(decision.Value<string>("extractionId"), Is.EqualTo("task_item"));
+            JObject extraction = (JObject)runnerPlan["componentExtractions"][0];
+            Assert.That(extraction.Value<string>("template"), Is.EqualTo("Root/TaskList/[TaskItem_1]"));
+            Assert.That(extraction["instances"].Values<string>(), Is.EqualTo(new[]
+            {
+                "Root/TaskList/[TaskItem_1]",
+                "Root/TaskList/[TaskItem_2]",
+                "Root/TaskList/[TaskItem_3]",
+            }));
+        }
+
+        [Test]
         public void VersionTwoPlanDeterministicallyRepairsSkipForMandatoryVariantFamily()
         {
             var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
@@ -465,6 +575,37 @@ namespace PsdLayoutTool2.Tests
             Assert.That(extraction.Value<string>("assetPath"), Does.EndWith("/Common/TaskItemVariant.prefab"));
             Assert.That(((JArray)extraction["states"]).Count, Is.EqualTo(3));
             Assert.That(((JArray)extraction["instances"]).Count, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void VersionTwoPlanUsesVariantFallbackForSkippedMandatoryStatefulFamily()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "AI could not complete the stateful mapping.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateDistinctVariantCandidateContext("stateful"),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            JObject decision = (JObject)runnerPlan["componentFamilyDecisions"][0];
+            Assert.That(decision.Value<string>("mode"), Is.EqualTo("variant"));
+            Assert.That(decision.Value<string>("extractionId"), Is.EqualTo("task_item_variant"));
+            Assert.That(((JArray)runnerPlan["variantComponentExtractions"]).Count, Is.EqualTo(1));
         }
 
         [Test]
@@ -814,6 +955,99 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanFallsBackToVariantWhenStatefulInstanceHasNoProvableMapping()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["renames"] = new JArray
+            {
+                new JObject { ["target"] = "node:n000004", ["name"] = "DayText" },
+                new JObject { ["target"] = "node:n000005", ["name"] = "LockIcon" },
+            };
+            plan["statefulComponentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "day_card",
+                    ["template"] = "node:n000001",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/DayCard.prefab",
+                    ["common"] = new JObject
+                    {
+                        ["source"] = "node:n000002",
+                        ["members"] = new JArray
+                        {
+                            new JObject { ["sourceName"] = "DayLabel", ["name"] = "DayLabel" },
+                        },
+                    },
+                    ["states"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "locked",
+                            ["source"] = "node:n000002",
+                            ["name"] = "[Locked]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "Background", ["name"] = "Background" },
+                                new JObject { ["sourceName"] = "Lock", ["name"] = "Lock" },
+                            },
+                        },
+                        new JObject
+                        {
+                            ["id"] = "available",
+                            ["source"] = "node:n000006",
+                            ["name"] = "[Available]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "AvailableBackground", ["name"] = "Background" },
+                            },
+                        },
+                    },
+                    ["defaultState"] = "locked",
+                    ["instances"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["source"] = "node:n000002",
+                            ["name"] = "[DayCard_1]",
+                            ["state"] = "locked",
+                            ["commonSourceNames"] = new JArray(),
+                            ["stateSourceNames"] = new JArray(),
+                        },
+                        new JObject
+                        {
+                            ["source"] = "node:n000002",
+                            ["name"] = "[DayCard_2]",
+                            ["state"] = "locked",
+                            ["commonSourceNames"] = new JArray(),
+                            ["stateSourceNames"] = new JArray(),
+                        },
+                    },
+                },
+            };
+            ((JObject)plan["statefulComponentExtractions"][0]).Remove("id");
+            ((JObject)plan["statefulComponentExtractions"][0]).Remove("template");
+            ((JObject)plan["statefulComponentExtractions"][0]).Remove("assetPath");
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateStatefulSnapshotContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That((JArray)runnerPlan["statefulComponentExtractions"], Is.Empty);
+            JObject extraction = (JObject)runnerPlan["variantComponentExtractions"][0];
+            Assert.That(extraction.Value<string>("id"), Is.EqualTo("stateful_variant_1"));
+            Assert.That(extraction.Value<string>("assetPath"), Is.EqualTo("Assets/UI/Prefab/Common/stateful_variant_1.prefab"));
+            Assert.That(extraction.Value<string>("template"), Is.EqualTo("Root/Cards/[DayCard_1]"));
+            Assert.That(extraction["instances"].OfType<JObject>().Select(item => item.Value<string>("source")),
+                Is.EqualTo(new[] { "Root/Cards/[DayCard_1]", "Root/Cards/[DayCard_1]" }));
+        }
+
+        [Test]
         public void VersionTwoPlanRejectsEmptyStatefulCommonBeforeRunnerPreflight()
         {
             var plan = JObject.Parse(CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
@@ -992,7 +1226,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void NativeBackendRejectsComponentExtractionBeforePrefabWrites()
+        public void NativeSynchronousEntryDoesNotSilentlyIgnoreComponentExtraction()
         {
             var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
             plan["componentExtractions"] = new JArray
@@ -1002,12 +1236,42 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(
                 PsdHierarchyNativeCleanupExecutor.TryValidatePlanCapabilities(plan.ToString(), out string error),
-                Is.False);
-            Assert.That(error, Does.Contain("componentExtractions").And.Contain("uLoop"));
+                Is.True,
+                error);
+
+            PsdHierarchyChatCleanupExecutionResult result =
+                PsdHierarchyNativeCleanupExecutor.Validate(plan.ToString());
+            Assert.That(result.success, Is.False);
+            Assert.That(result.message, Does.Contain("asynchronous Native payload executor"));
         }
 
         [Test]
-        public void NativeBackendRequestsUloopOnlyForPlansWithComplexOperations()
+        public void NativeBackendAcceptsAllPrefabExtractionAndPrivateRenameOperations()
+        {
+            var operationProperties = new[]
+            {
+                "componentExtractions",
+                "stateComponentExtractions",
+                "variantComponentExtractions",
+                "statefulComponentExtractions",
+                "textureRenames",
+                "spriteAtlasRenames",
+            };
+
+            foreach (string propertyName in operationProperties)
+            {
+                var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+                plan[propertyName] = new JArray { new JObject { ["id"] = "native_operation" } };
+
+                Assert.That(
+                    PsdHierarchyNativeCleanupExecutor.TryValidatePlanCapabilities(plan.ToString(), out string error),
+                    Is.True,
+                    propertyName + ": " + error);
+            }
+        }
+
+        [Test]
+        public void NativeBackendRequestsGeneratedPayloadOnlyForComplexOperations()
         {
             var hierarchyOnlyPlan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
 
@@ -1023,6 +1287,58 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(hierarchyOnlyPlan.ToString()),
                 Is.True);
+        }
+
+        [Test]
+        public void NativeBackendKeepsMetadataOnlyPlansOnDirectPath()
+        {
+            var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject { ["mode"] = "skip" },
+            };
+            plan["containmentFindings"] = new JArray
+            {
+                new JObject { ["id"] = "finding" },
+            };
+
+            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(plan.ToString()), Is.False);
+        }
+
+        [Test]
+        public void ApprovedPlanRejectsUnknownNonEmptyOperationArray()
+        {
+            const string target = "Assets/UI/Prefab/ExampleView.prefab";
+            var plan = JObject.Parse(CreatePlan(target, true));
+            plan["futureComponentExtractions"] = new JArray
+            {
+                new JObject { ["id"] = "unsupported" },
+            };
+
+            bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                "```json\n" + plan + "\n```",
+                target,
+                out _,
+                out string error);
+
+            Assert.That(extracted, Is.False);
+            Assert.That(error, Does.Contain("futureComponentExtractions").And.Contain("Unsupported"));
+        }
+
+        [Test]
+        public void ReapplyPreflightPlanSkipsRenameWritesButPreservesExtractionValidation()
+        {
+            var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
+            plan["textureRenames"] = new JArray { new JObject { ["from"] = "Assets/UI/source.png" } };
+            plan["spriteAtlasRenames"] = new JArray { new JObject { ["from"] = "Assets/UI/source.spriteatlas" } };
+            plan["componentExtractions"] = new JArray { new JObject { ["id"] = "item" } };
+
+            JObject preflight = JObject.Parse(
+                PsdHierarchyNativeCleanupExecutor.BuildReapplyPreflightPlan(plan.ToString()));
+
+            Assert.That((JArray)preflight["textureRenames"], Is.Empty);
+            Assert.That((JArray)preflight["spriteAtlasRenames"], Is.Empty);
+            Assert.That((JArray)preflight["componentExtractions"], Has.Count.EqualTo(1));
         }
 
         private static PsdHierarchyChatContext CreateNodeSnapshotContext()
@@ -1076,9 +1392,10 @@ namespace PsdLayoutTool2.Tests
                 "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
         }
 
-        private static PsdHierarchyChatContext CreateDistinctVariantCandidateContext()
+        private static PsdHierarchyChatContext CreateDistinctVariantCandidateContext(
+            string recommendedMode = "variant")
         {
-            const string snapshot =
+            string snapshot =
                 "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
                 "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
                 "{\"id\":\"n000001\",\"path\":\"Root\",\"name\":\"Root\",\"parentId\":\"\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}," +
@@ -1091,7 +1408,7 @@ namespace PsdLayoutTool2.Tests
                 "{\"id\":\"n000008\",\"path\":\"Root/TaskList/[TaskItem_3]/LockIcon\",\"name\":\"LockIcon\",\"parentId\":\"n000005\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Image\"]}," +
                 "{\"id\":\"n000009\",\"path\":\"Root/TaskList/[TaskItem_3]/LockIcon/Overlay\",\"name\":\"Overlay\",\"parentId\":\"n000008\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}]," +
                 "\"componentFamilyCandidates\":[{\"id\":\"family_001\",\"suggestedAssetName\":\"TaskItem\"," +
-                "\"recommendedMode\":\"variant\",\"parent\":\"node:n000002\"," +
+                "\"recommendedMode\":\"" + recommendedMode + "\",\"parent\":\"node:n000002\"," +
                 "\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\"],\"requiresExtraction\":true}]}";
             return new PsdHierarchyChatContext(
                 "E:/Project/Demo/monsterhunter",

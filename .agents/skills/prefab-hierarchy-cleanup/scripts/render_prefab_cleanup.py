@@ -1931,11 +1931,18 @@ def render(plan: dict[str, Any], mode: str) -> str:
         )
         for extraction in plan[key]
     ]
-    use_component_asset_transaction = mode == "apply" and bool(component_asset_paths)
+    use_component_asset_transaction = mode in {"apply", "reapply"} and bool(component_asset_paths)
     if use_component_asset_transaction:
+        if mode == "reapply":
+            lines.append(
+                f"var componentAssetTransactionPaths = {csharp_string_array(component_asset_paths)}.Where(assetPath => AssetDatabase.LoadMainAssetAtPath(assetPath) == null).ToArray();"
+            )
+            transaction_paths = "componentAssetTransactionPaths"
+        else:
+            transaction_paths = csharp_string_array(component_asset_paths)
         lines.extend(
             [
-                f"var componentAssetTransaction = BeginComponentAssetTransaction({csharp_string_array(component_asset_paths)});",
+                f"var componentAssetTransaction = BeginComponentAssetTransaction({transaction_paths});",
                 "try",
                 "{",
             ]
@@ -2332,19 +2339,6 @@ def render(plan: dict[str, Any], mode: str) -> str:
         ]
     )
 
-    if use_component_asset_transaction:
-        lines.extend(
-            [
-                "CommitComponentAssetTransaction(componentAssetTransaction);",
-                "}",
-                "catch",
-                "{",
-                "    RollbackComponentAssetTransaction(componentAssetTransaction);",
-                "    throw;",
-                "}",
-            ]
-        )
-
     for index, rename in enumerate(all_assets):
         if mode == "reapply":
             lines.extend(
@@ -2361,6 +2355,18 @@ def render(plan: dict[str, Any], mode: str) -> str:
                 ]
             )
     lines.extend(["AssetDatabase.SaveAssets();", "AssetDatabase.Refresh();", ""])
+    if use_component_asset_transaction:
+        lines.extend(
+            [
+                "CommitComponentAssetTransaction(componentAssetTransaction);",
+                "}",
+                "catch",
+                "{",
+                "    RollbackComponentAssetTransaction(componentAssetTransaction);",
+                "    throw;",
+                "}",
+            ]
+        )
     lines.extend(emit_verification(plan, mode))
     return "\n".join(lines) + "\n"
 

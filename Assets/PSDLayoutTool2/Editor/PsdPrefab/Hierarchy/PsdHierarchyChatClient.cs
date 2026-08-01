@@ -497,6 +497,13 @@ namespace PsdLayoutTool2
                 return false;
             }
 
+            PsdHierarchyCleanupExecutionSettingsSnapshot executionSettings =
+                PsdLayoutProjectSettings.instance.ResolveHierarchyCleanupExecutionSettings();
+            if (!executionSettings.TryValidate(out error))
+            {
+                return false;
+            }
+
             context = new PsdHierarchyChatContext(
                 projectRoot,
                 NormalizeAssetPath(sourcePsdAssetPath),
@@ -1614,7 +1621,6 @@ namespace PsdLayoutTool2
             builder.AppendLine("A componentExtraction is valid only when its template and every instance have the same recursive structure. If the failure says 'Repeated unit structure differs for component extraction', do not return that component extraction again. Preserve every mandatory candidate source and use the candidate's observed variant or stateful mode with a complete mapping; never solve a structural mismatch by dropping, shrinking, or reordering sources.");
             builder.AppendLine("For every statefulComponentExtractions instance, commonSourceNames and stateSourceNames together must cover all direct children exactly once. commonSourceNames must contain one observed direct-child name for every common.members entry; stateSourceNames must do the same for the selected states[].members entry. When one side is complete, derive the other as the ordered direct-child complement. Re-read the authoritative snapshot instead of guessing or dropping a member.");
             builder.AppendLine("Enforce this exact equation for every stateful instance: directChildCount == common.members.Count + selectedState.members.Count. If it fails, rebuild common.members, the affected states[].members, and every corresponding instance mapping; changing only commonSourceNames or stateSourceNames cannot repair a contract-count mismatch. Never place the same observed source child in both Common and the selected state.");
-
             AppendRequiredComponentFamilyRepairContract(builder, context);
             return builder.ToString();
         }

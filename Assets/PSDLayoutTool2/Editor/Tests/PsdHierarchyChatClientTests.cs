@@ -366,6 +366,42 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void NativeCapabilityRepairPromptStillRequiresComponentOperations()
+        {
+            var context = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                "{\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000010\",\"path\":\"Root/Milestones\",\"name\":\"Milestones\"}," +
+                "{\"id\":\"n000011\",\"path\":\"Root/Milestones/[Milestone_0]\",\"name\":\"[Milestone_0]\",\"parentId\":\"n000010\"}," +
+                "{\"id\":\"n000012\",\"path\":\"Root/Milestones/[Milestone_1]\",\"name\":\"[Milestone_1]\",\"parentId\":\"n000010\"}," +
+                "{\"id\":\"n000013\",\"path\":\"Root/Milestones/[Milestone_2]\",\"name\":\"[Milestone_2]\",\"parentId\":\"n000010\"}," +
+                "{\"id\":\"n000020\",\"path\":\"Root/Milestones/[Milestone_0]/Icon\",\"name\":\"Icon\",\"parentId\":\"n000011\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000021\",\"path\":\"Root/Milestones/[Milestone_1]/Icon\",\"name\":\"Icon\",\"parentId\":\"n000012\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000022\",\"path\":\"Root/Milestones/[Milestone_2]/Icon\",\"name\":\"Icon\",\"parentId\":\"n000013\",\"siblingIndex\":0}],\"componentFamilyCandidates\":[{" +
+                "\"id\":\"family_002\",\"suggestedAssetName\":\"Milestone\",\"recommendedMode\":\"component\"," +
+                "\"requiresExtraction\":true,\"parent\":\"node:n000010\",\"sources\":[\"node:n000011\",\"node:n000012\",\"node:n000013\"]}]}",
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+
+            string prompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(
+                "Native Unity backend does not yet support componentFamilyDecisions.",
+                context);
+            string initialInstructions = context.BuildInstructions();
+
+            Assert.That(prompt, Does.Not.Contain("hierarchy-only replacement plan"));
+            Assert.That(prompt, Does.Contain("BEGIN REQUIRED COMPONENT FAMILIES"));
+            Assert.That(prompt, Does.Contain("mode must not be skip"));
+            Assert.That(initialInstructions, Does.Not.Contain("NATIVE UNITY EXECUTION CONSTRAINT"));
+            Assert.That(initialInstructions, Does.Contain("requiresExtraction:true must use"));
+        }
+
+        [Test]
         public void PlanRepairPromptReplaysMandatoryComponentFamilyRecordsExactly()
         {
             var context = new PsdHierarchyChatContext(

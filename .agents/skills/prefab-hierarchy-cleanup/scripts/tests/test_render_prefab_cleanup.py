@@ -918,6 +918,29 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         )
         self.assertIn("ReplaceVariantSourceWithComponent", generated)
 
+    def test_reapply_rolls_back_component_assets_created_during_failed_replay(self):
+        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
+        extraction = plan["variantComponentExtractions"][0]
+        plan["componentFamilyDecisions"] = [{
+            "parent": extraction["template"].rsplit("/", 1)[0],
+            "sources": [instance["source"] for instance in extraction["instances"]],
+            "mode": "variant",
+            "extractionId": extraction["id"],
+            "reason": "replay transaction test",
+        }]
+
+        generated = render(normalize_plan(plan, "reapply"), "reapply")
+
+        filter_missing = ".Where(assetPath => AssetDatabase.LoadMainAssetAtPath(assetPath) == null).ToArray()"
+        begin_call = "BeginComponentAssetTransaction(componentAssetTransactionPaths)"
+        rollback_call = "RollbackComponentAssetTransaction(componentAssetTransaction);"
+        self.assertIn(filter_missing, generated)
+        self.assertIn(begin_call, generated)
+        self.assertIn(rollback_call, generated)
+        begin = generated.index(begin_call)
+        self.assertLess(begin, generated.index("?? CreateVariantComponentPrefab(", begin))
+        self.assertLess(generated.index("AssetDatabase.SaveAssets();", begin), generated.rindex(rollback_call))
+
     def test_reapply_mode_accepts_existing_stateful_asset(self):
         plan = self.load_plan("seven-day-task-view-day-reward-items.in-place.plan.json")
         extraction = plan["statefulComponentExtractions"][0]
