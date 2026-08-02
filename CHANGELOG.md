@@ -2,6 +2,15 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.6] - 2026-08-02
+
+### Fixed
+
+- Made full PSD regeneration replay confirmed cleanup stages deterministically, preserving the main Prefab and its Common Prefab references across repeated delete-and-generate runs.
+- Recognized generated flat-sibling wrappers as reusable component candidates while excluding nested Prefab contents and duplicate root containers.
+- Retried the transient "Unity server is starting" payload-compilation state with bounded backoff instead of leaving a replay pending until a later domain reload.
+- Prevented generated empty wrappers from failing tight-bounds cleanup, while retaining the safety check for authored empty containers.
+
 ## [0.1.5] - 2026-07-31
 
 ### Fixed
