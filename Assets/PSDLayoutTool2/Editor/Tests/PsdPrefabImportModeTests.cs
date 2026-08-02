@@ -18,6 +18,23 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void FullGenerationWithConfirmedCleanupRequiresAndUsesItsReplayProfile()
+        {
+            Assert.That(
+                PsdImporter.ResolvePrefabSaveRoute(
+                    PsdImporter.PrefabImportMode.FullGenerateWithCleanupReplay,
+                    hasCleanupReplayProfile: true,
+                    hasHierarchyProfile: true),
+                Is.EqualTo(PsdImporter.PrefabSaveRoute.CleanupReplay));
+            Assert.That(
+                PsdImporter.ResolvePrefabSaveRoute(
+                    PsdImporter.PrefabImportMode.FullGenerateWithCleanupReplay,
+                    hasCleanupReplayProfile: false,
+                    hasHierarchyProfile: true),
+                Is.EqualTo(PsdImporter.PrefabSaveRoute.Rejected));
+        }
+
+        [Test]
         public void IncrementalUpdateSelectsTheAvailablePreservationRoute()
         {
             Assert.That(

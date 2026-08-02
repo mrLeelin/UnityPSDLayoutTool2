@@ -29,6 +29,7 @@ The Unity AI hierarchy chat window accepts only version 2 plans. The window supp
   "spriteAtlasRenames": [],
   "componentFamilyDecisions": [],
   "containmentResolutions": [],
+  "flatSiblingResolutions": [],
   "componentExtractions": [],
   "stateComponentExtractions": [],
   "variantComponentExtractions": [],
@@ -53,7 +54,7 @@ Asset paths, output verification paths, new semantic names, state/member names, 
 
 Every plan-owned ID, including `wrappers[].id`, extraction `id`, and state `id`, must be lower snake_case matching `^[a-z][a-z0-9_]*$`. Use `screen_root`, `day_markers`, or `task_in_progress`; do not use PascalCase, kebab-case, spaces, brackets, or an `@` prefix. The `@` prefix is reserved only for a reference to an earlier wrapper, for example `@screen_root`.
 
-Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, writes the forced snapshot candidates into `requiredComponentFamilies` and the measured geometry into `containmentFindings`, then writes a temporary internal version 1 runner plan. The AI must never emit that internal plan, and must never emit `requiredComponentFamilies` or `containmentFindings` itself. It does emit `containmentResolutions`, one entry per finding member.
+Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, writes the forced snapshot candidates into `requiredComponentFamilies`, the measured geometry into `containmentFindings`, and measured flat visual clusters into `flatSiblingFindings`, then writes a temporary internal version 1 runner plan. The AI must never emit those internal finding arrays itself. It does emit `containmentResolutions` and `flatSiblingResolutions`.
 
 ## Internal Runner Plan (Version 1)
 
@@ -79,6 +80,7 @@ The bundled PowerShell/Python runner remains compatible with existing version 1 
   "spriteAtlasRenames": [],
   "componentFamilyDecisions": [],
   "containmentResolutions": [],
+  "flatSiblingResolutions": [],
   "componentExtractions": [],
   "stateComponentExtractions": [],
   "variantComponentExtractions": [],
@@ -234,6 +236,44 @@ Every finding member needs one `containmentResolutions` entry, which the AI does
 ```
 
 `source` and `mode` are always required. `mode: "reparent"` needs `newParent`, which must be the containing node from the finding or a descendant of it, or a wrapper reference starting with `@`. `mode: "keep"` needs `evidence` of at least 20 characters explaining why a node that is geometrically inside a repeated unit still belongs outside it — a shared layout group, an animation driver, or a region-scale background are the usual reasons. Duplicate sources are rejected. A finding with no resolution is a hard error, so a plan cannot silently repeat the misgrouping the measurement found.
+
+### Flat Sibling Visual Clusters
+
+`flatSiblingFindings` is another Unity-written internal field. It is emitted only when direct leaf siblings have consecutive source order and the first layer fully contains at least two following layers at a small area ratio. This is a conservative signal that a background, counter, timer, or button layers were left flat by the PSD source hierarchy. Do not author `flatSiblingFindings` in a chat plan.
+
+```json
+{
+  "flatSiblingFindings": [
+    {
+      "id": "flat_sibling_001",
+      "parent": "RewardPanel/Root",
+      "background": "RewardPanel/Root/ui_daily_bt1",
+      "members": [
+        "RewardPanel/Root/ui_daily_bt1",
+        "RewardPanel/Root/Timer",
+        "RewardPanel/Root/4d23h",
+        "RewardPanel/Root/ui_daily_bt2"
+      ]
+    }
+  ]
+}
+```
+
+Every finding needs exactly one `flatSiblingResolutions` entry in the chat plan. Its wrapper ID is deterministic:
+
+```json
+{
+  "flatSiblingResolutions": [
+    {
+      "findingId": "flat_sibling_001",
+      "mode": "group",
+      "wrapperId": "flat_sibling_001_group"
+    }
+  ]
+}
+```
+
+`mode` must be `"group"`, and `wrapperId` must equal `<findingId>_group`. Before execution Unity removes any AI-authored wrapper, move, or tight-bounds operation that touches the finding, then derives the one wrapper whose `parent` equals the finding `parent`, the observed background `siblingIndex`, one ordered move for every listed member, and one `tightBounds` entry. It cannot use an existing semantic container such as `[BottomBar]` as a shortcut. Missing, duplicate, or unknown finding IDs are rejected.
 
 ## Optional Component Extraction
 
@@ -430,7 +470,7 @@ Use counts captured during the read-only snapshot. `hierarchy` paths are post-ap
     "requireAllImageTexturesPrefixed": true,
     "requireEnglishNames": true,
     "forbiddenObjectNamePatterns": [
-      "^(?:\\d+|\\+|img_|ui_|daily_)",
+      "^(?:\\d+|\\+|img_|ui_)",
       "^\\d+(?:_\\d+)?$"
     ],
     "allowedMissingImagePathPrefixes": [

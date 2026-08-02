@@ -30,6 +30,8 @@ namespace PsdLayoutTool2
                     "stateComponentExtractions",
                     "variantComponentExtractions",
                     "statefulComponentExtractions",
+                    "containmentFindings",
+                    "containmentResolutions",
                 }.Any(property =>
                     plan[property] is JArray operations && operations.Count > 0);
             }
@@ -546,9 +548,20 @@ namespace PsdLayoutTool2
             }
 
             RectTransform parent = rect.parent as RectTransform;
-            if (parent == null || rect.childCount == 0)
+            if (parent == null)
             {
-                throw new InvalidOperationException("Tight-bounds target has no RectTransform parent or children: " + target);
+                throw new InvalidOperationException("Tight-bounds target has no RectTransform parent: " + target);
+            }
+
+            if (rect.childCount == 0)
+            {
+                if (!target.StartsWith("@", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Cannot tighten an empty wrapper: " + target);
+                }
+
+                UnityEngine.Object.DestroyImmediate(rect.gameObject);
+                return;
             }
 
             var bounds = new Bounds();

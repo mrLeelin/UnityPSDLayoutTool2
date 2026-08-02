@@ -71,6 +71,7 @@
         public enum PrefabImportMode
         {
             FullGenerate,
+            FullGenerateWithCleanupReplay,
             IncrementalUpdate
         }
 
@@ -639,6 +640,20 @@
         }
 
         /// <summary>
+        /// Regenerates the raw PSD candidate and reapplies the already-confirmed
+        /// cleanup stages. This is the deterministic alternative to asking AI to
+        /// produce a new organization plan for an unchanged PSD.
+        /// </summary>
+        public static void GeneratePrefabWithCleanupReplay(string assetPath)
+        {
+            if (!IsFullGenerationCleanupReplayAvailable(assetPath))
+                throw new InvalidOperationException(
+                    "Full cleanup replay requires a confirmed Profile for this PSD and Prefab output.");
+
+            StartPrefabImport(assetPath, PrefabImportMode.FullGenerateWithCleanupReplay);
+        }
+
+        /// <summary>
         /// Updates a generated Prefab only when an exact hierarchy-preservation
         /// Profile exists. This path never falls back to a whole-Prefab save.
         /// </summary>
@@ -671,6 +686,23 @@
                 return true;
 
             return TryResolveApplicableHierarchyProfile(sourceGuid, prefabPath, out _);
+        }
+
+        /// <summary>
+        /// Reports whether a fresh generated candidate can safely replay the
+        /// confirmed cleanup stages for this exact PSD/output path pair.
+        /// </summary>
+        public static bool IsFullGenerationCleanupReplayAvailable(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+
+            string normalizedAssetPath = assetPath.Replace('\\', '/');
+            string sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+            string prefabPath;
+            return !string.IsNullOrEmpty(sourceGuid) &&
+                   TryResolveTargetPrefabPath(normalizedAssetPath, sourceGuid, out prefabPath) &&
+                   PsdHierarchyCleanupReplayProfile.CanReplayFreshGeneration(
+                       sourceGuid, prefabPath, out _);
         }
 
         private static bool TryResolveTargetPrefabPath(
@@ -729,6 +761,10 @@
         {
             if (importMode == PrefabImportMode.FullGenerate)
                 return PrefabSaveRoute.FullCandidateSave;
+            if (importMode == PrefabImportMode.FullGenerateWithCleanupReplay)
+                return hasCleanupReplayProfile
+                    ? PrefabSaveRoute.CleanupReplay
+                    : PrefabSaveRoute.Rejected;
             if (hasCleanupReplayProfile)
                 return PrefabSaveRoute.CleanupReplay;
             if (hasHierarchyProfile)
@@ -990,9 +1026,12 @@
                 {
                     sourceGuid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
                     bool hasCleanupReplayProfile =
-                        prefabImportMode == PrefabImportMode.IncrementalUpdate &&
-                        PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
-                            sourceGuid, prefabRelativePath, out _);
+                        (prefabImportMode == PrefabImportMode.IncrementalUpdate &&
+                         PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                             sourceGuid, prefabRelativePath, out _)) ||
+                        (prefabImportMode == PrefabImportMode.FullGenerateWithCleanupReplay &&
+                         PsdHierarchyCleanupReplayProfile.CanReplayFreshGeneration(
+                             sourceGuid, prefabRelativePath, out _));
                     bool hasHierarchyProfile =
                         prefabImportMode == PrefabImportMode.IncrementalUpdate &&
                         TryResolveApplicableHierarchyProfile(
@@ -1000,8 +1039,14 @@
                     prefabSaveRoute = ResolvePrefabSaveRoute(
                         prefabImportMode, hasCleanupReplayProfile, hasHierarchyProfile);
                     if (prefabSaveRoute == PrefabSaveRoute.Rejected)
+                    {
+                        string requiredProfile =
+                            prefabImportMode == PrefabImportMode.FullGenerateWithCleanupReplay
+                                ? "Full cleanup replay requires a valid confirmed cleanup Profile."
+                                : "Incremental Prefab update requires a valid hierarchy or cleanup replay Profile.";
                         throw new InvalidOperationException(
-                            "Incremental Prefab update requires a valid hierarchy or cleanup replay Profile.");
+                            requiredProfile);
+                    }
 
                     if (prefabSaveRoute == PrefabSaveRoute.CleanupReplay)
                     {
@@ -1233,16 +1278,35 @@
                                 PsdPrefabTargetBinding.Persist(sourceGuid, prefabRelativePath);
                                 break;
                             case PrefabSaveRoute.CleanupReplay:
-                                if (!PsdHierarchyCleanupReplayCoordinator.TryStageAndSchedule(
-                                        normalizedAssetPath,
-                                        prefabRelativePath,
-                                        importRootGameObject,
-                                        out string replayStageError))
+                                if (prefabImportMode == PrefabImportMode.FullGenerateWithCleanupReplay)
+                                {
+                                    if (PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath) == null)
+                                        throw new InvalidOperationException(
+                                            "Fresh generated Prefab candidate could not be saved before cleanup replay.");
+                                    PsdPrefabTargetBinding.Persist(sourceGuid, prefabRelativePath);
+                                    if (!PsdHierarchyCleanupReplayCoordinator.TryStageAndScheduleFreshGeneration(
+                                            normalizedAssetPath,
+                                            prefabRelativePath,
+                                            importRootGameObject,
+                                            out string freshReplayStageError))
+                                        throw new InvalidOperationException(
+                                            "Fresh cleanup replay could not be staged. " +
+                                            (string.IsNullOrEmpty(freshReplayStageError)
+                                                ? "No valid confirmed cleanup Profile was found."
+                                                : freshReplayStageError));
+                                }
+                                else if (!PsdHierarchyCleanupReplayCoordinator.TryStageAndSchedule(
+                                             normalizedAssetPath,
+                                             prefabRelativePath,
+                                             importRootGameObject,
+                                             out string replayStageError))
+                                {
                                     throw new InvalidOperationException(
                                         "Cleanup replay could not be staged; the existing organized Prefab was kept unchanged. " +
                                         (string.IsNullOrEmpty(replayStageError)
                                             ? "No valid replay Profile was found."
                                             : replayStageError));
+                                }
                                 break;
                             case PrefabSaveRoute.HierarchyMerge:
                                 if (!TrySaveIncrementalHierarchyPrefab(

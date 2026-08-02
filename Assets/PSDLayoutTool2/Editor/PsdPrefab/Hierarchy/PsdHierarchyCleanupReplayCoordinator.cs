@@ -12,6 +12,7 @@ namespace PsdLayoutTool2
             "Assets/PSDLayoutTool2Settings/HierarchyCleanupReplayTemp";
         private const string PendingReplayDirectory =
             "Library/PSDLayoutTool2/HierarchyCleanupReplayPending";
+        private const int MaxTransientStartupRetriesPerStage = 3;
         private static readonly HashSet<string> PendingTargets =
             new HashSet<string>(StringComparer.Ordinal);
 
@@ -22,12 +23,17 @@ namespace PsdLayoutTool2
             public string projectRoot = string.Empty;
             public string targetPath = string.Empty;
             public string expectedTargetGuid = string.Empty;
+            public string sourcePsdGuid = string.Empty;
             public string temporaryPath = string.Empty;
             public List<string> replayPlanJsonStages = new List<string>();
             public int nextStageIndex;
             public int inFlightStageIndex = -1;
             public string checkpointPath = string.Empty;
             public bool retryAfterDomainReload;
+            public int transientRetryStageIndex = -1;
+            public int transientRetryAttempts;
+            public long retryNotBeforeUtcTicks;
+            public bool rebindProfileAfterCommit;
             // Schema-1 pending records used one plan. Retain the field so a
             // domain reload during an upgrade can still resume safely.
             public string replayPlanJson = string.Empty;
@@ -44,6 +50,35 @@ namespace PsdLayoutTool2
             string sourcePsdAssetPath,
             string targetPrefabPath,
             GameObject generatedCandidate,
+            out string error)
+        {
+            return TryStageAndSchedule(
+                sourcePsdAssetPath,
+                targetPrefabPath,
+                generatedCandidate,
+                rebindProfileAfterCommit: false,
+                out error);
+        }
+
+        internal static bool TryStageAndScheduleFreshGeneration(
+            string sourcePsdAssetPath,
+            string targetPrefabPath,
+            GameObject generatedCandidate,
+            out string error)
+        {
+            return TryStageAndSchedule(
+                sourcePsdAssetPath,
+                targetPrefabPath,
+                generatedCandidate,
+                rebindProfileAfterCommit: true,
+                out error);
+        }
+
+        private static bool TryStageAndSchedule(
+            string sourcePsdAssetPath,
+            string targetPrefabPath,
+            GameObject generatedCandidate,
+            bool rebindProfileAfterCommit,
             out string error)
         {
             error = string.Empty;
@@ -86,12 +121,20 @@ namespace PsdLayoutTool2
                 GameObject staged = PrefabUtility.SaveAsPrefabAsset(generatedCandidate, temporaryPath);
                 if (staged == null)
                     throw new InvalidOperationException("Generated Prefab candidate could not be staged for cleanup replay.");
-                if (!profile.TryBuildReplayPlans(
+                bool builtReplayPlans = rebindProfileAfterCommit
+                    ? profile.TryBuildFreshGenerationReplayPlans(
                         sourceGuid,
                         targetPath,
                         temporaryPath,
                         out IReadOnlyList<string> replayPlanJsonStages,
-                        out string replayError))
+                        out string replayError)
+                    : profile.TryBuildReplayPlans(
+                        sourceGuid,
+                        targetPath,
+                        temporaryPath,
+                        out replayPlanJsonStages,
+                        out replayError);
+                if (!builtReplayPlans)
                     throw new InvalidOperationException(replayError);
 
                 string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
@@ -102,8 +145,10 @@ namespace PsdLayoutTool2
                     projectRoot,
                     targetPath,
                     expectedTargetGuid,
+                    sourceGuid,
                     temporaryPath,
-                    replayPlanJsonStages);
+                    replayPlanJsonStages,
+                    rebindProfileAfterCommit);
                 PendingTargets.Remove(targetPath);
                 EnsureReplayPump();
                 return true;
@@ -141,14 +186,16 @@ namespace PsdLayoutTool2
                             record.replayPlanJsonStages[stageIndex]);
                     if (!replay.success)
                     {
-                        record.retryAfterDomainReload = true;
+                        bool retryAutomatically = ScheduleTransientStartupRetry(record, stageIndex, replay.message);
                         WritePendingReplayRecord(pendingRecordPath, record);
                         retainForRetry = true;
                         Debug.LogError(
                             "PSD Prefab cleanup replay stage " + (stageIndex + 1) + "/" +
                             record.replayPlanJsonStages.Count +
                             " failed; the existing organized Prefab was kept unchanged. " +
-                            "The staged candidate and checkpoint were retained for one retry after the next domain reload. " +
+                            (retryAutomatically
+                                ? "The staged candidate and checkpoint will retry automatically after Unity finishes starting. "
+                                : "The staged candidate and checkpoint were retained for one retry after the next domain reload. ") +
                             replay.message);
                         return;
                     }
@@ -157,6 +204,9 @@ namespace PsdLayoutTool2
                     record.nextStageIndex = stageIndex + 1;
                     record.inFlightStageIndex = -1;
                     record.checkpointPath = string.Empty;
+                    record.transientRetryStageIndex = -1;
+                    record.transientRetryAttempts = 0;
+                    record.retryNotBeforeUtcTicks = 0;
                     WritePendingReplayRecord(pendingRecordPath, record);
                     DeleteAssetIfOwned(completedCheckpoint);
                 }
@@ -181,6 +231,17 @@ namespace PsdLayoutTool2
                 string committedGuid = AssetDatabase.AssetPathToGUID(targetPath);
                 if (!string.Equals(record.expectedTargetGuid, committedGuid, StringComparison.Ordinal))
                     throw new InvalidOperationException("Cleanup replay changed the target Prefab GUID.");
+
+                if (record.rebindProfileAfterCommit)
+                {
+                    PsdHierarchyCleanupReplayProfile profile =
+                        PsdHierarchyCleanupReplayProfile.Load(targetPath, record.sourcePsdGuid);
+                    if (profile == null)
+                        throw new InvalidOperationException("Confirmed cleanup Profile disappeared before fresh replay could bind the target.");
+                    profile.RebindToFreshTarget(record.sourcePsdGuid, targetPath);
+                    EditorUtility.SetDirty(profile);
+                    AssetDatabase.SaveAssetIfDirty(profile);
+                }
 
                 Debug.Log("PSD Prefab cleanup replay completed: " + targetPath);
             }
@@ -241,7 +302,7 @@ namespace PsdLayoutTool2
                     continue;
                 }
 
-                if (record.retryAfterDomainReload) continue;
+                if (record.retryAfterDomainReload || IsRetryDelayActive(record)) continue;
                 if (!PendingTargets.Add(record.targetPath)) continue;
                 ReplayAndCommitAsync(
                     record.projectRoot,
@@ -272,8 +333,10 @@ namespace PsdLayoutTool2
             string projectRoot,
             string targetPath,
             string expectedTargetGuid,
+            string sourcePsdGuid,
             string temporaryPath,
-            IReadOnlyList<string> replayPlanJsonStages)
+            IReadOnlyList<string> replayPlanJsonStages,
+            bool rebindProfileAfterCommit)
         {
             string pendingDirectory = Path.Combine(projectRoot, PendingReplayDirectory);
             Directory.CreateDirectory(pendingDirectory);
@@ -286,10 +349,12 @@ namespace PsdLayoutTool2
                 projectRoot = projectRoot,
                 targetPath = targetPath,
                 expectedTargetGuid = expectedTargetGuid,
+                sourcePsdGuid = sourcePsdGuid,
                 temporaryPath = temporaryPath,
                 replayPlanJsonStages = new List<string>(replayPlanJsonStages),
                 nextStageIndex = 0,
                 inFlightStageIndex = -1,
+                rebindProfileAfterCommit = rebindProfileAfterCommit,
             };
             WritePendingReplayRecord(pendingRecordPath, record);
             return pendingRecordPath;
@@ -343,6 +408,9 @@ namespace PsdLayoutTool2
                 record.inFlightStageIndex = -1;
                 record.checkpointPath = string.Empty;
                 record.retryAfterDomainReload = false;
+                record.transientRetryStageIndex = -1;
+                record.transientRetryAttempts = 0;
+                record.retryNotBeforeUtcTicks = 0;
                 migratedLegacyRecord = true;
             }
             else if (record.schemaVersion != 2)
@@ -368,6 +436,11 @@ namespace PsdLayoutTool2
                 record.nextStageIndex,
                 record.inFlightStageIndex,
                 record.replayPlanJsonStages.Count);
+            if (record.transientRetryStageIndex < -1 ||
+                record.transientRetryStageIndex >= record.replayPlanJsonStages.Count ||
+                record.transientRetryAttempts < 0 ||
+                record.retryNotBeforeUtcTicks < 0)
+                throw new InvalidDataException("Replay transient retry state is invalid.");
             record.checkpointPath = NormalizeAssetPath(record.checkpointPath);
             if (record.inFlightStageIndex >= 0)
             {
@@ -424,7 +497,56 @@ namespace PsdLayoutTool2
             record.inFlightStageIndex = stageIndex;
             record.checkpointPath = checkpointPath;
             record.retryAfterDomainReload = false;
+            record.retryNotBeforeUtcTicks = 0;
             WritePendingReplayRecord(pendingRecordPath, record);
+        }
+
+        private static bool ScheduleTransientStartupRetry(
+            PendingReplayRecord record,
+            int stageIndex,
+            string message)
+        {
+            if (!IsTransientEditorStartupFailure(message))
+            {
+                record.retryAfterDomainReload = true;
+                record.retryNotBeforeUtcTicks = 0;
+                return false;
+            }
+
+            if (record.transientRetryStageIndex != stageIndex)
+            {
+                record.transientRetryStageIndex = stageIndex;
+                record.transientRetryAttempts = 0;
+            }
+
+            record.transientRetryAttempts++;
+            if (record.transientRetryAttempts > MaxTransientStartupRetriesPerStage)
+            {
+                record.retryAfterDomainReload = true;
+                record.retryNotBeforeUtcTicks = 0;
+                return false;
+            }
+
+            record.retryAfterDomainReload = false;
+            record.retryNotBeforeUtcTicks = DateTime.UtcNow.AddSeconds(
+                GetTransientRetryDelaySeconds(record.transientRetryAttempts)).Ticks;
+            return true;
+        }
+
+        internal static bool IsTransientEditorStartupFailure(string message)
+        {
+            return !string.IsNullOrWhiteSpace(message) &&
+                   message.IndexOf("Unity server is starting", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal static int GetTransientRetryDelaySeconds(int retryAttempt)
+        {
+            return retryAttempt <= 1 ? 2 : retryAttempt == 2 ? 4 : 8;
+        }
+
+        private static bool IsRetryDelayActive(PendingReplayRecord record)
+        {
+            return record.retryNotBeforeUtcTicks > DateTime.UtcNow.Ticks;
         }
 
         private static void RestoreInterruptedStage(

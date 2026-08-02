@@ -58,6 +58,15 @@ namespace PsdLayoutTool2.Tests
                 Is.True);
         }
 
+        [TestCase(false, true)]
+        [TestCase(true, false)]
+        public void FirstSuccessfulApplyReplacesTheReplayProfile(bool hasAppliedCleanupStage, bool expected)
+        {
+            Assert.That(
+                PsdHierarchyChatWindow.ShouldReplaceReplayProfile(hasAppliedCleanupStage),
+                Is.EqualTo(expected));
+        }
+
         [Test]
         public void WindowBuildsOnlyChatControls()
         {

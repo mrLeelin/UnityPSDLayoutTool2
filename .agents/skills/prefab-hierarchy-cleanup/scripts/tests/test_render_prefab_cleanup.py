@@ -553,6 +553,40 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertLess(generated.index(move), generated.index(removal))
         self.assertNotIn("PrefabUtility.SaveAsPrefabAsset(root, outputPath)", generated)
 
+    def test_preflight_tightens_planned_targets_after_moves(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        raw_plan["tightBounds"] = [{"target": "@content"}]
+
+        generated = render(normalize_plan(raw_plan, "preflight"), "preflight")
+
+        move = "preflightMoveSource0.SetParent(preflightWrapper0.transform, true);"
+        tighten = "TightenToChildren(preflightWrapper0.GetComponent<RectTransform>(), true);"
+        self.assertIn(tighten, generated)
+        self.assertLess(generated.index(move), generated.index(tighten))
+        self.assertLess(generated.index(tighten), generated.index('return "PREFLIGHT_OK";'))
+
+    def test_tight_bounds_removes_only_empty_generated_wrappers(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+
+        generated = render(normalize_plan(raw_plan, "apply"), "apply")
+
+        self.assertIn(
+            "void TightenToChildren(RectTransform rect, bool removeEmptyWrapper)",
+            generated,
+        )
+        self.assertIn(
+            "if (!removeEmptyWrapper) throw new InvalidOperationException",
+            generated,
+        )
+        self.assertIn(
+            "Object.DestroyImmediate(rect.gameObject); return;",
+            generated,
+        )
+
     def test_preflight_rejects_component_extractions_with_different_structures(self):
         raw_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
@@ -842,7 +876,9 @@ class RenderPrefabCleanupTests(unittest.TestCase):
             [instance["state"] for instance in normalized["variant_component_extractions"][0]["instances"]],
             ["in_progress", "locked", "locked"],
         )
-        self.assertIn("CopyStateRootData(source, activeState);", render(normalized, "apply"))
+        generated = render(normalized, "apply")
+        self.assertIn("CopyVariantStateOverrides(source, activeState);", generated)
+        self.assertIn("void CopyVariantStateOverrides(Transform source, Transform destination)", generated)
         preflight = render(normalize_plan(plan, "preflight"), "preflight")
         self.assertNotIn("Variant component Prefab target already exists", preflight)
 
@@ -1040,6 +1076,156 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertIn("completedAssetRenames.Add", generated)
         self.assertIn("for (var rollbackIndex = completedAssetRenames.Count - 1", generated)
         self.assertIn("Asset rename rollback failed", generated)
+
+    def test_flat_sibling_finding_without_a_resolution_is_rejected(self):
+        raw_plan = self.make_flat_sibling_plan(resolutions=[])
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "flatSiblingResolutions must resolve flat_sibling_001",
+        ):
+            normalize_plan(raw_plan, "verify")
+
+    def test_flat_sibling_keep_resolution_preserves_authoritative_member_paths(self):
+        raw_plan = self.make_flat_sibling_plan(
+            resolutions=[
+                {
+                    "findingId": "flat_sibling_001",
+                    "mode": "keep",
+                    "evidence": "The timer and button controls need to remain direct siblings.",
+                }
+            ]
+        )
+
+        normalized = normalize_plan(raw_plan, "verify")
+
+        self.assertEqual(
+            normalized["flat_sibling_findings"][0]["members"],
+            raw_plan["flatSiblingFindings"][0]["members"],
+        )
+
+    def test_flat_sibling_group_requires_a_wrapper_and_every_member_move(self):
+        raw_plan = self.make_flat_sibling_plan(
+            resolutions=[
+                {
+                    "findingId": "flat_sibling_001",
+                    "mode": "group",
+                    "wrapperId": "flat_sibling_001_group",
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"flatSiblingResolutions\[0\]\.wrapperId must name a wrapper",
+        ):
+            normalize_plan(raw_plan, "verify")
+
+    def test_flat_sibling_group_requires_tight_bounds_for_its_wrapper(self):
+        raw_plan = self.make_flat_sibling_plan(
+            resolutions=[
+                {
+                    "findingId": "flat_sibling_001",
+                    "mode": "group",
+                    "wrapperId": "flat_sibling_001_group",
+                }
+            ]
+        )
+        raw_plan["wrappers"] = [
+            {
+                "id": "flat_sibling_001_group",
+                "parent": "Screen/Content",
+                "name": "[FlatSibling_001]",
+                "siblingIndex": 0,
+            }
+        ]
+        raw_plan["moves"] = [
+            {
+                "source": member,
+                "destination": "@flat_sibling_001_group",
+                "siblingIndex": index,
+            }
+            for index, member in enumerate(raw_plan["flatSiblingFindings"][0]["members"])
+        ]
+        raw_plan["tightBounds"] = []
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"flatSiblingResolutions for flat_sibling_001 must tighten @flat_sibling_001_group",
+        ):
+            normalize_plan(raw_plan, "verify")
+
+    def test_flat_sibling_keep_requires_concrete_evidence(self):
+        raw_plan = self.make_flat_sibling_plan(
+            resolutions=[
+                {
+                    "findingId": "flat_sibling_001",
+                    "mode": "keep",
+                    "evidence": "shared layout",
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"flatSiblingResolutions\[0\]\.evidence must explain in at least 20 characters",
+        ):
+            normalize_plan(raw_plan, "verify")
+
+    def test_flat_sibling_findings_are_asserted_in_generated_preflight(self):
+        raw_plan = self.make_flat_sibling_plan(
+            resolutions=[
+                {
+                    "findingId": "flat_sibling_001",
+                    "mode": "group",
+                    "wrapperId": "flat_sibling_001_group",
+                }
+            ]
+        )
+        raw_plan["wrappers"] = [
+            {
+                "id": "flat_sibling_001_group",
+                "parent": "Screen/Content",
+                "name": "[FlatSibling_001]",
+                "siblingIndex": 0,
+            }
+        ]
+        raw_plan["moves"] = [
+            {
+                "source": member,
+                "destination": "@flat_sibling_001_group",
+                "siblingIndex": index,
+            }
+            for index, member in enumerate(raw_plan["flatSiblingFindings"][0]["members"])
+        ]
+        raw_plan["tightBounds"] = [{"target": "@flat_sibling_001_group"}]
+
+        generated = render(normalize_plan(raw_plan, "preflight"), "preflight")
+
+        self.assertIn('"flatSiblingFindings[0].parent"', generated)
+        self.assertIn('"flatSiblingFindings[0].background"', generated)
+        self.assertIn('"flatSiblingFindings[0].members[3]"', generated)
+
+    def make_flat_sibling_plan(self, resolutions=None):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        raw_plan["flatSiblingFindings"] = [
+            {
+                "id": "flat_sibling_001",
+                "parent": "Screen/Content",
+                "background": "Screen/Content/Background",
+                "members": [
+                    "Screen/Content/Background",
+                    "Screen/Content/Icon",
+                    "Screen/Content/Label",
+                    "Screen/Content/Badge",
+                ],
+            }
+        ]
+        if resolutions is not None:
+            raw_plan["flatSiblingResolutions"] = resolutions
+        return raw_plan
 
     def make_containment_plan(self, resolutions=None):
         raw_plan = json.loads(

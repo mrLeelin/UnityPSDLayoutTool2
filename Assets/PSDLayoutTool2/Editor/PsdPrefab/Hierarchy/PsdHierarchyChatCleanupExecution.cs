@@ -56,6 +56,8 @@ namespace PsdLayoutTool2
                     "requiredComponentFamilies",
                     "containmentFindings",
                     "containmentResolutions",
+                    "flatSiblingFindings",
+                    "flatSiblingResolutions",
                 }),
                 StringComparer.Ordinal);
 
@@ -202,6 +204,7 @@ namespace PsdLayoutTool2
 
                 NormalizeSingleStateVariantExtractions(plan, context);
                 NormalizeSkippedRequiredComponentCandidates(plan, context);
+                NormalizeMissingStatefulExtractionTemplates(plan);
                 ValidateAllExistingNodeReferences(plan, context);
                 ValidateRequiredComponentFamilyDecisions(plan, context);
                 ResolveExistingNodeReferences(plan, context);
@@ -211,6 +214,7 @@ namespace PsdLayoutTool2
                 NormalizeDirectChildVerificationNames(plan);
                 WriteRequiredComponentFamilies(plan, context);
                 WriteContainmentFindings(plan, context);
+                WriteFlatSiblingFindings(plan, context);
                 RemoveCandidateDecisionMetadata(plan);
                 plan["version"] = 1;
                 plan.Remove("snapshotFingerprint");
@@ -276,7 +280,8 @@ namespace PsdLayoutTool2
 
         internal static async Task<PsdHierarchyChatCleanupExecutionResult> ApplyConfirmedAsync(
             PsdHierarchyChatContext context,
-            string planJson)
+            string planJson,
+            bool replaceReplayProfile = false)
         {
             if (context == null)
             {
@@ -298,7 +303,11 @@ namespace PsdLayoutTool2
                 PsdHierarchyChatCleanupExecutionResult nativeResult =
                     await PsdHierarchyNativeCleanupExecutor.ApplyAsync(context, runnerPlanJson);
                 return nativeResult.success
-                    ? PersistCompletedReplayStage(context, runnerPlanJson, nativeResult)
+                    ? PersistCompletedReplayStage(
+                        context,
+                        runnerPlanJson,
+                        nativeResult,
+                        replaceReplayProfile)
                     : nativeResult;
             }
 
@@ -324,7 +333,11 @@ namespace PsdLayoutTool2
                         "本次失败计划没有写入重放 Profile；将基于当前 Prefab 重新分析并生成新计划。");
                 }
 
-                return PersistCompletedReplayStage(context, runnerPlanJson, result);
+                return PersistCompletedReplayStage(
+                    context,
+                    runnerPlanJson,
+                    result,
+                    replaceReplayProfile);
             }
             catch (Exception exception)
             {
@@ -358,14 +371,25 @@ namespace PsdLayoutTool2
         private static PsdHierarchyChatCleanupExecutionResult PersistCompletedReplayStage(
             PsdHierarchyChatContext context,
             string runnerPlanJson,
-            PsdHierarchyChatCleanupExecutionResult result)
+            PsdHierarchyChatCleanupExecutionResult result,
+            bool replaceReplayProfile)
         {
             try
             {
-                PsdHierarchyCleanupReplayProfile.Persist(
-                    context.sourcePsdAssetPath,
-                    context.targetPrefabAssetPath,
-                    runnerPlanJson);
+                if (replaceReplayProfile)
+                {
+                    PsdHierarchyCleanupReplayProfile.ReplaceWithFirstStage(
+                        context.sourcePsdAssetPath,
+                        context.targetPrefabAssetPath,
+                        runnerPlanJson);
+                }
+                else
+                {
+                    PsdHierarchyCleanupReplayProfile.Persist(
+                        context.sourcePsdAssetPath,
+                        context.targetPrefabAssetPath,
+                        runnerPlanJson);
+                }
                 return result;
             }
             catch (Exception exception)
@@ -1644,6 +1668,8 @@ namespace PsdLayoutTool2
             ValidateRootPlanShape(plan, 2L, true);
             NormalizeRequiredVariantCandidates(plan, context);
             NormalizeSkippedRequiredComponentCandidates(plan, context);
+            NormalizeMissingFlatSiblingResolutions(plan, context);
+            ValidateFlatSiblingResolutions(plan, context);
         }
 
         private static void DerivePrefabName(JObject plan, string targetPrefabAssetPath)
@@ -2049,6 +2075,32 @@ namespace PsdLayoutTool2
             });
         }
 
+        private static void NormalizeMissingStatefulExtractionTemplates(JObject plan)
+        {
+            if (!(plan["statefulComponentExtractions"] is JArray extractions))
+            {
+                return;
+            }
+
+            foreach (JObject extraction in extractions.OfType<JObject>())
+            {
+                if (!string.IsNullOrWhiteSpace(extraction.Value<string>("template")) ||
+                    !(extraction["instances"] is JArray instances))
+                {
+                    continue;
+                }
+
+                string template = instances
+                    .OfType<JObject>()
+                    .Select(instance => instance.Value<string>("source"))
+                    .FirstOrDefault(source => !string.IsNullOrWhiteSpace(source));
+                if (!string.IsNullOrWhiteSpace(template))
+                {
+                    extraction["template"] = template;
+                }
+            }
+        }
+
         private static void NormalizeStatefulInstanceMappings(
             JObject plan,
             PsdHierarchyChatContext context)
@@ -2070,6 +2122,875 @@ namespace PsdLayoutTool2
             }
         }
 
+        private static void NormalizeMissingFlatSiblingResolutions(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            JArray findings = context?.flatSiblingFindings;
+            if (findings == null || findings.Count == 0)
+            {
+                return;
+            }
+
+            var resolutions = plan["flatSiblingResolutions"] as JArray;
+            if (resolutions == null && plan["flatSiblingResolutions"] == null)
+            {
+                resolutions = new JArray();
+                plan["flatSiblingResolutions"] = resolutions;
+            }
+
+            var wrappers = plan["wrappers"] as JArray;
+            var moves = plan["moves"] as JArray;
+            var tightBounds = plan["tightBounds"] as JArray;
+            if (resolutions == null || wrappers == null || moves == null || tightBounds == null)
+            {
+                throw new InvalidDataException(
+                    "Deterministic flat-sibling repair failed: flatSiblingResolutions, wrappers, " +
+                    "moves, and tightBounds must all be arrays.");
+            }
+
+            var findingsById = new Dictionary<string, JObject>(StringComparer.Ordinal);
+            foreach (JObject finding in findings.OfType<JObject>())
+            {
+                string findingId = finding.Value<string>("id");
+                if (string.IsNullOrWhiteSpace(findingId))
+                {
+                    throw new InvalidDataException(
+                        "Deterministic flat-sibling repair failed: a snapshot finding has no id.");
+                }
+
+                findingsById.Add(findingId, finding);
+            }
+
+            if (findingsById.Count != findings.Count)
+            {
+                throw new InvalidDataException(
+                    "Deterministic flat-sibling repair failed: flatSiblingFindings contains an invalid record.");
+            }
+
+            Dictionary<string, JObject> nodesById = ReadSnapshotNodes(context);
+            NormalizeDeterministicFlatSiblingGroups(
+                findingsById,
+                nodesById,
+                resolutions,
+                wrappers,
+                moves,
+                tightBounds);
+
+            var resolvedFindingIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JToken resolutionToken in resolutions)
+            {
+                if (!(resolutionToken is JObject resolution))
+                {
+                    return;
+                }
+
+                string findingId = resolution.Value<string>("findingId");
+                if (string.IsNullOrWhiteSpace(findingId) ||
+                    !findingsById.ContainsKey(findingId) ||
+                    !resolvedFindingIds.Add(findingId))
+                {
+                    return;
+                }
+            }
+
+            JObject[] missingFindings = findingsById
+                .Where(entry => !resolvedFindingIds.Contains(entry.Key))
+                .Select(entry => entry.Value)
+                .ToArray();
+            if (missingFindings.Length == 0)
+            {
+                return;
+            }
+
+            var membersToGroup = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JObject finding in missingFindings)
+            {
+                string findingId = finding.Value<string>("id");
+                JArray members = finding["members"] as JArray;
+                if (members == null || members.Count < 3)
+                {
+                    throw new InvalidDataException(
+                        "Deterministic flat-sibling repair failed: " + findingId +
+                        " has no complete member list.");
+                }
+
+                foreach (JToken memberToken in members)
+                {
+                    string member = memberToken?.Value<string>();
+                    if (string.IsNullOrWhiteSpace(member) || !membersToGroup.Add(member))
+                    {
+                        throw new InvalidDataException(
+                            "Deterministic flat-sibling repair failed: " + findingId +
+                            " has an invalid or overlapping member list.");
+                    }
+                }
+            }
+
+            JObject conflictingMove = moves
+                .OfType<JObject>()
+                .FirstOrDefault(move => membersToGroup.Contains(move.Value<string>("source") ?? string.Empty));
+            if (conflictingMove != null)
+            {
+                throw new InvalidDataException(
+                    "Deterministic flat-sibling repair refused because the AI plan already moves " +
+                    conflictingMove.Value<string>("source") +
+                    "; it cannot safely auto-group the affected flat sibling finding.");
+            }
+
+            var usedWrapperIds = new HashSet<string>(
+                wrappers.OfType<JObject>()
+                    .Select(wrapper => wrapper.Value<string>("id"))
+                    .Where(id => !string.IsNullOrWhiteSpace(id)),
+                StringComparer.Ordinal);
+            var generatedWrappers = new JArray();
+            var generatedMoves = new JArray();
+            var generatedTightBounds = new JArray();
+            var generatedResolutions = new JArray();
+            foreach (JObject finding in missingFindings)
+            {
+                string findingId = finding.Value<string>("id");
+                string parent = finding.Value<string>("parent");
+                string background = finding.Value<string>("background");
+                JArray members = finding["members"] as JArray;
+                if (string.IsNullOrWhiteSpace(parent) ||
+                    string.IsNullOrWhiteSpace(background) ||
+                    !TryGetSnapshotNode(nodesById, background, out JObject backgroundNode) ||
+                    !backgroundNode.Value<int?>("siblingIndex").HasValue ||
+                    backgroundNode.Value<int?>("siblingIndex").Value < 0)
+                {
+                    throw new InvalidDataException(
+                        "Deterministic flat-sibling repair failed: " + findingId +
+                        " has no observed background siblingIndex.");
+                }
+
+                string wrapperId = CreateUniqueFlatSiblingWrapperId(findingId, usedWrapperIds);
+                string wrapperReference = "@" + wrapperId;
+                generatedWrappers.Add(new JObject
+                {
+                    ["id"] = wrapperId,
+                    ["parent"] = parent,
+                    ["name"] = "[FlatSibling_" + findingId + "]",
+                    ["siblingIndex"] = backgroundNode.Value<int?>("siblingIndex").Value,
+                });
+                for (int memberIndex = 0; memberIndex < members.Count; memberIndex++)
+                {
+                    generatedMoves.Add(new JObject
+                    {
+                        ["source"] = members[memberIndex].Value<string>(),
+                        ["destination"] = wrapperReference,
+                        ["siblingIndex"] = memberIndex,
+                    });
+                }
+
+                generatedTightBounds.Add(new JObject { ["target"] = wrapperReference });
+                generatedResolutions.Add(new JObject
+                {
+                    ["findingId"] = findingId,
+                    ["mode"] = "group",
+                    ["wrapperId"] = wrapperId,
+                });
+            }
+
+            foreach (JObject wrapper in generatedWrappers)
+            {
+                wrappers.Add(wrapper);
+            }
+
+            foreach (JObject move in generatedMoves)
+            {
+                moves.Add(move);
+            }
+
+            foreach (JObject bound in generatedTightBounds)
+            {
+                tightBounds.Add(bound);
+            }
+
+            foreach (JObject resolution in generatedResolutions)
+            {
+                resolutions.Add(resolution);
+            }
+        }
+
+        private static void NormalizeDeterministicFlatSiblingGroups(
+            IReadOnlyDictionary<string, JObject> findingsById,
+            IReadOnlyDictionary<string, JObject> nodesById,
+            JArray resolutions,
+            JArray wrappers,
+            JArray moves,
+            JArray tightBounds)
+        {
+            var findings = findingsById.Values
+                .OrderBy(finding => finding.Value<string>("id"), StringComparer.Ordinal)
+                .ToArray();
+            var membersToFinding = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (JObject finding in findings)
+            {
+                string findingId = finding.Value<string>("id");
+                if (!TryReadFlatSiblingMembers(finding, out string[] members) || members.Length < 3)
+                {
+                    throw new InvalidDataException(
+                        "Deterministic flat-sibling repair failed: " + findingId +
+                        " has no complete member list.");
+                }
+
+                foreach (string member in members)
+                {
+                    if (!membersToFinding.TryAdd(member, findingId))
+                    {
+                        throw new InvalidDataException(
+                            "Deterministic flat-sibling repair failed: " + member +
+                            " belongs to both " + membersToFinding[member] + " and " + findingId + ".");
+                    }
+                }
+            }
+
+            var canonicalWrapperIds = findings
+                .Select(finding => finding.Value<string>("id") + "_group")
+                .ToHashSet(StringComparer.Ordinal);
+            var aliasesByFinding = findings.ToDictionary(
+                finding => finding.Value<string>("id"),
+                finding => new HashSet<string>(StringComparer.Ordinal),
+                StringComparer.Ordinal);
+            foreach (JObject resolution in resolutions.OfType<JObject>())
+            {
+                string findingId = resolution.Value<string>("findingId");
+                string wrapperId = resolution.Value<string>("wrapperId");
+                if (string.Equals(resolution.Value<string>("mode"), "group", StringComparison.Ordinal) &&
+                    aliasesByFinding.TryGetValue(findingId ?? string.Empty, out HashSet<string> aliases) &&
+                    !string.IsNullOrWhiteSpace(wrapperId))
+                {
+                    aliases.Add(wrapperId);
+                }
+            }
+
+            var wrapperAliases = aliasesByFinding
+                .SelectMany(entry => entry.Value.Select(wrapperId => new { findingId = entry.Key, wrapperId }))
+                .GroupBy(item => item.wrapperId, StringComparer.Ordinal)
+                .Where(group => group.Select(item => item.findingId).Distinct(StringComparer.Ordinal).Count() > 1)
+                .Select(group => group.Key)
+                .ToHashSet(StringComparer.Ordinal);
+            if (wrapperAliases.Count > 0)
+            {
+                throw new InvalidDataException(
+                    "Deterministic flat-sibling repair refused because a wrapper is shared by multiple findings: " +
+                    string.Join(", ", wrapperAliases.OrderBy(id => id, StringComparer.Ordinal)) + ".");
+            }
+
+            var wrapperIdsToRemove = aliasesByFinding.Values
+                .SelectMany(ids => ids)
+                .Where(id => !canonicalWrapperIds.Contains(id))
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (JObject wrapper in wrappers.OfType<JObject>().ToArray())
+            {
+                if (wrapperIdsToRemove.Contains(wrapper.Value<string>("id") ?? string.Empty))
+                {
+                    wrapper.Remove();
+                }
+            }
+
+            foreach (JObject move in moves.OfType<JObject>().ToArray())
+            {
+                string source = move.Value<string>("source") ?? string.Empty;
+                string destination = move.Value<string>("destination") ?? string.Empty;
+                string destinationWrapperId = destination.StartsWith("@", StringComparison.Ordinal)
+                    ? destination.Substring(1)
+                    : string.Empty;
+                if (membersToFinding.ContainsKey(source) ||
+                    canonicalWrapperIds.Contains(destinationWrapperId) ||
+                    wrapperIdsToRemove.Contains(destinationWrapperId))
+                {
+                    move.Remove();
+                }
+            }
+
+            foreach (JObject bound in tightBounds.OfType<JObject>().ToArray())
+            {
+                string target = bound.Value<string>("target") ?? string.Empty;
+                string targetWrapperId = target.StartsWith("@", StringComparison.Ordinal)
+                    ? target.Substring(1)
+                    : string.Empty;
+                if (canonicalWrapperIds.Contains(targetWrapperId) ||
+                    wrapperIdsToRemove.Contains(targetWrapperId))
+                {
+                    bound.Remove();
+                }
+            }
+
+            foreach (JObject resolution in resolutions.OfType<JObject>().ToArray())
+            {
+                if (findingsById.ContainsKey(resolution.Value<string>("findingId") ?? string.Empty))
+                {
+                    resolution.Remove();
+                }
+            }
+
+            var wrappersById = wrappers.OfType<JObject>()
+                .Where(wrapper => !string.IsNullOrWhiteSpace(wrapper.Value<string>("id")))
+                .ToDictionary(wrapper => wrapper.Value<string>("id"), StringComparer.Ordinal);
+            foreach (JObject finding in findings)
+            {
+                string findingId = finding.Value<string>("id");
+                string parent = finding.Value<string>("parent");
+                string background = finding.Value<string>("background");
+                if (!TryGetSnapshotNode(nodesById, background, out JObject backgroundNode) ||
+                    !backgroundNode.Value<int?>("siblingIndex").HasValue)
+                {
+                    throw new InvalidDataException(
+                        "Deterministic flat-sibling repair failed: " + findingId +
+                        " has no observed background siblingIndex.");
+                }
+
+                TryReadFlatSiblingMembers(finding, out string[] members);
+                string wrapperId = findingId + "_group";
+                if (!wrappersById.TryGetValue(wrapperId, out JObject wrapper))
+                {
+                    wrapper = new JObject { ["id"] = wrapperId };
+                    wrappers.Add(wrapper);
+                    wrappersById.Add(wrapperId, wrapper);
+                }
+
+                wrapper["parent"] = parent;
+                wrapper["name"] = "[FlatSibling_" + findingId + "]";
+                wrapper["siblingIndex"] = backgroundNode.Value<int?>("siblingIndex").Value;
+                string wrapperReference = "@" + wrapperId;
+                for (int memberIndex = 0; memberIndex < members.Length; memberIndex++)
+                {
+                    moves.Add(new JObject
+                    {
+                        ["source"] = members[memberIndex],
+                        ["destination"] = wrapperReference,
+                        ["siblingIndex"] = memberIndex,
+                    });
+                }
+
+                tightBounds.Add(new JObject { ["target"] = wrapperReference });
+                resolutions.Add(new JObject
+                {
+                    ["findingId"] = findingId,
+                    ["mode"] = "group",
+                    ["wrapperId"] = wrapperId,
+                });
+            }
+        }
+
+        private static void NormalizeRepairableFlatSiblingGroups(
+            IReadOnlyDictionary<string, JObject> findingsById,
+            IReadOnlyDictionary<string, JObject> nodesById,
+            JArray resolutions,
+            JArray wrappers,
+            JArray moves,
+            JArray tightBounds)
+        {
+            var wrappersById = new Dictionary<string, JObject>(StringComparer.Ordinal);
+            var ambiguousWrapperIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JObject wrapper in wrappers.OfType<JObject>())
+            {
+                string wrapperId = wrapper.Value<string>("id");
+                if (string.IsNullOrWhiteSpace(wrapperId))
+                {
+                    continue;
+                }
+
+                if (!wrappersById.TryAdd(wrapperId, wrapper))
+                {
+                    ambiguousWrapperIds.Add(wrapperId);
+                }
+            }
+
+            foreach (JObject resolution in resolutions.OfType<JObject>())
+            {
+                string findingId = resolution.Value<string>("findingId");
+                string wrapperId = resolution.Value<string>("wrapperId");
+                if (!string.Equals(resolution.Value<string>("mode"), "group", StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(findingId) ||
+                    string.IsNullOrWhiteSpace(wrapperId) ||
+                    !findingsById.TryGetValue(findingId, out JObject finding) ||
+                    ambiguousWrapperIds.Contains(wrapperId) ||
+                    !wrappersById.TryGetValue(wrapperId, out JObject wrapper) ||
+                    !TryReadFlatSiblingMembers(finding, out string[] members) ||
+                    !TryGetFlatSiblingWrapperIndex(finding, nodesById, out int expectedSiblingIndex))
+                {
+                    continue;
+                }
+
+                string expectedParent = finding.Value<string>("parent");
+                string wrapperReference = "@" + wrapperId;
+                var memberSet = new HashSet<string>(members, StringComparer.Ordinal);
+                bool hasCanonicalMoves = HasCanonicalFlatSiblingMoves(moves, members, wrapperReference);
+                bool hasTightBounds = tightBounds.OfType<JObject>().Any(bound =>
+                    string.Equals(bound.Value<string>("target"), wrapperReference, StringComparison.Ordinal));
+                bool hasForeignFindingMember = moves.OfType<JObject>().Any(move =>
+                    string.Equals(move.Value<string>("destination"), wrapperReference, StringComparison.Ordinal) &&
+                    !memberSet.Contains(move.Value<string>("source") ?? string.Empty) &&
+                    BelongsToAnotherFlatSiblingFinding(
+                        findingsById,
+                        findingId,
+                        move.Value<string>("source") ?? string.Empty));
+                bool hasConflictingMemberMove = moves.OfType<JObject>().Any(move =>
+                    memberSet.Contains(move.Value<string>("source") ?? string.Empty) &&
+                    !string.Equals(move.Value<string>("destination"), wrapperReference, StringComparison.Ordinal));
+                bool requiresRepair =
+                    !string.Equals(wrapper.Value<string>("parent"), expectedParent, StringComparison.Ordinal) ||
+                    wrapper.Value<int?>("siblingIndex") != expectedSiblingIndex ||
+                    !hasCanonicalMoves ||
+                    !hasTightBounds ||
+                    hasForeignFindingMember ||
+                    hasConflictingMemberMove;
+                if (!requiresRepair)
+                {
+                    continue;
+                }
+
+                RemoveRepairableFlatSiblingMoves(
+                    findingsById,
+                    resolutions,
+                    moves,
+                    resolution,
+                    findingId,
+                    wrapperReference,
+                    memberSet);
+                AssertRepairableFlatSiblingWrapper(
+                    findingsById,
+                    nodesById,
+                    resolutions,
+                    moves,
+                    resolution,
+                    findingId,
+                    wrapperId,
+                    expectedParent,
+                    members);
+
+                foreach (JObject move in moves.OfType<JObject>()
+                    .Where(move => memberSet.Contains(move.Value<string>("source") ?? string.Empty))
+                    .ToArray())
+                {
+                    move.Remove();
+                }
+
+                wrapper["parent"] = expectedParent;
+                wrapper["siblingIndex"] = expectedSiblingIndex;
+                for (int memberIndex = 0; memberIndex < members.Length; memberIndex++)
+                {
+                    moves.Add(new JObject
+                    {
+                        ["source"] = members[memberIndex],
+                        ["destination"] = wrapperReference,
+                        ["siblingIndex"] = memberIndex,
+                    });
+                }
+
+                if (!hasTightBounds)
+                {
+                    tightBounds.Add(new JObject { ["target"] = wrapperReference });
+                }
+            }
+        }
+
+        private static void RemoveRepairableFlatSiblingMoves(
+            IReadOnlyDictionary<string, JObject> findingsById,
+            JArray resolutions,
+            JArray moves,
+            JObject resolution,
+            string findingId,
+            string wrapperReference,
+            ISet<string> memberSet)
+        {
+            bool isSharedResolution = resolutions.OfType<JObject>().Any(other =>
+                !ReferenceEquals(other, resolution) &&
+                string.Equals(other.Value<string>("mode"), "group", StringComparison.Ordinal) &&
+                string.Equals(other.Value<string>("wrapperId"), wrapperReference.Substring(1), StringComparison.Ordinal));
+            if (isSharedResolution)
+            {
+                return;
+            }
+
+            foreach (JObject move in moves.OfType<JObject>().ToArray())
+            {
+                string source = move.Value<string>("source") ?? string.Empty;
+                string destination = move.Value<string>("destination") ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(source))
+                {
+                    continue;
+                }
+
+                if (memberSet.Contains(source) &&
+                    !string.Equals(destination, wrapperReference, StringComparison.Ordinal))
+                {
+                    move.Remove();
+                    continue;
+                }
+
+                if (!memberSet.Contains(source) &&
+                    string.Equals(destination, wrapperReference, StringComparison.Ordinal) &&
+                    BelongsToAnotherFlatSiblingFinding(findingsById, findingId, source))
+                {
+                    move.Remove();
+                }
+            }
+        }
+
+        private static bool BelongsToAnotherFlatSiblingFinding(
+            IReadOnlyDictionary<string, JObject> findingsById,
+            string findingId,
+            string source)
+        {
+            return findingsById.Any(entry =>
+                !string.Equals(entry.Key, findingId, StringComparison.Ordinal) &&
+                (entry.Value["members"] as JArray ?? new JArray())
+                    .Any(member => string.Equals(member.Value<string>(), source, StringComparison.Ordinal)));
+        }
+
+        private static void AssertRepairableFlatSiblingWrapper(
+            IReadOnlyDictionary<string, JObject> findingsById,
+            IReadOnlyDictionary<string, JObject> nodesById,
+            JArray resolutions,
+            JArray moves,
+            JObject resolution,
+            string findingId,
+            string wrapperId,
+            string expectedParent,
+            IReadOnlyCollection<string> members)
+        {
+            string wrapperReference = "@" + wrapperId;
+            var memberSet = new HashSet<string>(members, StringComparer.Ordinal);
+            bool isSharedResolution = resolutions.OfType<JObject>().Any(other =>
+                !ReferenceEquals(other, resolution) &&
+                string.Equals(other.Value<string>("mode"), "group", StringComparison.Ordinal) &&
+                string.Equals(other.Value<string>("wrapperId"), wrapperId, StringComparison.Ordinal));
+            JObject unexpectedRequiredMemberMove = moves.OfType<JObject>().FirstOrDefault(move =>
+                memberSet.Contains(move.Value<string>("source") ?? string.Empty) &&
+                !string.Equals(move.Value<string>("destination"), wrapperReference, StringComparison.Ordinal));
+            JObject incompatibleAdditionalMove = moves.OfType<JObject>().FirstOrDefault(move =>
+            {
+                string source = move.Value<string>("source") ?? string.Empty;
+                if (!string.Equals(move.Value<string>("destination"), wrapperReference, StringComparison.Ordinal) ||
+                    memberSet.Contains(source))
+                {
+                    return false;
+                }
+
+                if (!TryGetSnapshotNode(nodesById, source, out JObject sourceNode) ||
+                    !string.Equals(
+                        "node:" + sourceNode.Value<string>("parentId"),
+                        expectedParent,
+                        StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                return findingsById.Any(entry =>
+                    !string.Equals(entry.Key, findingId, StringComparison.Ordinal) &&
+                    (entry.Value["members"] as JArray ?? new JArray())
+                    .Any(member => string.Equals(member.Value<string>(), source, StringComparison.Ordinal)));
+            });
+            bool hasOverlappingFinding = findingsById.Any(entry =>
+                !string.Equals(entry.Key, findingId, StringComparison.Ordinal) &&
+                (entry.Value["members"] as JArray ?? new JArray())
+                .Any(member => memberSet.Contains(member.Value<string>() ?? string.Empty)));
+            if (!isSharedResolution &&
+                unexpectedRequiredMemberMove == null &&
+                incompatibleAdditionalMove == null &&
+                !hasOverlappingFinding)
+            {
+                return;
+            }
+
+            throw new InvalidDataException(
+                "Deterministic flat-sibling repair refused because wrapper " + wrapperId +
+                " cannot safely preserve the observed direct-child mappings for " + findingId + ".");
+        }
+
+        private static bool HasCanonicalFlatSiblingMoves(
+            JArray moves,
+            IReadOnlyList<string> members,
+            string wrapperReference)
+        {
+            for (int memberIndex = 0; memberIndex < members.Count; memberIndex++)
+            {
+                int matchingMoves = moves.OfType<JObject>().Count(move =>
+                    string.Equals(move.Value<string>("source"), members[memberIndex], StringComparison.Ordinal) &&
+                    string.Equals(move.Value<string>("destination"), wrapperReference, StringComparison.Ordinal) &&
+                    move.Value<int?>("siblingIndex") == memberIndex);
+                if (matchingMoves != 1)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryReadFlatSiblingMembers(JObject finding, out string[] members)
+        {
+            members = (finding["members"] as JArray ?? new JArray())
+                .Values<string>()
+                .ToArray();
+            return members.Length >= 3 &&
+                   members.All(member => !string.IsNullOrWhiteSpace(member)) &&
+                   members.Distinct(StringComparer.Ordinal).Count() == members.Length;
+        }
+
+        private static bool TryGetFlatSiblingWrapperIndex(
+            JObject finding,
+            IReadOnlyDictionary<string, JObject> nodesById,
+            out int siblingIndex)
+        {
+            siblingIndex = -1;
+            string background = finding.Value<string>("background");
+            return TryGetSnapshotNode(nodesById, background, out JObject backgroundNode) &&
+                   backgroundNode.Value<int?>("siblingIndex").HasValue &&
+                   (siblingIndex = backgroundNode.Value<int?>("siblingIndex").Value) >= 0;
+        }
+
+        private static Dictionary<string, JObject> ReadSnapshotNodes(PsdHierarchyChatContext context)
+        {
+            JObject snapshot;
+            try
+            {
+                snapshot = JObject.Parse(context.hierarchySnapshotJson);
+            }
+            catch (Newtonsoft.Json.JsonException exception)
+            {
+                throw new InvalidDataException(
+                    "Deterministic flat-sibling repair failed: snapshot JSON is invalid.",
+                    exception);
+            }
+
+            var nodesById = new Dictionary<string, JObject>(StringComparer.Ordinal);
+            foreach (JObject node in (snapshot["nodes"] as JArray ?? new JArray()).OfType<JObject>())
+            {
+                string nodeId = node.Value<string>("id");
+                if (!string.IsNullOrWhiteSpace(nodeId))
+                {
+                    nodesById.Add(nodeId, node);
+                }
+            }
+
+            return nodesById;
+        }
+
+        private static bool TryGetSnapshotNode(
+            IReadOnlyDictionary<string, JObject> nodesById,
+            string reference,
+            out JObject node)
+        {
+            node = null;
+            const string prefix = "node:";
+            return !string.IsNullOrWhiteSpace(reference) &&
+                   reference.StartsWith(prefix, StringComparison.Ordinal) &&
+                   nodesById.TryGetValue(reference.Substring(prefix.Length), out node);
+        }
+
+        private static string CreateUniqueFlatSiblingWrapperId(
+            string findingId,
+            ISet<string> usedWrapperIds)
+        {
+            string baseId = findingId + "_group";
+            if (!Regex.IsMatch(baseId, "^[a-z][a-z0-9_]*$", RegexOptions.CultureInvariant))
+            {
+                throw new InvalidDataException(
+                    "Deterministic flat-sibling repair failed: " + findingId +
+                    " cannot produce a valid wrapper id.");
+            }
+
+            string wrapperId = baseId;
+            for (int suffix = 2; !usedWrapperIds.Add(wrapperId); suffix++)
+            {
+                wrapperId = baseId + "_" + suffix;
+            }
+
+            return wrapperId;
+        }
+
+        private static void ValidateFlatSiblingResolutions(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            JArray findings = context?.flatSiblingFindings ?? new JArray();
+            JArray resolutions = plan["flatSiblingResolutions"] as JArray ?? new JArray();
+            if (findings.Count == 0)
+            {
+                if (resolutions.Count > 0)
+                {
+                    throw new InvalidDataException(
+                        "flatSiblingResolutions must be empty because the authoritative snapshot has no flatSiblingFindings.");
+                }
+
+                return;
+            }
+
+            var findingsById = new Dictionary<string, JObject>(StringComparer.Ordinal);
+            foreach (JObject finding in findings.OfType<JObject>())
+            {
+                string findingId = finding.Value<string>("id");
+                if (!string.IsNullOrWhiteSpace(findingId))
+                {
+                    findingsById[findingId] = finding;
+                }
+            }
+
+            var wrappersById = new Dictionary<string, JObject>(StringComparer.Ordinal);
+            foreach (JObject wrapper in (plan["wrappers"] as JArray ?? new JArray()).OfType<JObject>())
+            {
+                string wrapperId = wrapper.Value<string>("id");
+                if (!string.IsNullOrWhiteSpace(wrapperId) && !wrappersById.ContainsKey(wrapperId))
+                {
+                    wrappersById.Add(wrapperId, wrapper);
+                }
+            }
+
+            JArray moves = plan["moves"] as JArray ?? new JArray();
+            JArray tightBounds = plan["tightBounds"] as JArray ?? new JArray();
+            var resolvedFindingIds = new HashSet<string>(StringComparer.Ordinal);
+            var errors = new List<string>();
+            for (int index = 0; index < resolutions.Count; index++)
+            {
+                if (!(resolutions[index] is JObject resolution))
+                {
+                    errors.Add("flatSiblingResolutions[" + index + "] must be an object.");
+                    continue;
+                }
+
+                string findingId = resolution.Value<string>("findingId");
+                if (string.IsNullOrWhiteSpace(findingId) ||
+                    !findingsById.TryGetValue(findingId, out JObject finding))
+                {
+                    errors.Add(
+                        "flatSiblingResolutions[" + index + "].findingId is not in the authoritative snapshot.");
+                    continue;
+                }
+
+                if (!resolvedFindingIds.Add(findingId))
+                {
+                    errors.Add("flatSiblingResolutions resolves " + findingId + " more than once.");
+                    continue;
+                }
+
+                string mode = resolution.Value<string>("mode");
+                if (string.Equals(mode, "keep", StringComparison.Ordinal))
+                {
+                    string evidence = resolution.Value<string>("evidence");
+                    if (string.IsNullOrWhiteSpace(evidence) || evidence.Trim().Length < 20)
+                    {
+                        errors.Add(
+                            "flatSiblingResolutions[" + index + "].evidence must contain at least 20 characters for keep.");
+                    }
+
+                    continue;
+                }
+
+                if (!string.Equals(mode, "group", StringComparison.Ordinal))
+                {
+                    errors.Add("flatSiblingResolutions[" + index + "].mode must be group or keep.");
+                    continue;
+                }
+
+                string wrapperId = resolution.Value<string>("wrapperId");
+                if (string.IsNullOrWhiteSpace(wrapperId) ||
+                    !wrappersById.TryGetValue(wrapperId, out JObject wrapper))
+                {
+                    errors.Add(
+                        "flatSiblingResolutions[" + index + "].wrapperId must name a wrapper.");
+                    continue;
+                }
+
+                string expectedParent = finding.Value<string>("parent");
+                if (!string.Equals(wrapper.Value<string>("parent"), expectedParent, StringComparison.Ordinal))
+                {
+                    errors.Add(
+                        "flatSiblingResolutions[" + index + "] wrapper parent must equal the finding parent.");
+                }
+
+                string wrapperReference = "@" + wrapperId;
+                JArray members = finding["members"] as JArray;
+                if (members == null || members.Count < 3)
+                {
+                    errors.Add("flatSiblingFindings " + findingId + " has no complete member list.");
+                    continue;
+                }
+
+                for (int memberIndex = 0; memberIndex < members.Count; memberIndex++)
+                {
+                    string source = members[memberIndex]?.Value<string>();
+                    int matchingMoves = moves
+                        .OfType<JObject>()
+                        .Count(move =>
+                            string.Equals(move.Value<string>("source"), source, StringComparison.Ordinal) &&
+                            string.Equals(move.Value<string>("destination"), wrapperReference, StringComparison.Ordinal) &&
+                            move.Value<int?>("siblingIndex") == memberIndex);
+                    if (matchingMoves != 1)
+                    {
+                        errors.Add(
+                            "flatSiblingResolutions[" + index + "] must move " + source +
+                            " to " + wrapperReference + " at siblingIndex " + memberIndex + ".");
+                    }
+                }
+
+                if (!tightBounds.OfType<JObject>().Any(bound =>
+                    string.Equals(bound.Value<string>("target"), wrapperReference, StringComparison.Ordinal)))
+                {
+                    errors.Add(
+                        "flatSiblingResolutions[" + index + "] must tighten " + wrapperReference + ".");
+                }
+            }
+
+            foreach (string findingId in findingsById.Keys)
+            {
+                if (!resolvedFindingIds.Contains(findingId))
+                {
+                    errors.Add("flatSiblingResolutions must resolve " + findingId + ".");
+                }
+            }
+
+            if (errors.Count > 0)
+            {
+                throw new InvalidDataException(
+                    "Flat sibling findings validation failed:" + Environment.NewLine +
+                    "- " + string.Join(Environment.NewLine + "- ", errors));
+            }
+        }
+
+        private static void WriteFlatSiblingFindings(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            var findings = new JArray();
+            foreach (JObject finding in (context.flatSiblingFindings ?? new JArray()).OfType<JObject>())
+            {
+                string findingId = finding.Value<string>("id") ?? string.Empty;
+                string label = "flat sibling finding " + findingId;
+                var members = new JArray();
+                foreach (JToken member in finding["members"] as JArray ?? new JArray())
+                {
+                    members.Add(ResolveNodeReference(member.Value<string>(), label + ".members", context));
+                }
+
+                if (string.IsNullOrWhiteSpace(findingId) || members.Count < 3)
+                {
+                    continue;
+                }
+
+                findings.Add(new JObject
+                {
+                    ["id"] = findingId,
+                    ["parent"] = ResolveNodeReference(finding.Value<string>("parent"), label + ".parent", context),
+                    ["background"] = ResolveNodeReference(finding.Value<string>("background"), label + ".background", context),
+                    ["members"] = members,
+                });
+            }
+
+            if (findings.Count > 0)
+            {
+                plan["flatSiblingFindings"] = findings;
+            }
+            else
+            {
+                plan.Remove("flatSiblingFindings");
+            }
+        }
+
         private static bool TryReplaceUnprovableStatefulExtractionWithVariant(
             JObject plan,
             PsdHierarchyChatContext context,
@@ -2080,8 +3001,10 @@ namespace PsdLayoutTool2
             bool hasUnprovablePartition = message.Contains(
                 "cannot safely derive Common/State mappings because neither side contains a complete observed direct-child mapping.");
             bool hasAmbiguousMemberName = message.Contains("contains an ambiguous direct-child name:");
+            bool hasMissingMemberName = message.Contains(
+                "contains a name that is not an observed direct child:");
             if (!match.Success ||
-                (!hasUnprovablePartition && !hasAmbiguousMemberName) ||
+                (!hasUnprovablePartition && !hasAmbiguousMemberName && !hasMissingMemberName) ||
                 !int.TryParse(match.Groups[1].Value, out var extractionIndex))
             {
                 return false;
@@ -2137,10 +3060,13 @@ namespace PsdLayoutTool2
                 var instanceName = statefulInstance.Value<string>("name");
                 if (!IsBracketedSemanticItemName(instanceName) || !instanceNames.Add(instanceName))
                 {
-                    instanceName = "[VariantItem_" + (instanceIndex + 1) + "]";
+                    string baseInstanceName = "[VariantItem_" + (instanceIndex + 1) + "]";
+                    int suffix = 0;
+                    instanceName = baseInstanceName;
                     while (!instanceNames.Add(instanceName))
                     {
-                        instanceName = "[VariantItem_" + (instanceIndex + 1) + "_" + instanceNames.Count + "]";
+                        suffix++;
+                        instanceName = "[VariantItem_" + (instanceIndex + 1) + "_" + suffix + "]";
                     }
                 }
 

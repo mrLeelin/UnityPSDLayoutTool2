@@ -464,6 +464,255 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanAutoCompletesAnUnresolvedFlatSiblingFindingWhenItsMembersAreUntouched()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["moves"] = new JArray();
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["wrappers"], Has.Count.EqualTo(1));
+            Assert.That(runnerPlan["wrappers"][0]["id"].Value<string>(), Is.EqualTo("flat_sibling_001_group"));
+            Assert.That(runnerPlan["wrappers"][0]["parent"].Value<string>(), Is.EqualTo("Root"));
+            Assert.That(runnerPlan["wrappers"][0]["siblingIndex"].Value<int>(), Is.EqualTo(0));
+            Assert.That(runnerPlan["moves"], Has.Count.EqualTo(4));
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Select(move => move.Value<string>("source")),
+                Is.EqualTo(new[] { "Root/ActionButtonPrimary", "Root/TimerLabel", "Root/DurationLabel", "Root/ActionButtonSecondary" }));
+            Assert.That(runnerPlan["flatSiblingResolutions"], Has.Count.EqualTo(1));
+            Assert.That(runnerPlan["flatSiblingResolutions"][0]["findingId"].Value<string>(), Is.EqualTo("flat_sibling_001"));
+            Assert.That(runnerPlan["flatSiblingResolutions"][0]["mode"].Value<string>(), Is.EqualTo("group"));
+            Assert.That(runnerPlan["flatSiblingResolutions"][0]["wrapperId"].Value<string>(), Is.EqualTo("flat_sibling_001_group"));
+        }
+
+        [Test]
+        public void VersionTwoPlanRejectsAnUnresolvedFlatSiblingFindingWhenAiAlreadyMovesItsMember()
+        {
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(),
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(error, Does.Contain("Deterministic flat-sibling repair refused").And.Contain("node:n000002"));
+        }
+
+        [Test]
+        public void VersionTwoPlanRepairsFlatSiblingGroupUnderAnExistingContainerWhenWrapperIsExclusive()
+        {
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(),
+                CreateFlatSiblingGroupPlan("node:n000006"),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["wrappers"][0]["parent"].Value<string>(), Is.EqualTo("Root"));
+            Assert.That(runnerPlan["wrappers"][0]["siblingIndex"].Value<int>(), Is.EqualTo(0));
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Select(move => move.Value<string>("source")),
+                Is.EqualTo(new[] { "Root/ActionButtonPrimary", "Root/TimerLabel", "Root/DurationLabel", "Root/ActionButtonSecondary" }));
+        }
+
+        [Test]
+        public void VersionTwoPlanRepairsFlatSiblingGroupWithAnAdditionalObservedSibling()
+        {
+            var plan = JObject.Parse(CreateFlatSiblingGroupPlan("node:n000006"));
+            ((JArray)plan["moves"]).Add(new JObject
+            {
+                ["source"] = "node:n000006",
+                    ["destination"] = "@legacy_wrapper",
+                ["siblingIndex"] = 4,
+            });
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["wrappers"][0]["parent"].Value<string>(), Is.EqualTo("Root"));
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Select(move => move.Value<string>("source")),
+                Is.EqualTo(new[] { "Root/ActionButtonPrimary", "Root/TimerLabel", "Root/DurationLabel", "Root/ActionButtonSecondary" }));
+        }
+
+        [Test]
+        public void VersionTwoPlanRepairsFlatSiblingGroupWithMembersOwnedByAnotherFinding()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["wrappers"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "flat_group_001",
+                    ["parent"] = "node:n000001",
+                    ["name"] = "[FlatGroup001]",
+                    ["siblingIndex"] = 0,
+                },
+                new JObject
+                {
+                    ["id"] = "flat_group_002",
+                    ["parent"] = "node:n000006",
+                    ["name"] = "[FlatGroup002]",
+                    ["siblingIndex"] = 5,
+                },
+            };
+            plan["moves"] = new JArray
+            {
+                new JObject { ["source"] = "node:n000002", ["destination"] = "@flat_group_001", ["siblingIndex"] = 0 },
+                new JObject { ["source"] = "node:n000003", ["destination"] = "@flat_group_001", ["siblingIndex"] = 1 },
+                new JObject { ["source"] = "node:n000004", ["destination"] = "@flat_group_001", ["siblingIndex"] = 2 },
+                new JObject { ["source"] = "node:n000005", ["destination"] = "@flat_group_002", ["siblingIndex"] = 0 },
+                new JObject { ["source"] = "node:n000006", ["destination"] = "@flat_group_002", ["siblingIndex"] = 1 },
+                new JObject { ["source"] = "node:n000007", ["destination"] = "@flat_group_002", ["siblingIndex"] = 2 },
+                new JObject { ["source"] = "node:n000002", ["destination"] = "@flat_group_002", ["siblingIndex"] = 3 },
+            };
+            plan["tightBounds"] = new JArray
+            {
+                new JObject { ["target"] = "@flat_group_001" },
+                new JObject { ["target"] = "@flat_group_002" },
+            };
+            plan["flatSiblingResolutions"] = new JArray
+            {
+                new JObject { ["findingId"] = "flat_sibling_001", ["mode"] = "group", ["wrapperId"] = "flat_group_001" },
+                new JObject { ["findingId"] = "flat_sibling_002", ["mode"] = "group", ["wrapperId"] = "flat_group_002" },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateMultipleFlatSiblingContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            JObject secondWrapper = runnerPlan["wrappers"].OfType<JObject>()
+                .Single(wrapper => wrapper.Value<string>("id") == "flat_sibling_002_group");
+            Assert.That(secondWrapper.Value<string>("parent"), Is.EqualTo("Root"));
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Count(move =>
+                move.Value<string>("source") == "Root/ActionButtonPrimary" &&
+                move.Value<string>("destination") == "@flat_sibling_002_group"), Is.EqualTo(0));
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Count(move =>
+                move.Value<string>("source") == "Root/ActionButtonPrimary" &&
+                move.Value<string>("destination") == "@flat_sibling_001_group"), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void VersionTwoPlanRepairsFlatSiblingMemberMovedToAnotherWrapper()
+        {
+            var plan = JObject.Parse(CreateFlatSiblingGroupPlan("node:n000001"));
+            ((JArray)plan["wrappers"]).Add(new JObject
+            {
+                ["id"] = "unrelated_group",
+                ["parent"] = "node:n000001",
+                ["name"] = "[UnrelatedGroup]",
+                ["siblingIndex"] = 4,
+            });
+            ((JArray)plan["moves"]).Add(new JObject
+            {
+                ["source"] = "node:n000002",
+                ["destination"] = "@unrelated_group",
+                ["siblingIndex"] = 0,
+            });
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Count(move =>
+                move.Value<string>("source") == "Root/ActionButtonPrimary" &&
+                move.Value<string>("destination") == "@unrelated_group"), Is.EqualTo(0));
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Count(move =>
+                move.Value<string>("source") == "Root/ActionButtonPrimary" &&
+                move.Value<string>("destination") == "@flat_sibling_001_group"), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void VersionTwoPlanNormalizesFlatSiblingGroupWhenWrapperMovesADifferentParentChild()
+        {
+            var plan = JObject.Parse(CreateFlatSiblingGroupPlan("node:n000006"));
+            ((JArray)plan["moves"]).Add(new JObject
+            {
+                ["source"] = "node:n000007",
+                    ["destination"] = "@legacy_wrapper",
+                ["siblingIndex"] = 4,
+            });
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["moves"].OfType<JObject>().Count(move =>
+                move.Value<string>("source") == "Root/[BottomBar]/Detail" &&
+                move.Value<string>("destination") == "@flat_sibling_001_group"), Is.EqualTo(0));
+        }
+
+        [Test]
+        public void VersionTwoPlansWithDifferentAiFlatSiblingSyntaxNormalizeIdentically()
+        {
+            var first = JObject.Parse(CreateFlatSiblingGroupPlan("node:n000001"));
+            var second = JObject.Parse(CreateFlatSiblingGroupPlan("node:n000001"));
+            first["wrappers"][0]["id"] = "flat_group_001";
+            first["moves"].OfType<JObject>().First()["destination"] = "@flat_group_001";
+            first["flatSiblingResolutions"][0]["wrapperId"] = "flat_group_001";
+            second["wrappers"][0]["id"] = "another_wrapper";
+            second["wrappers"][0]["parent"] = "node:n000006";
+            second["moves"].OfType<JObject>().First()["destination"] = "@another_wrapper";
+            second["flatSiblingResolutions"][0]["wrapperId"] = "another_wrapper";
+
+            bool firstPrepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(), first.ToString(), out string firstRunnerPlanJson, out string firstError);
+            bool secondPrepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(), second.ToString(), out string secondRunnerPlanJson, out string secondError);
+
+            Assert.That(firstPrepared, Is.True, firstError);
+            Assert.That(secondPrepared, Is.True, secondError);
+            Assert.That(secondRunnerPlanJson, Is.EqualTo(firstRunnerPlanJson));
+        }
+
+        [Test]
+        public void VersionTwoPlanCarriesAResolvedFlatSiblingFindingIntoTheRunnerPlan()
+        {
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateFlatSiblingContext(),
+                CreateFlatSiblingGroupPlan("node:n000001"),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(runnerPlan["flatSiblingFindings"], Has.Count.EqualTo(1));
+            Assert.That(
+                runnerPlan["flatSiblingFindings"][0]["members"].Values<string>(),
+                Is.EqualTo(new[]
+                {
+                    "Root/ActionButtonPrimary",
+                    "Root/TimerLabel",
+                    "Root/DurationLabel",
+                    "Root/ActionButtonSecondary",
+                }));
+        }
+
+        [Test]
         public void VersionTwoPlanRejectsOmittedMandatoryComponentFamily()
         {
             bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
@@ -974,6 +1223,97 @@ namespace PsdLayoutTool2.Tests
                     ["assetPath"] = "Assets/UI/Prefab/Common/DayCard.prefab",
                     ["common"] = new JObject
                     {
+                        ["source"] = "node:n000006",
+                        ["members"] = new JArray
+                        {
+                            new JObject { ["sourceName"] = "AvailableLabel", ["name"] = "DayLabel" },
+                        },
+                    },
+                    ["states"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "locked",
+                            ["source"] = "node:n000002",
+                            ["name"] = "[Locked]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "Background", ["name"] = "Background" },
+                                new JObject { ["sourceName"] = "Lock", ["name"] = "Lock" },
+                            },
+                        },
+                        new JObject
+                        {
+                            ["id"] = "available",
+                            ["source"] = "node:n000006",
+                            ["name"] = "[Available]",
+                            ["members"] = new JArray
+                            {
+                                new JObject { ["sourceName"] = "AvailableBackground", ["name"] = "Background" },
+                                new JObject { ["sourceName"] = "AvailableLabel", ["name"] = "DayLabel" },
+                            },
+                        },
+                    },
+                    ["defaultState"] = "locked",
+                    ["instances"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["source"] = "node:n000002",
+                            ["name"] = "[DayCard_1]",
+                            ["state"] = "locked",
+                            ["commonSourceNames"] = new JArray(),
+                            ["stateSourceNames"] = new JArray(),
+                        },
+                        new JObject
+                        {
+                            ["source"] = "node:n000002",
+                            ["name"] = "[DayCard_2]",
+                            ["state"] = "available",
+                            ["commonSourceNames"] = new JArray(),
+                            ["stateSourceNames"] = new JArray(),
+                        },
+                    },
+                },
+            };
+            ((JObject)plan["statefulComponentExtractions"][0]).Remove("id");
+            ((JObject)plan["statefulComponentExtractions"][0]).Remove("template");
+            ((JObject)plan["statefulComponentExtractions"][0]).Remove("assetPath");
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateStatefulSnapshotContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That((JArray)runnerPlan["statefulComponentExtractions"], Is.Empty);
+            JObject extraction = (JObject)runnerPlan["variantComponentExtractions"][0];
+            Assert.That(extraction.Value<string>("id"), Is.EqualTo("stateful_variant_1"));
+            Assert.That(
+                extraction.Value<string>("assetPath"),
+                Does.StartWith("Assets/UI/Prefab/Common/stateful_variant_1").And.EndWith(".prefab"));
+            Assert.That(extraction.Value<string>("template"), Is.EqualTo("Root/Cards/[DayCard_1]"));
+            Assert.That(extraction["instances"].OfType<JObject>().Select(item => item.Value<string>("source")),
+                Is.EqualTo(new[] { "Root/Cards/[DayCard_1]", "Root/Cards/[DayCard_1]" }));
+        }
+
+        [Test]
+        public void VersionTwoPlanFallsBackToVariantWhenStatefulStateMemberIsNotAnObservedDirectChild()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["statefulComponentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "day_marker",
+                    ["template"] = "node:n000002",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/DayMarker.prefab",
+                    ["common"] = new JObject
+                    {
                         ["source"] = "node:n000002",
                         ["members"] = new JArray
                         {
@@ -1001,6 +1341,7 @@ namespace PsdLayoutTool2.Tests
                             ["members"] = new JArray
                             {
                                 new JObject { ["sourceName"] = "AvailableBackground", ["name"] = "Background" },
+                                new JObject { ["sourceName"] = "DayMarkerLock", ["name"] = "Lock" },
                             },
                         },
                     },
@@ -1010,25 +1351,22 @@ namespace PsdLayoutTool2.Tests
                         new JObject
                         {
                             ["source"] = "node:n000002",
-                            ["name"] = "[DayCard_1]",
+                            ["name"] = "[DayMarker_1]",
                             ["state"] = "locked",
                             ["commonSourceNames"] = new JArray(),
                             ["stateSourceNames"] = new JArray(),
                         },
                         new JObject
                         {
-                            ["source"] = "node:n000002",
-                            ["name"] = "[DayCard_2]",
-                            ["state"] = "locked",
+                            ["source"] = "node:n000006",
+                            ["name"] = "[DayMarker_2]",
+                            ["state"] = "available",
                             ["commonSourceNames"] = new JArray(),
                             ["stateSourceNames"] = new JArray(),
                         },
                     },
                 },
             };
-            ((JObject)plan["statefulComponentExtractions"][0]).Remove("id");
-            ((JObject)plan["statefulComponentExtractions"][0]).Remove("template");
-            ((JObject)plan["statefulComponentExtractions"][0]).Remove("assetPath");
 
             bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
                 CreateStatefulSnapshotContext(),
@@ -1039,12 +1377,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prepared, Is.True, error);
             var runnerPlan = JObject.Parse(runnerPlanJson);
             Assert.That((JArray)runnerPlan["statefulComponentExtractions"], Is.Empty);
-            JObject extraction = (JObject)runnerPlan["variantComponentExtractions"][0];
-            Assert.That(extraction.Value<string>("id"), Is.EqualTo("stateful_variant_1"));
-            Assert.That(extraction.Value<string>("assetPath"), Is.EqualTo("Assets/UI/Prefab/Common/stateful_variant_1.prefab"));
-            Assert.That(extraction.Value<string>("template"), Is.EqualTo("Root/Cards/[DayCard_1]"));
-            Assert.That(extraction["instances"].OfType<JObject>().Select(item => item.Value<string>("source")),
-                Is.EqualTo(new[] { "Root/Cards/[DayCard_1]", "Root/Cards/[DayCard_1]" }));
+            Assert.That((JArray)runnerPlan["variantComponentExtractions"], Has.Count.EqualTo(1));
+            Assert.That(runnerPlan["variantComponentExtractions"][0].Value<string>("id"), Is.EqualTo("day_marker"));
         }
 
         [Test]
@@ -1290,19 +1624,21 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void NativeBackendKeepsMetadataOnlyPlansOnDirectPath()
+        public void NativeBackendRoutesContainmentPlansThroughGeneratedPayload()
         {
             var plan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
             plan["componentFamilyDecisions"] = new JArray
             {
                 new JObject { ["mode"] = "skip" },
             };
+            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(plan.ToString()), Is.False);
+
             plan["containmentFindings"] = new JArray
             {
                 new JObject { ["id"] = "finding" },
             };
 
-            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(plan.ToString()), Is.False);
+            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(plan.ToString()), Is.True);
         }
 
         [Test]
@@ -1339,6 +1675,98 @@ namespace PsdLayoutTool2.Tests
             Assert.That((JArray)preflight["textureRenames"], Is.Empty);
             Assert.That((JArray)preflight["spriteAtlasRenames"], Is.Empty);
             Assert.That((JArray)preflight["componentExtractions"], Has.Count.EqualTo(1));
+        }
+
+        private static PsdHierarchyChatContext CreateFlatSiblingContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root\",\"parentId\":\"\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/ActionButtonPrimary\",\"parentId\":\"n000001\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000003\",\"path\":\"Root/TimerLabel\",\"parentId\":\"n000001\",\"siblingIndex\":1}," +
+                "{\"id\":\"n000004\",\"path\":\"Root/DurationLabel\",\"parentId\":\"n000001\",\"siblingIndex\":2}," +
+                "{\"id\":\"n000005\",\"path\":\"Root/ActionButtonSecondary\",\"parentId\":\"n000001\",\"siblingIndex\":3}," +
+                "{\"id\":\"n000006\",\"path\":\"Root/[BottomBar]\",\"parentId\":\"n000001\",\"siblingIndex\":4}," +
+                "{\"id\":\"n000007\",\"path\":\"Root/[BottomBar]/Detail\",\"parentId\":\"n000006\",\"siblingIndex\":0}]," +
+                "\"flatSiblingFindings\":[{\"id\":\"flat_sibling_001\",\"parent\":\"node:n000001\"," +
+                "\"background\":\"node:n000002\",\"members\":[\"node:n000002\",\"node:n000003\",\"node:n000004\",\"node:n000005\"]}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateMultipleFlatSiblingContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root\",\"parentId\":\"\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/ActionButtonPrimary\",\"parentId\":\"n000001\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000003\",\"path\":\"Root/TimerLabel\",\"parentId\":\"n000001\",\"siblingIndex\":1}," +
+                "{\"id\":\"n000004\",\"path\":\"Root/DurationLabel\",\"parentId\":\"n000001\",\"siblingIndex\":2}," +
+                "{\"id\":\"n000005\",\"path\":\"Root/ActionButtonSecondary\",\"parentId\":\"n000001\",\"siblingIndex\":3}," +
+                "{\"id\":\"n000006\",\"path\":\"Root/SecondBackground\",\"parentId\":\"n000001\",\"siblingIndex\":4}," +
+                "{\"id\":\"n000007\",\"path\":\"Root/SecondLabel\",\"parentId\":\"n000001\",\"siblingIndex\":5}]," +
+                "\"flatSiblingFindings\":[" +
+                "{\"id\":\"flat_sibling_001\",\"parent\":\"node:n000001\",\"background\":\"node:n000002\",\"members\":[\"node:n000002\",\"node:n000003\",\"node:n000004\"]}," +
+                "{\"id\":\"flat_sibling_002\",\"parent\":\"node:n000001\",\"background\":\"node:n000005\",\"members\":[\"node:n000005\",\"node:n000006\",\"node:n000007\"]}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static string CreateFlatSiblingGroupPlan(string wrapperParent)
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"));
+            plan["wrappers"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "legacy_wrapper",
+                    ["parent"] = wrapperParent,
+                    ["name"] = "[LegacyGroup]",
+                    ["siblingIndex"] = 5,
+                },
+            };
+            plan["moves"] = new JArray
+            {
+                new JObject { ["source"] = "node:n000002", ["destination"] = "@legacy_wrapper", ["siblingIndex"] = 0 },
+                new JObject { ["source"] = "node:n000003", ["destination"] = "@legacy_wrapper", ["siblingIndex"] = 1 },
+                new JObject { ["source"] = "node:n000004", ["destination"] = "@legacy_wrapper", ["siblingIndex"] = 2 },
+                new JObject { ["source"] = "node:n000005", ["destination"] = "@legacy_wrapper", ["siblingIndex"] = 3 },
+            };
+            plan["tightBounds"] = new JArray
+            {
+                new JObject { ["target"] = "@legacy_wrapper" },
+            };
+            plan["flatSiblingResolutions"] = new JArray
+            {
+                new JObject
+                {
+                    ["findingId"] = "flat_sibling_001",
+                    ["mode"] = "group",
+                    ["wrapperId"] = "legacy_wrapper",
+                },
+            };
+            return plan.ToString();
         }
 
         private static PsdHierarchyChatContext CreateNodeSnapshotContext()

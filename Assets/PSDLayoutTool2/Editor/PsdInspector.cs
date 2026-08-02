@@ -294,6 +294,20 @@
                         GeneratePrefabWithMissingProfileRecovery(assetPath);
                     }
 
+                    bool fullCleanupReplayAvailable =
+                        PsdImporter.IsFullGenerationCleanupReplayAvailable(assetPath);
+                    using (new EditorGUI.DisabledScope(!fullCleanupReplayAvailable))
+                    {
+                        if (GUILayout.Button(new GUIContent(
+                                Localize("重新生成并重放整理", "Regenerate With Confirmed Cleanup"),
+                                Localize(
+                                    "重新生成 PSD 原始候选，并重放已经确认的整理阶段；不会再次请求 AI 重新规划。",
+                                    "Regenerate the raw PSD candidate and replay confirmed cleanup stages without asking AI to plan again."))))
+                        {
+                            PsdImporter.GeneratePrefabWithCleanupReplay(assetPath);
+                        }
+                    }
+
                     bool incrementalUpdateAvailable =
                         PsdImporter.IsIncrementalPrefabUpdateAvailable(assetPath);
                     if (ShouldShowIncrementalUpdateButton(incrementalUpdateAvailable))

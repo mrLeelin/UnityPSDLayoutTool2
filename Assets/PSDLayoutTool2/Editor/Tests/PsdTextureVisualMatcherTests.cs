@@ -59,10 +59,10 @@ namespace PsdLayoutTool2.Tests
             var index = new PsdTextureReuseIndex();
             Color32[] first = CreateSolidPixels(16, 16, new Color32(220, 160, 40, 255));
             Color32[] second = CreateSolidPixels(16, 16, new Color32(222, 159, 42, 255));
-            index.Add("ui_daily_jfhz", "first-hash", "ordinary", 16, 16, first, "first.png");
+            index.Add("source_texture_name", "first-hash", "ordinary", 16, 16, first, "first.png");
 
             string existingPath;
-            Assert.That(index.TryFind("ui_daily_jfhz", "second-hash", "ordinary", 16, 16, second, out existingPath), Is.True);
+            Assert.That(index.TryFind("source_texture_name", "second-hash", "ordinary", 16, 16, second, out existingPath), Is.True);
             Assert.That(existingPath, Is.EqualTo("first.png"));
         }
 

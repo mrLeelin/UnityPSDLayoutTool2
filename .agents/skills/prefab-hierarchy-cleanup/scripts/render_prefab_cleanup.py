@@ -148,6 +148,13 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         raw.get("containmentResolutions", []),
         "containmentResolutions",
     )
+    flat_sibling_findings = raw.get("flatSiblingFindings", [])
+    if not isinstance(flat_sibling_findings, list):
+        fail("flatSiblingFindings must be a list")
+    flat_sibling_resolutions = require_list(
+        raw.get("flatSiblingResolutions", []),
+        "flatSiblingResolutions",
+    )
 
     if (texture_renames or atlas_renames) and not VIEW_RE.match(prefab_name):
         fail("prefabName must be PascalCase and end with View when renaming private assets")
@@ -211,7 +218,7 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
             fail(f"duplicate empty container removal source: {source}")
         removal_sources.add(source)
 
-    if not tight_bounds:
+    if "tightBounds" not in raw:
         tight_bounds = [{"target": "@" + wrapper["id"]} for wrapper in wrappers]
 
     tight_targets: set[str] = set()
@@ -226,10 +233,6 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         if target in tight_targets:
             fail(f"duplicate tightBounds target: {target}")
         tight_targets.add(target)
-    for wrapper_id in wrapper_ids:
-        if "@" + wrapper_id not in tight_targets:
-            fail(f"wrappers must have a tightBounds entry: @{wrapper_id}")
-
     extraction_ids: set[str] = set()
     extraction_asset_paths: set[str] = set()
     extraction_instance_paths: set[str] = set()
@@ -670,6 +673,105 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
                     f"{resolution['newParent']}, which is not inside {contained_by}"
                 )
 
+    flat_findings_by_id: dict[str, dict] = {}
+    for index, finding in enumerate(flat_sibling_findings):
+        label = f"flatSiblingFindings[{index}]"
+        if not isinstance(finding, dict):
+            fail(f"{label} must be an object")
+        finding_id = require_string(finding.get("id"), f"{label}.id")
+        if finding_id in flat_findings_by_id:
+            fail(f"duplicate flatSiblingFindings id: {finding_id}")
+        flat_findings_by_id[finding_id] = finding
+
+    if not flat_findings_by_id and flat_sibling_resolutions:
+        fail("flatSiblingResolutions must be empty because there are no flatSiblingFindings")
+
+    wrappers_by_id = {wrapper["id"]: wrapper for wrapper in wrappers}
+    flat_resolutions_by_finding: dict[str, dict] = {}
+    for index, resolution in enumerate(flat_sibling_resolutions):
+        label = f"flatSiblingResolutions[{index}]"
+        if not isinstance(resolution, dict):
+            fail(f"{label} must be an object")
+        finding_id = require_string(resolution.get("findingId"), f"{label}.findingId")
+        if finding_id in flat_resolutions_by_finding:
+            fail(f"duplicate flatSiblingResolutions findingId: {finding_id}")
+        if finding_id not in flat_findings_by_id:
+            fail(f"{label}.findingId is not in the authoritative snapshot")
+        mode = require_string(resolution.get("mode"), f"{label}.mode")
+        if mode not in {"group", "keep"}:
+            fail(f"{label}.mode must be group or keep")
+        if mode == "group":
+            wrapper_id = require_string(resolution.get("wrapperId"), f"{label}.wrapperId")
+            if wrapper_id not in wrappers_by_id:
+                fail(f"{label}.wrapperId must name a wrapper")
+        else:
+            evidence = require_string(resolution.get("evidence"), f"{label}.evidence")
+            if len(evidence) < 20:
+                fail(
+                    f"{label}.evidence must explain in at least 20 characters why the "
+                    "measured visual cluster stays flat"
+                )
+        flat_resolutions_by_finding[finding_id] = resolution
+
+    for index, finding in enumerate(flat_sibling_findings):
+        label = f"flatSiblingFindings[{index}]"
+        if not isinstance(finding, dict):
+            fail(f"{label} must be an object")
+        finding_id = require_string(finding.get("id"), f"{label}.id")
+        parent = require_string(finding.get("parent"), f"{label}.parent")
+        background = require_string(finding.get("background"), f"{label}.background")
+        raw_members = finding.get("members")
+        if not isinstance(raw_members, list):
+            fail(f"{label}.members must be a list")
+        members = [
+            require_string(member, f"{label}.members[{member_index}]")
+            for member_index, member in enumerate(raw_members)
+        ]
+        if len(members) < 3:
+            fail(f"{label}.members must contain at least three non-empty paths")
+        if len(members) != len(set(members)):
+            fail(f"{label}.members must not contain duplicates")
+        if background not in members:
+            fail(f"{label}.background must be one of its members")
+        resolution = flat_resolutions_by_finding.get(finding_id)
+        if resolution is None:
+            fail(f"flatSiblingResolutions must resolve {finding_id}")
+        if resolution["mode"] != "group":
+            continue
+
+        wrapper_id = resolution["wrapperId"]
+        wrapper = wrappers_by_id[wrapper_id]
+        if wrapper["parent"] != parent:
+            fail(
+                f"flatSiblingResolutions for {finding_id} must create its wrapper under "
+                f"{parent}"
+            )
+        destination = "@" + wrapper_id
+        moves_by_source = {move["source"]: move for move in moves}
+        for member_index, member in enumerate(members):
+            move = moves_by_source.get(member)
+            if move is None or move["destination"] != destination:
+                fail(
+                    f"flatSiblingResolutions for {finding_id} must move {member} "
+                    f"to {destination}"
+                )
+            if move["siblingIndex"] != member_index:
+                fail(
+                    f"flatSiblingResolutions for {finding_id} must preserve member "
+                    f"order for {member}"
+                )
+        if not any(
+            bound["target"] == destination
+            for bound in tight_bounds
+        ):
+            fail(
+                f"flatSiblingResolutions for {finding_id} must tighten {destination}"
+            )
+
+    for wrapper_id in wrapper_ids:
+        if "@" + wrapper_id not in tight_targets:
+            fail(f"wrappers must have a tightBounds entry: @{wrapper_id}")
+
     asset_targets: set[str] = set()
     for label, entries in (("textureRenames", texture_renames), ("spriteAtlasRenames", atlas_renames)):
         for index, rename in enumerate(entries):
@@ -748,6 +850,8 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
         "required_component_families": required_component_families,
         "containment_findings": containment_findings,
         "containment_resolutions": containment_resolutions,
+        "flat_sibling_findings": flat_sibling_findings,
+        "flat_sibling_resolutions": flat_sibling_resolutions,
         "verify": verify,
     }
 
@@ -1004,6 +1108,11 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
             label = f"containmentFindings[{index}].mapping[{pair_index}]"
             assert_path(f"{label}.source", pair["source"])
             assert_path(f"{label}.containedBy", pair["containedBy"])
+    for index, finding in enumerate(plan["flat_sibling_findings"]):
+        assert_path(f"flatSiblingFindings[{index}].parent", finding["parent"])
+        assert_path(f"flatSiblingFindings[{index}].background", finding["background"])
+        for member_index, member in enumerate(finding["members"]):
+            assert_path(f"flatSiblingFindings[{index}].members[{member_index}]", member)
     for index, extraction in enumerate(plan["component_extractions"]):
         assert_path(f"componentExtractions[{index}].template", extraction["template"])
         for instance_index, instance in enumerate(extraction["instances"]):
@@ -1138,6 +1247,16 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
         lines.append(
             f"    preflightMoveSource{index}.SetSiblingIndex({move['siblingIndex']});"
         )
+
+    for tight_bound in plan["tight_bounds"]:
+        target = tight_bound["target"]
+        target_expr = (
+            f"{preflight_wrapper_vars[target[1:]]}.GetComponent<RectTransform>()"
+            if target.startswith("@")
+            else f"FindByPath(root, {csharp(target)}).GetComponent<RectTransform>()"
+        )
+        remove_empty_wrapper = "true" if target.startswith("@") else "false"
+        lines.append(f"    TightenToChildren({target_expr}, {remove_empty_wrapper});")
 
     if plan["empty_container_removals"]:
         lines.append("    var preflightRemovalErrors = new List<string>();")
@@ -1347,11 +1466,16 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    Object.DestroyImmediate(container.gameObject);",
         "}",
         "",
-        "void TightenToChildren(RectTransform rect)",
+        "void TightenToChildren(RectTransform rect, bool removeEmptyWrapper)",
         "{",
-        "    if (rect.childCount == 0) throw new InvalidOperationException(\"Cannot tighten an empty wrapper: \" + rect.name);",
+        "    if (rect == null) throw new InvalidOperationException(\"Tight-bounds target is not a RectTransform\");",
         "    var parent = rect.parent as RectTransform;",
         "    if (parent == null) throw new InvalidOperationException(\"Wrapper has no RectTransform parent: \" + rect.name);",
+        "    if (rect.childCount == 0)",
+        "    {",
+        "        if (!removeEmptyWrapper) throw new InvalidOperationException(\"Cannot tighten an empty wrapper: \" + rect.name);",
+        "        Object.DestroyImmediate(rect.gameObject); return;",
+        "    }",
         "    var bounds = new Bounds(); var initialized = false;",
         "    for (var childIndex = 0; childIndex < rect.childCount; childIndex++)",
         "    {",
@@ -1622,6 +1746,20 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    }",
         "}",
         "",
+        "void CopyVariantStateOverrides(Transform source, Transform destination)",
+        "{",
+        "    var objectMap = new Dictionary<Object, Object>(); BuildObjectMap(source, destination, objectMap);",
+        "    destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag;",
+        "    foreach (var sourceComponent in source.GetComponents<Component>())",
+        "    {",
+        "        if (sourceComponent == null || sourceComponent is Transform) continue;",
+        "        var destinationComponent = (Component)objectMap[sourceComponent]; EditorUtility.CopySerialized(sourceComponent, destinationComponent); RemapObjectReferences(destinationComponent, objectMap);",
+        "        PrefabUtility.RecordPrefabInstancePropertyModifications(destinationComponent);",
+        "    }",
+        "    CopyStateRootData(source, destination); destination.localRotation = Quaternion.identity; destination.localScale = Vector3.one;",
+        "    for (var childIndex = 0; childIndex < source.childCount; childIndex++) CopyHierarchyOverrides(source.GetChild(childIndex), destination.GetChild(childIndex), objectMap, true);",
+        "}",
+        "",
         "void CommitComponentAssetTransaction(List<KeyValuePair<string, string>> transaction)",
         "{",
         "    foreach (var pair in transaction) if (AssetDatabase.LoadAssetAtPath<GameObject>(pair.Key) == null) throw new InvalidOperationException(\"Component Prefab was not created: \" + pair.Key);",
@@ -1721,7 +1859,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    var statesContainer = new GameObject(\"[States]\", typeof(RectTransform)); statesContainer.transform.SetParent(builder.transform, false); var statesRect = statesContainer.GetComponent<RectTransform>(); statesRect.anchorMin = new Vector2(0.5f, 0.5f); statesRect.anchorMax = new Vector2(0.5f, 0.5f); statesRect.pivot = new Vector2(0.5f, 0.5f); statesRect.anchoredPosition3D = Vector3.zero; statesRect.sizeDelta = Vector2.zero; statesRect.localScale = Vector3.one; statesRect.localRotation = Quaternion.identity;",
         "    try",
         "    {",
-        "        for (var index = 0; index < sources.Length; index++) { var clone = Object.Instantiate(sources[index].gameObject, parent); clone.name = stateNames[index]; clone.transform.SetParent(statesContainer.transform, false); CopyStateRootData(template, clone.transform); clone.SetActive(index == defaultStateIndex); }",
+        "        for (var index = 0; index < sources.Length; index++) { var clone = Object.Instantiate(sources[index].gameObject, parent); clone.name = stateNames[index]; clone.transform.SetParent(statesContainer.transform, false); CopyStateRootData(sources[index], clone.transform); clone.SetActive(index == defaultStateIndex); }",
         "        AssertDirectChildren(builder.transform, new[] { \"[Common]\", \"[States]\" }, builder.name); AssertDirectChildren(statesContainer.transform, stateNames, builder.name + \"/[States]\"); AssertExclusiveActiveState(statesContainer.transform, stateNames[defaultStateIndex], builder.name);",
         "        var componentAsset = PrefabUtility.SaveAsPrefabAsset(builder, assetPath); if (componentAsset == null) throw new InvalidOperationException(\"Failed to save variant component Prefab: \" + assetPath); return componentAsset;",
         "    }",
@@ -1734,7 +1872,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    var sourcePath = TransformPath(source); var expectedSignature = StructureSignature(source); var beforeCorners = new List<Vector3[]>(); CaptureHierarchyCorners(source, beforeCorners);",
         "    var instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject; if (instance == null) throw new InvalidOperationException(\"Failed to instantiate variant component Prefab: \" + componentAsset.name);",
         "    var destination = instance.transform; destination.SetParent(parent, false); destination.SetSiblingIndex(siblingIndex); destination.name = instanceName; destination.gameObject.layer = source.gameObject.layer; destination.gameObject.tag = source.gameObject.tag; CopyTransformData(source, destination); destination.gameObject.SetActive(source.gameObject.activeSelf);",
-        "    var states = destination.Find(\"[States]\"); if (states == null) throw new InvalidOperationException(\"Variant component has no [States] container: \" + destination.name); var activeState = states.Find(activeStateName); if (activeState == null) throw new InvalidOperationException(\"Variant component state was not found: \" + activeStateName); CopyStateRootData(source, activeState); for (var index = 0; index < states.childCount; index++) states.GetChild(index).gameObject.SetActive(states.GetChild(index).name == activeStateName); AssertVariantState(destination, activeStateName, destination.name);",
+        "    var states = destination.Find(\"[States]\"); if (states == null) throw new InvalidOperationException(\"Variant component has no [States] container: \" + destination.name); var activeState = states.Find(activeStateName); if (activeState == null) throw new InvalidOperationException(\"Variant component state was not found: \" + activeStateName); CopyVariantStateOverrides(source, activeState); for (var index = 0; index < states.childCount; index++) states.GetChild(index).gameObject.SetActive(states.GetChild(index).name == activeStateName); AssertVariantState(destination, activeStateName, destination.name);",
         "    var actualSignature = StructureSignature(activeState); var actualRectTransforms = activeState.GetComponentsInChildren<RectTransform>(true).Length; if (beforeCorners.Count != actualRectTransforms || !string.Equals(expectedSignature, actualSignature, StringComparison.Ordinal)) throw new InvalidOperationException(\"Variant extraction structure mismatch: extractionId=\" + extractionId + \";instance=\" + instanceName + \";state=\" + activeStateName + \";source=\" + sourcePath + \";stateSource=\" + TransformPath(activeState) + \";componentAsset=\" + AssetDatabase.GetAssetPath(componentAsset) + \";expectedRectTransforms=\" + beforeCorners.Count + \";actualRectTransforms=\" + actualRectTransforms + \";expectedSignature=\" + expectedSignature + \";actualSignature=\" + actualSignature);",
         "    Object.DestroyImmediate(source.gameObject); AssertHierarchyCorners(states.GetChild(FindStateIndex(states, activeStateName)), beforeCorners, destination.name); return instance;",
         "}",
@@ -1880,7 +2018,7 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "bool IsNonSemanticObjectName(string name)",
         "{",
         "    if (!System.Text.RegularExpressions.Regex.IsMatch(name, @\"^[A-Za-z0-9_\\[\\]]+$\")) return true;",
-        "    return System.Text.RegularExpressions.Regex.IsMatch(name, @\"^(?:\\d+(?:_\\d+)?|\\d+(?:\\.\\d+)?[kKmM]|\\d+[A-Za-z]\\d+[A-Za-z]|[+_-]+|img_v\\d.*|(?:ui|daily)_[A-Za-z0-9_]+)$\");",
+        "    return System.Text.RegularExpressions.Regex.IsMatch(name, @\"^(?:\\d+(?:_\\d+)?|\\d+(?:\\.\\d+)?[kKmM]|\\d+[A-Za-z]\\d+[A-Za-z]|[+_-]+|img_v\\d.*|ui_[A-Za-z0-9_]+)$\");",
         "}",
         "",
     ]
@@ -1999,6 +2137,17 @@ def render(plan: dict[str, Any], mode: str) -> str:
                 label = f"containmentFindings[{index}].mapping[{pair_index}]"
                 assert_replay_path(f"{label}.source", pair["source"])
                 assert_replay_path(f"{label}.containedBy", pair["containedBy"])
+        for index, finding in enumerate(plan["flat_sibling_findings"]):
+            assert_replay_path(
+                f"flatSiblingFindings[{index}].parent", finding["parent"]
+            )
+            assert_replay_path(
+                f"flatSiblingFindings[{index}].background", finding["background"]
+            )
+            for member_index, member in enumerate(finding["members"]):
+                assert_replay_path(
+                    f"flatSiblingFindings[{index}].members[{member_index}]", member
+                )
         for index, extraction in enumerate(plan["component_extractions"]):
             assert_replay_path(
                 f"componentExtractions[{index}].template", extraction["template"]
@@ -2129,14 +2278,14 @@ def render(plan: dict[str, Any], mode: str) -> str:
         lines.append(f"    var {variable} = CreateWrapper({parent_expr}, {csharp(wrapper['name'])}, {wrapper['siblingIndex']});")
         lines.append(f"    excludedCornerNodes.Add({variable}.transform);")
 
-    tight_vars: list[str] = []
+    tight_vars: list[tuple[str, bool]] = []
     for index, tight_bound in enumerate(plan["tight_bounds"]):
         target = tight_bound["target"]
         variable = f"tightTarget{index}"
-        tight_vars.append(variable)
+        tight_vars.append((variable, target.startswith("@")))
         target_expr = f"{wrapper_vars[target[1:]]}.GetComponent<RectTransform>()" if target.startswith("@") else f"FindByPath(root, {csharp(target)}).GetComponent<RectTransform>()"
         lines.append(f"    var {variable} = {target_expr};")
-    for variable in tight_vars:
+    for variable, _ in tight_vars:
         lines.append(f"    excludedCornerNodes.Add({variable}.transform);")
     for variable in removal_vars:
         lines.append(f"    excludedCornerNodes.Add({variable});")
@@ -2167,8 +2316,10 @@ def render(plan: dict[str, Any], mode: str) -> str:
         target = rename["target"]
         target_expr = wrapper_vars[target[1:]] if target.startswith("@") else f"renameTarget{index}"
         lines.append(f"    {target_expr}.name = {csharp(rename['name'])};")
-    for variable in tight_vars:
-        lines.append(f"    TightenToChildren({variable});")
+    for variable, remove_empty_wrapper in tight_vars:
+        lines.append(
+            f"    TightenToChildren({variable}, {'true' if remove_empty_wrapper else 'false'});"
+        )
     for variable in removal_vars:
         lines.append(f"    RemoveEmptyContainer(root.transform, {variable});")
     for extraction_index, extraction in enumerate(plan["component_extractions"]):

@@ -110,6 +110,93 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void FlatSiblingFindingsReportAContainedSequentialLeafCluster()
+        {
+            var nodes = new JArray
+            {
+                CreateFlatSiblingNode("n000001", string.Empty, "Screen", 0, 4, -540f, -1170f, 540f, 1170f),
+                CreateFlatSiblingNode("n000122", "n000001", "ActionButtonPrimary", 5, 0, -280f, 666f, 280f, 879f),
+                CreateFlatSiblingNode("n000123", "n000001", "Timer", 6, 0, -83f, 689f, -32f, 740f),
+                CreateFlatSiblingNode("n000124", "n000001", "DurationLabel", 7, 0, -18f, 702f, 70f, 727f),
+                CreateFlatSiblingNode("n000125", "n000001", "ActionButtonSecondary", 8, 0, -204f, 749f, 205f, 818f),
+            };
+
+            JArray findings = PsdHierarchyChatContextBuilder.BuildFlatSiblingFindings(nodes);
+
+            Assert.That(findings, Has.Count.EqualTo(1));
+            JObject finding = (JObject)findings[0];
+            Assert.That(finding.Value<string>("id"), Is.EqualTo("flat_sibling_001"));
+            Assert.That(finding.Value<string>("parent"), Is.EqualTo("node:n000001"));
+            Assert.That(finding.Value<string>("background"), Is.EqualTo("node:n000122"));
+            Assert.That(((JArray)finding["members"]).Values<string>(), Is.EqualTo(new[]
+            {
+                "node:n000122",
+                "node:n000123",
+                "node:n000124",
+                "node:n000125",
+            }));
+        }
+
+        [Test]
+        public void GeneratedFlatSiblingWrappersUnderPluralParentAreSemanticComponentCandidates()
+        {
+            var nodes = new JArray
+            {
+                CreateCandidateNode("n000001", string.Empty, "ExampleView", 0, 1),
+                CreateCandidateNode("n000002", "n000001", "[DayMarkers]", 0, 5),
+                CreateCandidateNode("n000003", "n000002", "[FlatSibling_flat_sibling_001]", 0, 4, 128f, 216f),
+                CreateCandidateNode("n000004", "n000002", "[FlatSibling_flat_sibling_002]", 1, 4, 128f, 216f),
+                CreateCandidateNode("n000005", "n000002", "[FlatSibling_flat_sibling_003]", 2, 4, 128f, 216f),
+                CreateCandidateNode("n000006", "n000002", "[FlatSibling_flat_sibling_004]", 3, 4, 128f, 216f),
+                CreateCandidateNode("n000007", "n000002", "[FlatSibling_flat_sibling_005]", 4, 4, 128f, 216f),
+            };
+
+            JArray candidates = PsdHierarchyChatContextBuilder.BuildComponentFamilyCandidates(nodes);
+
+            JObject candidate = candidates.OfType<JObject>().Single();
+            Assert.That(candidate.Value<string>("suggestedAssetName"), Is.EqualTo("DayMarker"));
+            Assert.That(candidate.Value<bool>("requiresExtraction"), Is.True);
+            Assert.That(((JArray)candidate["sources"]).Values<string>(), Is.EqualTo(new[]
+            {
+                "node:n000003", "node:n000004", "node:n000005", "node:n000006", "node:n000007",
+            }));
+        }
+
+        [Test]
+        public void GeneratedFlatSiblingWrappersUnderDuplicateRootContainerAreNotComponentCandidates()
+        {
+            var nodes = new JArray
+            {
+                CreateCandidateNode("n000001", string.Empty, "ExampleView", 0, 1),
+                CreateCandidateNode("n000002", "n000001", "ExampleView", 0, 3),
+                CreateCandidateNode("n000003", "n000002", "[FlatSibling_flat_sibling_001]", 0, 3),
+                CreateCandidateNode("n000004", "n000002", "[FlatSibling_flat_sibling_002]", 1, 3),
+                CreateCandidateNode("n000005", "n000002", "[FlatSibling_flat_sibling_003]", 2, 3),
+            };
+
+            Assert.That(PsdHierarchyChatContextBuilder.BuildComponentFamilyCandidates(nodes), Is.Empty);
+        }
+
+        [Test]
+        public void ComponentFamilyCandidatesExcludeNestedPrefabContents()
+        {
+            var nodes = new JArray
+            {
+                CreateCandidateNode("n000001", string.Empty, "ExampleView", 0, 1),
+                CreateCandidateNode("n000002", "n000001", "[TaskItem_1]", 0, 1),
+                CreateCandidateNode("n000003", "n000002", "[States]", 0, 3),
+                CreateCandidateNode("n000004", "n000003", "[State_1]", 0, 1),
+                CreateCandidateNode("n000005", "n000003", "[State_2]", 1, 1),
+                CreateCandidateNode("n000006", "n000003", "[State_3]", 2, 1),
+            };
+            nodes[1]["nestedPrefabAssetPath"] = "Assets/UI/Common/TaskItem.prefab";
+
+            JArray candidates = PsdHierarchyChatContextBuilder.BuildComponentFamilyCandidates(nodes);
+
+            Assert.That(candidates, Is.Empty);
+        }
+
+        [Test]
         public void NumberedRepeatedUnitsIncludeMatchingBareIndexSibling()
         {
             var nodes = new JArray
@@ -317,6 +404,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(instructions, Does.Contain("include the complete reviewed extraction contract"));
             Assert.That(instructions, Does.Contain("requiresExtraction:false are advisory"));
             Assert.That(instructions, Does.Contain("do not force a variant solely because sibling names repeat"));
+            Assert.That(instructions, Does.Contain("flatSiblingFindings").And.Contain("flatSiblingResolutions"));
+            Assert.That(instructions, Does.Contain("Never move a finding into an existing unrelated container"));
             Assert.That(instructions, Does.Contain("one observed state for every distinct recursive structure"));
             Assert.That(instructions, Does.Contain("must not be skipped"));
             Assert.That(instructions, Does.Contain("Return an auditable analysis summary"));
@@ -351,6 +440,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("stateSourceNames").And.Contain("direct children"));
             Assert.That(prompt, Does.Contain("commonSourceNames").And.Contain("derive the other"));
             Assert.That(prompt, Does.Contain("Repeated unit structure differs for component extraction"));
+            Assert.That(prompt, Does.Contain("flatSiblingFindings").And.Contain("flatSiblingResolutions"));
             Assert.That(prompt, Does.Not.Contain("original pre-apply full path"));
         }
 
@@ -486,6 +576,37 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 structures[1]["directChildren"].Values<string>(),
                 Is.EqualTo(new[] { "RewardIcon", "RequiredScore" }));
+        }
+
+        [Test]
+        public void PlanRepairPromptReplaysEveryFlatSiblingFindingExactly()
+        {
+            const string snapshot =
+                "{\"fingerprint\":\"snapshot-123\",\"nodes\":[]," +
+                "\"flatSiblingFindings\":[" +
+                "{\"id\":\"flat_sibling_001\",\"parent\":\"node:n000001\",\"background\":\"node:n000002\",\"members\":[\"node:n000002\",\"node:n000003\",\"node:n000004\"]}," +
+                "{\"id\":\"flat_sibling_002\",\"parent\":\"node:n000001\",\"background\":\"node:n000005\",\"members\":[\"node:n000005\",\"node:n000006\",\"node:n000007\"]}," +
+                "{\"id\":\"flat_sibling_003\",\"parent\":\"node:n000008\",\"background\":\"node:n000009\",\"members\":[\"node:n000009\",\"node:n000010\",\"node:n000011\"]}]}";
+            var context = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+
+            string prompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(
+                "flatSiblingResolutions must resolve flat_sibling_001, flat_sibling_002, and flat_sibling_003.",
+                context);
+
+            Assert.That(prompt, Does.Contain("BEGIN FLAT SIBLING FINDINGS"));
+            Assert.That(prompt, Does.Contain("flat_sibling_001").And.Contain("flat_sibling_002").And.Contain("flat_sibling_003"));
+            Assert.That(prompt, Does.Contain("node:n000002").And.Contain("node:n000011"));
+            Assert.That(prompt, Does.Contain("mode=group").And.Contain("wrapperId=<findingId>_group"));
         }
 
         [Test]
@@ -796,6 +917,22 @@ namespace PsdLayoutTool2.Tests
                     ["sizeDelta"] = new JArray(width, height),
                 },
             };
+        }
+
+        private static JObject CreateFlatSiblingNode(
+            string id,
+            string parentId,
+            string name,
+            int siblingIndex,
+            int childCount,
+            float left,
+            float bottom,
+            float right,
+            float top)
+        {
+            JObject node = CreateCandidateNode(id, parentId, name, siblingIndex, childCount);
+            node["worldRect"] = new JArray(left, bottom, right, top);
+            return node;
         }
 
         private static PsdHierarchyChatConnection CreateCustomApiConnection(

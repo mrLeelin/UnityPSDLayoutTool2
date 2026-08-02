@@ -41,6 +41,7 @@ namespace PsdLayoutTool2
         private string pendingPlanJson = string.Empty;
         private bool initialRequestQueued;
         private bool isSending;
+        private bool hasAppliedCleanupStage;
         private bool hasActiveConnection;
 
         [MenuItem("Tools/PSD Layout Tool 2/AI Hierarchy Chat")]
@@ -93,6 +94,9 @@ namespace PsdLayoutTool2
             conversation.Clear();
             initialRequestQueued = false;
             isSending = false;
+            hasAppliedCleanupStage = PsdHierarchyCleanupReplayProfile.HasConfirmedStages(
+                chatContext.sourcePsdAssetPath,
+                chatContext.targetPrefabAssetPath);
             hasActiveConnection = false;
             activeConnection = default(PsdHierarchyChatConnection);
             cliSessionId = string.Empty;
@@ -534,10 +538,17 @@ namespace PsdLayoutTool2
             try
             {
                 PsdHierarchyChatCleanupExecutionResult result =
-                    await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(context, planToApply);
+                    await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(
+                        context,
+                        planToApply,
+                        ShouldReplaceReplayProfile(hasAppliedCleanupStage));
                 HideThinkingIndicator();
                 AppendMessage("system", result.message);
                 SetSending(false, result.success ? "更新完成" : "更新失败");
+                if (result.success)
+                {
+                    hasAppliedCleanupStage = true;
+                }
                 queueComponentExtractionFollowUp = result.success &&
                                                    IsHierarchyOnlyPlan(planToApply);
                 if (!result.success)
@@ -645,6 +656,11 @@ namespace PsdLayoutTool2
             {
                 return false;
             }
+        }
+
+        internal static bool ShouldReplaceReplayProfile(bool hasAppliedCleanupStage)
+        {
+            return !hasAppliedCleanupStage;
         }
 
         internal void ShowThinkingIndicator(string content = "正在分析：读取整理技能、完整层级、节点几何、组件与重复结构...")

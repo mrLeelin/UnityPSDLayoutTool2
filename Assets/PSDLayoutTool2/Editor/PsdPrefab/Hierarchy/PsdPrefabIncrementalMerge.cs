@@ -318,7 +318,7 @@ namespace PsdLayoutTool2
                     BuildAmbiguousAdoptionMessage(candidate, visualMatches));
 
             // The importer has already made sibling names unique (for example,
-            // repeated PSD layers become day_1, day_2, ...).  During the first
+            // repeated PSD layers become item_1, item_2, ...).  During the first
             // incremental adoption those stable generated names, together with
             // the emitted component shape, are the final deterministic evidence
             // when import-time layout/style calculation changed.  Do not use the

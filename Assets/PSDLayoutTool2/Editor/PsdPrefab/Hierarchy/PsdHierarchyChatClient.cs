@@ -170,6 +170,7 @@ namespace PsdLayoutTool2
             directChildrenByPath = ParseDirectChildren(this.hierarchySnapshotJson);
             componentFamilyCandidates = ParseComponentFamilyCandidates(this.hierarchySnapshotJson);
             containmentFindings = ParseContainmentFindings(this.hierarchySnapshotJson);
+            flatSiblingFindings = ParseFlatSiblingFindings(this.hierarchySnapshotJson);
         }
 
         internal readonly string projectRoot;
@@ -187,6 +188,7 @@ namespace PsdLayoutTool2
         // Kept as raw snapshot JSON: the plan writer copies these entries through to the
         // runner plan unchanged apart from node-reference resolution.
         internal readonly JArray containmentFindings;
+        internal readonly JArray flatSiblingFindings;
         private readonly Dictionary<string, string> nodePathsById;
         private readonly Dictionary<string, IReadOnlyList<PsdHierarchySnapshotChild>> directChildrenByPath;
 
@@ -221,6 +223,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
             builder.AppendLine("Do not propose, create, copy, or offer a .cleaned.prefab or any other replacement Prefab. Any later approved cleanup must target the supplied Prefab in place while preserving visual layout, generated assets, bindings, and unrelated components.");
             builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Each componentFamilyDecision for a supplied candidate must copy its candidateId, parent, and complete sources exactly. Candidates marked requiresExtraction:true must use component, state, variant, or stateful mode; skip is forbidden for them. Candidates marked requiresExtraction:false are advisory and may use skip with concrete structural evidence; do not force a variant solely because sibling names repeat. Do not silently omit a repeated component family.");
+            builder.AppendLine("When the snapshot includes flatSiblingFindings, set every finding's flatSiblingResolutions mode to group. Unity deterministically derives the wrapper id as <findingId>_group, the exact finding parent, the observed background siblingIndex, every listed member move in listed order, and tightBounds; do not invent alternate wrapper ids or destinations. These fields are normalized from the authoritative snapshot before execution.");
             builder.AppendLine("For a mandatory variant family, create one observed state for every distinct recursive structure and map every source to an exact matching state. Even when every source has a distinct structure, the mandatory family must not be skipped or reduced to hierarchy-only cleanup.");
             builder.AppendLine("Every extracted assetPath must be a new PascalCase .prefab directly under the target Prefab's sibling Common directory. Multiple non-overlapping component families and hierarchy cleanup operations are intentionally supported in one reviewed plan.");
             builder.AppendLine("Return an auditable analysis summary, not private chain-of-thought. In Simplified Chinese, use exactly these sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence.");
@@ -421,6 +424,27 @@ namespace PsdLayoutTool2
                 return new JArray();
             }
         }
+
+        private static JArray ParseFlatSiblingFindings(string snapshotJson)
+        {
+            if (string.IsNullOrWhiteSpace(snapshotJson))
+            {
+                return new JArray();
+            }
+
+            try
+            {
+                JObject snapshot = JObject.Parse(snapshotJson);
+                return snapshot["flatSiblingFindings"] is JArray entries
+                    ? (JArray)entries.DeepClone()
+                    : new JArray();
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                // Invalid snapshots are rejected by the context builder.
+                return new JArray();
+            }
+        }
     }
 
     internal static class PsdHierarchyChatContextBuilder
@@ -555,6 +579,7 @@ namespace PsdLayoutTool2
                     ["nodes"] = nodes,
                     ["componentFamilyCandidates"] = componentFamilyCandidates,
                     ["containmentFindings"] = BuildContainmentFindings(nodes, componentFamilyCandidates),
+                    ["flatSiblingFindings"] = BuildFlatSiblingFindings(nodes),
                 };
                 snapshotJson = snapshot.ToString(Formatting.None);
 
@@ -674,6 +699,7 @@ namespace PsdLayoutTool2
         // This report is part of the authoritative snapshot, not an AI guess.
         internal static JArray BuildComponentFamilyCandidates(JArray nodes)
         {
+            const string generatedFlatSiblingStem = "__generated_flat_sibling__";
             var nodeById = nodes
                 .OfType<JObject>()
                 .Where(node => !string.IsNullOrWhiteSpace(node.Value<string>("id")))
@@ -715,7 +741,8 @@ namespace PsdLayoutTool2
                         continue;
                     }
 
-                    if (!TryGetRepeatedFamilyStem(child.Value<string>("name"), out string stem))
+                    if (!TryGetRepeatedFamilyStem(child.Value<string>("name"), out string stem) &&
+                        !TryGetGeneratedFlatSiblingFamilyStem(child.Value<string>("name"), out stem))
                     {
                         if (TryGetBareRepeatedIndex(child.Value<string>("name"), out int bareIndex))
                         {
@@ -763,6 +790,12 @@ namespace PsdLayoutTool2
                     List<JObject> group = groupEntry.Value
                         .OrderBy(node => node.Value<int?>("siblingIndex") ?? int.MaxValue)
                         .ToList();
+                    if (string.Equals(groupEntry.Key, generatedFlatSiblingStem, StringComparison.Ordinal) &&
+                        IsDuplicateRootContainer(parentNode, nodeById))
+                    {
+                        continue;
+                    }
+
                     if (group.Count < 3 || !HasConsistentRectTransformFrame(group) ||
                         group.Any(node => ContainsNestedPrefab(node.Value<string>("id"), nodeById)))
                     {
@@ -785,7 +818,14 @@ namespace PsdLayoutTool2
                     // Structural differences select the extraction mode; they never make the
                     // complete family optional because a variant can preserve every observed shape.
                     bool requiresExtraction = true;
-                    string suggestedAssetName = ToSuggestedAssetName(groupEntry.Key);
+                    string suggestedAssetName = string.Equals(
+                        groupEntry.Key,
+                        generatedFlatSiblingStem,
+                        StringComparison.Ordinal)
+                        ? TryGetBareNumberedFamilyStem(parentNode.Value<string>("name"), out string parentStem)
+                            ? ToSuggestedAssetName(parentStem)
+                            : ToSuggestedAssetName(parentNode.Value<string>("name"))
+                        : ToSuggestedAssetName(groupEntry.Key);
                     string familyCandidateId = "family_" + candidateIndex.ToString("D3");
                     candidates.Add(new JObject
                     {
@@ -982,6 +1022,82 @@ namespace PsdLayoutTool2
 
         private const double ContainmentAreaRatioLimit = 0.25d;
 
+        // A flat visual unit is safe to flag only when source order and geometry agree:
+        // direct leaf siblings are consecutive and the first fully contains the rest.
+        internal static JArray BuildFlatSiblingFindings(JArray nodes)
+        {
+            var findings = new JArray();
+            var claimedNodeIds = new HashSet<string>(StringComparer.Ordinal);
+            IEnumerable<IGrouping<string, JObject>> siblingGroups = nodes
+                .OfType<JObject>()
+                .Where(node =>
+                    !string.IsNullOrWhiteSpace(node.Value<string>("id")) &&
+                    !string.IsNullOrWhiteSpace(node.Value<string>("parentId")) &&
+                    node.Value<int?>("childCount") == 0)
+                .GroupBy(node => node.Value<string>("parentId"), StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal);
+
+            foreach (IGrouping<string, JObject> group in siblingGroups)
+            {
+                List<JObject> siblings = group
+                    .OrderBy(node => node.Value<int?>("siblingIndex") ?? int.MaxValue)
+                    .ThenBy(node => node.Value<string>("id"), StringComparer.Ordinal)
+                    .ToList();
+                for (int startIndex = 0; startIndex < siblings.Count; startIndex++)
+                {
+                    JObject background = siblings[startIndex];
+                    string backgroundId = background.Value<string>("id");
+                    int? backgroundSiblingIndex = background.Value<int?>("siblingIndex");
+                    if (claimedNodeIds.Contains(backgroundId) || !backgroundSiblingIndex.HasValue)
+                    {
+                        continue;
+                    }
+
+                    var members = new List<JObject> { background };
+                    int expectedSiblingIndex = backgroundSiblingIndex.Value + 1;
+                    for (int memberIndex = startIndex + 1; memberIndex < siblings.Count; memberIndex++)
+                    {
+                        JObject member = siblings[memberIndex];
+                        string memberId = member.Value<string>("id");
+                        if (claimedNodeIds.Contains(memberId) ||
+                            member.Value<int?>("siblingIndex") != expectedSiblingIndex ||
+                            !TryGetAreaRatioIfContained(member, background, out double areaRatio) ||
+                            areaRatio > ContainmentAreaRatioLimit)
+                        {
+                            break;
+                        }
+
+                        members.Add(member);
+                        expectedSiblingIndex++;
+                    }
+
+                    if (members.Count < 3)
+                    {
+                        continue;
+                    }
+
+                    foreach (JObject member in members)
+                    {
+                        claimedNodeIds.Add(member.Value<string>("id"));
+                    }
+
+                    findings.Add(new JObject
+                    {
+                        ["id"] = "flat_sibling_" + (findings.Count + 1).ToString("000"),
+                        ["parent"] = "node:" + group.Key,
+                        ["background"] = "node:" + backgroundId,
+                        ["members"] = new JArray(members.Select(member =>
+                            "node:" + member.Value<string>("id"))),
+                        ["evidence"] = new JArray(
+                            "all members are direct leaf siblings with consecutive source order",
+                            "the first leaf fully contains every other member at a small area ratio"),
+                    });
+                }
+            }
+
+            return findings;
+        }
+
         private static List<JObject> ResolveFamilyNodes(
             JObject candidate,
             IReadOnlyDictionary<string, JObject> nodeById)
@@ -1075,6 +1191,35 @@ namespace PsdLayoutTool2
         private static bool TryGetRepeatedFamilyStem(string name, out string stem)
         {
             return TryGetRepeatedFamilyParts(name, out stem, out int ignoredIndex);
+        }
+
+        private static bool TryGetGeneratedFlatSiblingFamilyStem(string name, out string stem)
+        {
+            const string prefix = "FlatSibling_flat_sibling_";
+            string value = (name ?? string.Empty).Trim().Trim('[', ']');
+            stem = "__generated_flat_sibling__";
+            if (!value.StartsWith(prefix, StringComparison.Ordinal) ||
+                value.Length == prefix.Length ||
+                !value.Substring(prefix.Length).All(char.IsDigit))
+            {
+                stem = string.Empty;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool IsDuplicateRootContainer(
+            JObject parentNode,
+            IReadOnlyDictionary<string, JObject> nodeById)
+        {
+            string parentId = parentNode?.Value<string>("parentId");
+            return !string.IsNullOrWhiteSpace(parentId) &&
+                   nodeById.TryGetValue(parentId, out JObject outerParent) &&
+                   string.Equals(
+                       parentNode.Value<string>("name"),
+                       outerParent.Value<string>("name"),
+                       StringComparison.Ordinal);
         }
 
         private static bool TryGetRepeatedFamilyParts(string name, out string stem, out int index)
@@ -1207,6 +1352,28 @@ namespace PsdLayoutTool2
 
         private static bool ContainsNestedPrefab(string sourceId, IReadOnlyDictionary<string, JObject> nodeById)
         {
+            if (string.IsNullOrWhiteSpace(sourceId))
+            {
+                return false;
+            }
+
+            if (nodeById.TryGetValue(sourceId, out JObject sourceNode))
+            {
+                for (JObject current = sourceNode; current != null;)
+                {
+                    if (!string.IsNullOrWhiteSpace(current.Value<string>("nestedPrefabAssetPath")))
+                    {
+                        return true;
+                    }
+
+                    string parentId = current.Value<string>("parentId");
+                    current = !string.IsNullOrWhiteSpace(parentId) &&
+                              nodeById.TryGetValue(parentId, out JObject parent)
+                        ? parent
+                        : null;
+                }
+            }
+
             foreach (JObject node in nodeById.Values)
             {
                 if (string.IsNullOrWhiteSpace(node.Value<string>("nestedPrefabAssetPath")))
@@ -1574,7 +1741,7 @@ namespace PsdLayoutTool2
         private const string RequiredPlanRootFields =
             "\"version\", \"snapshotFingerprint\", \"prefabAssetPath\", \"output\", \"prefabName\", \"wrappers\", \"moves\", \"renames\", " +
             "\"emptyContainerRemovals\", \"tightBounds\", \"textureRenames\", \"spriteAtlasRenames\", " +
-            "\"componentFamilyDecisions\", \"componentExtractions\", \"stateComponentExtractions\", " +
+            "\"componentFamilyDecisions\", \"flatSiblingResolutions\", \"componentExtractions\", \"stateComponentExtractions\", " +
             "\"variantComponentExtractions\", \"statefulComponentExtractions\", \"verify\"";
         internal const string PlanIdentifierContract =
             "Every wrappers[].id must use lower snake_case matching [a-z][a-z0-9_]*; examples: screen, screen_root, day_markers. Do not use uppercase, hyphens, spaces, brackets, or @ in an id. The @ prefix is only for a later reference such as @screen_root. Apply the same lower snake_case rule to all extraction IDs and state IDs.";
@@ -1621,7 +1788,9 @@ namespace PsdLayoutTool2
             builder.AppendLine("A componentExtraction is valid only when its template and every instance have the same recursive structure. If the failure says 'Repeated unit structure differs for component extraction', do not return that component extraction again. Preserve every mandatory candidate source and use the candidate's observed variant or stateful mode with a complete mapping; never solve a structural mismatch by dropping, shrinking, or reordering sources.");
             builder.AppendLine("For every statefulComponentExtractions instance, commonSourceNames and stateSourceNames together must cover all direct children exactly once. commonSourceNames must contain one observed direct-child name for every common.members entry; stateSourceNames must do the same for the selected states[].members entry. When one side is complete, derive the other as the ordered direct-child complement. Re-read the authoritative snapshot instead of guessing or dropping a member.");
             builder.AppendLine("Enforce this exact equation for every stateful instance: directChildCount == common.members.Count + selectedState.members.Count. If it fails, rebuild common.members, the affected states[].members, and every corresponding instance mapping; changing only commonSourceNames or stateSourceNames cannot repair a contract-count mismatch. Never place the same observed source child in both Common and the selected state.");
+            builder.AppendLine("For every flatSiblingFindings entry in the authoritative snapshot, include exactly one flatSiblingResolutions entry with mode=group and wrapperId=<findingId>_group. Unity replaces any AI wrapper, move, or tightBounds details with the deterministic values derived from the finding; do not use keep or an unrelated existing container.");
             AppendRequiredComponentFamilyRepairContract(builder, context);
+            AppendFlatSiblingRepairContract(builder, context);
             return builder.ToString();
         }
 
@@ -1650,6 +1819,55 @@ namespace PsdLayoutTool2
             builder.AppendLine("===== BEGIN REQUIRED COMPONENT FAMILIES =====");
             builder.AppendLine(records.ToString(Formatting.None));
             builder.AppendLine("===== END REQUIRED COMPONENT FAMILIES =====");
+        }
+
+        private static void AppendFlatSiblingRepairContract(
+            StringBuilder builder,
+            PsdHierarchyChatContext context)
+        {
+            JArray findings = context?.flatSiblingFindings;
+            if (findings == null || findings.Count == 0)
+            {
+                return;
+            }
+
+            var records = new JArray();
+            foreach (JObject finding in findings.OfType<JObject>())
+            {
+                string id = finding.Value<string>("id");
+                string parent = finding.Value<string>("parent");
+                string background = finding.Value<string>("background");
+                JArray members = finding["members"] as JArray;
+                if (string.IsNullOrWhiteSpace(id) ||
+                    string.IsNullOrWhiteSpace(parent) ||
+                    string.IsNullOrWhiteSpace(background) ||
+                    members == null ||
+                    members.Count < 3)
+                {
+                    throw new InvalidDataException(
+                        "Cannot build authoritative repair context for flat sibling finding " +
+                        (id ?? "<missing>") + ".");
+                }
+
+                records.Add(new JObject
+                {
+                    ["id"] = id,
+                    ["parent"] = parent,
+                    ["background"] = background,
+                    ["members"] = members.DeepClone(),
+                });
+            }
+
+            if (records.Count == 0)
+            {
+                throw new InvalidDataException(
+                    "Cannot build authoritative repair context because flatSiblingFindings contains no records.");
+            }
+
+            builder.AppendLine("The following are authoritative flat sibling finding records. For EVERY record, include exactly one flatSiblingResolutions entry with findingId copied exactly, mode=group, and wrapperId=<findingId>_group. Unity deterministically derives parent, siblingIndex, member moves, and tightBounds from this list; do not echo this list outside your replacement JSON plan.");
+            builder.AppendLine("===== BEGIN FLAT SIBLING FINDINGS =====");
+            builder.AppendLine(records.ToString(Formatting.None));
+            builder.AppendLine("===== END FLAT SIBLING FINDINGS =====");
         }
 
         private static JArray BuildRequiredCandidateSourceStructures(
@@ -1722,6 +1940,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("For textureRenames and spriteAtlasRenames in this version 2 AI plan, set expectedGuid to an empty string. Unity validates the from asset and injects its current AssetDatabase GUID before execution.");
             builder.AppendLine("Private-asset naming is reviewed through textureRenames[].toName and spriteAtlasRenames[].toName. When either array is non-empty, Unity derives the internal prefabName from their one common PascalCase name ending with View. Keep prefabName present, but do not guess it independently or use it to hide conflicting toName values.");
             builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract. Use componentFamilyDecisions for every candidate. A candidate marked requiresExtraction:false is advisory and may be skipped with concrete recursive-structure evidence; repeated names alone do not justify a variant extraction.");
+            builder.AppendLine("When the snapshot includes flatSiblingFindings, set every finding's flatSiblingResolutions mode to group and wrapperId to <findingId>_group. Unity deterministically derives parent, siblingIndex, member moves, and tightBounds from the authoritative finding; never use keep or an unrelated existing container.");
             builder.AppendLine("For a mandatory variant family, create one observed state for every distinct recursive structure and map every source to an exact matching state. Even when every source has a distinct structure, the mandatory family must not be skipped or reduced to hierarchy-only cleanup.");
             builder.AppendLine("For variantComponentExtractions, choose one observed representative row in states[].source for each unique visual state. Put every visible repeated row in instances[] exactly once, and set its state to the selected representative state ID; multiple instance rows may use the same state ID. Every states[].source must also appear in instances[].source, but extra instances must not be added as duplicate states. Use a variant only when at least two distinct observed visual states exist. When all visible rows have one state, use componentExtractions and a matching componentFamilyDecisions mode instead; never invent a second state.");
             builder.AppendLine("Every variant instance must have the same recursive component/child signature and RectTransform count as its selected states[].source. If no observed state representative matches exactly, skip the advisory family instead of generating an unsafe extraction.");

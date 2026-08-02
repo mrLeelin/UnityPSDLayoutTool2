@@ -103,6 +103,95 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void FreshGenerationReplayUsesTheBoundSourceAndPathAfterTargetGuidChanges()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            try
+            {
+                SetPrivateField(profile, "targetPrefabGuid", "ffffffffffffffffffffffffffffffff");
+
+                Assert.That(profile.TryBuildReplayPlans(
+                    SourceGuid,
+                    TargetPath,
+                    "Assets/Temp/ExampleView.prefab",
+                    out _,
+                    out _), Is.False);
+                Assert.That(profile.TryBuildFreshGenerationReplayPlans(
+                    SourceGuid,
+                    TargetPath,
+                    "Assets/Temp/ExampleView.prefab",
+                    out IReadOnlyList<string> stages,
+                    out string error), Is.True, error);
+                Assert.That(stages, Has.Count.EqualTo(1));
+            }
+            finally
+            {
+                Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void ReplacingProfileStagesDropsPlansFromAnEarlierCleanupSession()
+        {
+            var source = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
+            try
+            {
+                AssetDatabase.CreateAsset(source, SourceAssetPath);
+                string sourceGuid = AssetDatabase.AssetPathToGUID(SourceAssetPath);
+                PsdHierarchyCleanupReplayProfile.Persist(
+                    SourceAssetPath, TargetPath, CreateRunnerPlan("first_component"));
+                PsdHierarchyCleanupReplayProfile.Persist(
+                    SourceAssetPath, TargetPath, CreateRunnerPlan("second_component"));
+                PsdHierarchyCleanupReplayProfile.ReplaceWithFirstStage(
+                    SourceAssetPath, TargetPath, CreateRunnerPlan("current_component"));
+
+                PsdHierarchyCleanupReplayProfile profile = PsdHierarchyCleanupReplayProfile.Load(
+                    TargetPath, sourceGuid);
+                Assert.That(profile, Is.Not.Null);
+                Assert.That(profile.TryBuildReplayPlans(
+                    sourceGuid,
+                    TargetPath,
+                    "Assets/Temp/ExampleView.prefab",
+                    out IReadOnlyList<string> stages,
+                    out string error), Is.True, error);
+                Assert.That(stages, Has.Count.EqualTo(1));
+                Assert.That(
+                    JObject.Parse(stages[0])["componentExtractions"][0].Value<string>("id"),
+                    Is.EqualTo("current_component"));
+            }
+            finally
+            {
+                string sourceGuid = AssetDatabase.AssetPathToGUID(SourceAssetPath);
+                AssetDatabase.DeleteAsset(PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, sourceGuid));
+                AssetDatabase.DeleteAsset(SourceAssetPath);
+                Object.DestroyImmediate(source);
+            }
+        }
+
+        [Test]
+        public void ExistingPersistedProfileReportsConfirmedStages()
+        {
+            var source = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
+            try
+            {
+                AssetDatabase.CreateAsset(source, SourceAssetPath);
+                PsdHierarchyCleanupReplayProfile.Persist(
+                    SourceAssetPath, TargetPath, CreateRunnerPlan("existing_component"));
+
+                Assert.That(
+                    PsdHierarchyCleanupReplayProfile.HasConfirmedStages(SourceAssetPath, TargetPath),
+                    Is.True);
+            }
+            finally
+            {
+                string sourceGuid = AssetDatabase.AssetPathToGUID(SourceAssetPath);
+                AssetDatabase.DeleteAsset(PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, sourceGuid));
+                AssetDatabase.DeleteAsset(SourceAssetPath);
+                Object.DestroyImmediate(source);
+            }
+        }
+
+        [Test]
         public void HierarchyOnlyStageCanBePersisted()
         {
             var profile = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
@@ -279,6 +368,18 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 PsdHierarchyCleanupReplayCoordinator.TargetGuidMatches(string.Empty, string.Empty),
                 Is.False);
+        }
+
+        [Test]
+        public void TransientUnityServerStartupFailureUsesBoundedBackoff()
+        {
+            Assert.That(PsdHierarchyCleanupReplayCoordinator.IsTransientEditorStartupFailure(
+                "Native payload compilation failed: Unity server is starting."), Is.True);
+            Assert.That(PsdHierarchyCleanupReplayCoordinator.IsTransientEditorStartupFailure(
+                "Native payload compilation failed."), Is.False);
+            Assert.That(PsdHierarchyCleanupReplayCoordinator.GetTransientRetryDelaySeconds(1), Is.EqualTo(2));
+            Assert.That(PsdHierarchyCleanupReplayCoordinator.GetTransientRetryDelaySeconds(2), Is.EqualTo(4));
+            Assert.That(PsdHierarchyCleanupReplayCoordinator.GetTransientRetryDelaySeconds(3), Is.EqualTo(8));
         }
 
         [Test]
