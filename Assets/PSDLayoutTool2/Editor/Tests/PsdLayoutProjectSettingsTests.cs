@@ -151,6 +151,23 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void UiComponentSettingsAcceptCustomMonoBehaviourButtonType()
+        {
+            var data = new PsdLayoutProjectUiComponentSettings();
+
+            Assert.That(
+                data.TrySetComponentTypes(
+                    typeof(PsdLayoutProjectSettingsTestImage).FullName,
+                    typeof(PsdLayoutProjectSettingsTestTouchButton).FullName,
+                    out string error),
+                Is.True,
+                error);
+
+            PsdLayoutProjectUiComponentSnapshot snapshot = data.Resolve();
+            Assert.That(snapshot.buttonComponentType, Is.EqualTo(typeof(PsdLayoutProjectSettingsTestTouchButton)));
+        }
+
+        [Test]
         public void UiComponentSettingsRejectIncompatibleTypes()
         {
             var data = new PsdLayoutProjectUiComponentSettings();
@@ -200,6 +217,26 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(
                     PsdImporter.AddConfiguredButtonComponent(gameObject),
                     Is.TypeOf<PsdLayoutProjectSettingsTestButton>());
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void ImporterAddsConfiguredMonoBehaviourButtonComponent()
+        {
+            PsdImporter.ApplyProjectUiComponentSettings(
+                new PsdLayoutProjectUiComponentSnapshot(
+                    typeof(PsdLayoutProjectSettingsTestImage),
+                    typeof(PsdLayoutProjectSettingsTestTouchButton)));
+            var gameObject = new GameObject("Configured Touch Components");
+            try
+            {
+                Assert.That(
+                    PsdImporter.AddConfiguredButtonComponent(gameObject),
+                    Is.TypeOf<PsdLayoutProjectSettingsTestTouchButton>());
             }
             finally
             {
@@ -525,6 +562,10 @@ namespace PsdLayoutTool2.Tests
     }
 
     public sealed class PsdLayoutProjectSettingsTestButton : UiButton
+    {
+    }
+
+    public sealed class PsdLayoutProjectSettingsTestTouchButton : MonoBehaviour
     {
     }
 }

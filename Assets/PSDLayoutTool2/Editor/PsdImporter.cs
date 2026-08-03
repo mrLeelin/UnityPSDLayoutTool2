@@ -5272,12 +5272,12 @@
             return image;
         }
 
-        internal static Button AddConfiguredButtonComponent(GameObject gameObject)
+        internal static MonoBehaviour AddConfiguredButtonComponent(GameObject gameObject)
         {
-            Button button = gameObject.AddComponent(uiButtonComponentType) as Button;
+            MonoBehaviour button = gameObject.AddComponent(uiButtonComponentType) as MonoBehaviour;
             if (button == null)
             {
-                return null;
+                throw new InvalidOperationException("Configured Button component must inherit MonoBehaviour.");
             }
 
             return button;
@@ -5479,7 +5479,7 @@
         }
 
         /// <summary>
-        /// Creates a <see cref="UnityEngine.UI.Button"/> from the given <see cref="Layer"/>.
+        /// Creates a UI button node and attaches the configured button behaviour from the given <see cref="Layer"/>.
         /// </summary>
         /// <param name="layer">The Layer to create the Button from.</param>
         private static void CreateUIButton(Layer layer)
@@ -5487,9 +5487,10 @@
             LayerImportInfo info = GetLayerInfo(layer);
             AnchorNamePreset buttonPreset = info != null ? info.AnchorPreset : AnchorNamePreset.None;
 
-            // create an empty Image object with a Button behavior attached
+            // Create an Image object with the configured button behaviour attached.
             Image image = CreateUIImage(layer);
-            Button button = AddConfiguredButtonComponent(image.gameObject);
+            MonoBehaviour buttonBehaviour = AddConfiguredButtonComponent(image.gameObject);
+            Button button = buttonBehaviour as Button;
             UiLayoutContext buttonLayoutContext =
                 GetChildUILayoutContext(layer, buttonPreset, GetLayerLayoutRect(layer));
 
@@ -5503,12 +5504,7 @@
             ////    }
             ////}
 
-            // look through the children for the sprite states
-            if (button == null)
-            {
-                return;
-            }
-
+            // Native Button sprite states are only applied when the configured behaviour is a Button.
             foreach (Layer child in layer.Children)
             {
                 LayerImportInfo childInfo = GetLayerInfo(child);
@@ -5517,7 +5513,7 @@
                     continue;
                 }
 
-                if (childInfo.ButtonRole == ButtonChildRole.Disabled)
+                if (childInfo.ButtonRole == ButtonChildRole.Disabled && button != null)
                 {
                     button.transition = Selectable.Transition.SpriteSwap;
 
@@ -5525,7 +5521,7 @@
                     spriteState.disabledSprite = CreateSprite(child);
                     button.spriteState = spriteState;
                 }
-                else if (childInfo.ButtonRole == ButtonChildRole.Highlighted)
+                else if (childInfo.ButtonRole == ButtonChildRole.Highlighted && button != null)
                 {
                     button.transition = Selectable.Transition.SpriteSwap;
 
@@ -5533,7 +5529,7 @@
                     spriteState.highlightedSprite = CreateSprite(child);
                     button.spriteState = spriteState;
                 }
-                else if (childInfo.ButtonRole == ButtonChildRole.Pressed)
+                else if (childInfo.ButtonRole == ButtonChildRole.Pressed && button != null)
                 {
                     button.transition = Selectable.Transition.SpriteSwap;
 
@@ -5546,13 +5542,16 @@
                     image.sprite = CreateSprite(child);
                     ApplyImageLayoutBehavior(image, buttonPreset);
                     ApplyNineSliceImageBehavior(image, child);
-                    button.targetGraphic = image;
+                    if (button != null)
+                    {
+                        button.targetGraphic = image;
+                    }
                 }
                 else if (childInfo.ButtonRole == ButtonChildRole.TextImage)
                 {
                     GameObject oldGroupObject = currentGroupGameObject;
                     UiLayoutContext oldLayoutContext = currentGroupLayoutContext;
-                    currentGroupGameObject = button.gameObject;
+                    currentGroupGameObject = buttonBehaviour.gameObject;
                     currentGroupLayoutContext = buttonLayoutContext;
 
                     // If the "text" is a normal art layer, create an Image object from the "text"

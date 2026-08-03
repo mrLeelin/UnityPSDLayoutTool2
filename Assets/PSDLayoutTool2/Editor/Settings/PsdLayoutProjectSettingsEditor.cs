@@ -580,7 +580,7 @@ namespace PsdLayoutTool2
             string imageTypeName = snapshot.imageComponentType.FullName;
             string buttonTypeName = snapshot.buttonComponentType.FullName;
             section.Add(new HelpBox(
-                "填写生成节点要挂载的组件类名。可填写完整命名空间，或填写唯一的类名；Image 和 Button 类型必须分别继承 UnityEngine.UI.Image、UnityEngine.UI.Button。",
+                "填写生成节点要挂载的组件类名。可填写完整命名空间，或填写唯一的类名；Image 类型必须继承 UnityEngine.UI.Image，Button 类型可使用任意 MonoBehaviour（包括 UnityEngine.UI.Button）。",
                 HelpBoxMessageType.Info));
 
             var validationBox = CreateHiddenErrorBox();
@@ -615,8 +615,8 @@ namespace PsdLayoutTool2
                 "Button 组件类型",
                 buttonTypeName,
                 "psd-project-settings-button-component-type",
-                "例如 Game.UI.CustomButton。留空时使用 UnityEngine.UI.Button。",
-                typeof(UnityEngine.UI.Button),
+                "例如 Game.UI.CustomTouchButton。留空时使用 UnityEngine.UI.Button。",
+                typeof(MonoBehaviour),
                 value => ApplyTypes(imageField.value, value));
             section.Add(validationBox);
             return section;

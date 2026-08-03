@@ -239,7 +239,7 @@ namespace PsdLayoutTool2
                 imageComponentType = typeof(Image);
             }
 
-            if (!ResolveComponentType(buttonComponentTypeName, typeof(Button), out Type buttonComponentType, out _))
+            if (!ResolveComponentType(buttonComponentTypeName, typeof(MonoBehaviour), out Type buttonComponentType, out _))
             {
                 buttonComponentType = typeof(Button);
             }
@@ -254,7 +254,7 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            if (!ResolveComponentType(buttonTypeName, typeof(Button), out Type buttonType, out error))
+            if (!ResolveComponentType(buttonTypeName, typeof(MonoBehaviour), out Type buttonType, out error))
             {
                 return false;
             }

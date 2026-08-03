@@ -2,6 +2,17 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.7] - 2026-08-03
+
+### Changed
+
+- Allowed the configured PSD button component to inherit directly from `MonoBehaviour`, so projects can use custom touch handlers without deriving from `UnityEngine.UI.Button`.
+- Kept native Button sprite-state generation for `UnityEngine.UI.Button` configurations while preserving normal layer and child import for custom touch behaviours.
+
+### Added
+
+- Added EditMode coverage for resolving and attaching a custom `MonoBehaviour` button component.
+
 ## [0.1.6] - 2026-08-02
 
 ### Fixed
