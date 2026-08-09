@@ -492,6 +492,38 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanDropsContainerRemovalsThatConflictWithDeterministicFlatSiblingGrouping()
+        {
+            var plan = JObject.Parse(
+                CreateNodeReferencePlan("node:n000004", "node:n000003", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["containmentResolutions"] = new JArray();
+            plan["flatSiblingResolutions"] = new JArray();
+            plan["emptyContainerRemovals"] = new JArray
+            {
+                new JObject { ["source"] = "node:n000003" },
+                new JObject { ["source"] = "node:n000002" },
+                new JObject { ["source"] = "node:n000007" },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateNestedFlatSiblingContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(
+                runnerPlan["emptyContainerRemovals"].OfType<JObject>()
+                    .Select(removal => removal.Value<string>("source")),
+                Is.EqualTo(new[] { "Root/LegacyEmpty" }));
+            Assert.That(
+                runnerPlan["wrappers"][0]["parent"].Value<string>(),
+                Is.EqualTo("Root/Outer/Group"));
+        }
+
+        [Test]
         public void VersionTwoPlanRejectsAnUnresolvedFlatSiblingFindingWhenAiAlreadyMovesItsMember()
         {
             bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
@@ -1691,6 +1723,33 @@ namespace PsdLayoutTool2.Tests
                 "{\"id\":\"n000007\",\"path\":\"Root/[BottomBar]/Detail\",\"parentId\":\"n000006\",\"siblingIndex\":0}]," +
                 "\"flatSiblingFindings\":[{\"id\":\"flat_sibling_001\",\"parent\":\"node:n000001\"," +
                 "\"background\":\"node:n000002\",\"members\":[\"node:n000002\",\"node:n000003\",\"node:n000004\",\"node:n000005\"]}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateNestedFlatSiblingContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root\",\"parentId\":\"\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/Outer\",\"parentId\":\"n000001\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000003\",\"path\":\"Root/Outer/Group\",\"parentId\":\"n000002\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000004\",\"path\":\"Root/Outer/Group/Background\",\"parentId\":\"n000003\",\"siblingIndex\":0}," +
+                "{\"id\":\"n000005\",\"path\":\"Root/Outer/Group/Label\",\"parentId\":\"n000003\",\"siblingIndex\":1}," +
+                "{\"id\":\"n000006\",\"path\":\"Root/Outer/Group/Icon\",\"parentId\":\"n000003\",\"siblingIndex\":2}," +
+                "{\"id\":\"n000007\",\"path\":\"Root/LegacyEmpty\",\"parentId\":\"n000001\",\"siblingIndex\":1}]," +
+                "\"flatSiblingFindings\":[{\"id\":\"flat_sibling_001\",\"parent\":\"node:n000003\"," +
+                "\"background\":\"node:n000004\",\"members\":[\"node:n000004\",\"node:n000005\",\"node:n000006\"]}]}";
             return new PsdHierarchyChatContext(
                 "E:/Project/Demo/monsterhunter",
                 "Assets/UI/Source.psd",

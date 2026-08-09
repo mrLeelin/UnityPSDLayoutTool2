@@ -1669,6 +1669,7 @@ namespace PsdLayoutTool2
             NormalizeRequiredVariantCandidates(plan, context);
             NormalizeSkippedRequiredComponentCandidates(plan, context);
             NormalizeMissingFlatSiblingResolutions(plan, context);
+            RemoveContainerRemovalsConflictingWithFlatSiblingGroups(plan, context);
             ValidateFlatSiblingResolutions(plan, context);
         }
 
@@ -2742,6 +2743,75 @@ namespace PsdLayoutTool2
             return TryGetSnapshotNode(nodesById, background, out JObject backgroundNode) &&
                    backgroundNode.Value<int?>("siblingIndex").HasValue &&
                    (siblingIndex = backgroundNode.Value<int?>("siblingIndex").Value) >= 0;
+        }
+
+        private static void RemoveContainerRemovalsConflictingWithFlatSiblingGroups(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            JArray removals = plan["emptyContainerRemovals"] as JArray;
+            JArray findings = context?.flatSiblingFindings;
+            JArray resolutions = plan["flatSiblingResolutions"] as JArray;
+            if (removals == null || removals.Count == 0 ||
+                findings == null || findings.Count == 0 ||
+                resolutions == null || resolutions.Count == 0)
+            {
+                return;
+            }
+
+            var groupedFindingIds = new HashSet<string>(
+                resolutions.OfType<JObject>()
+                    .Where(resolution =>
+                        string.Equals(resolution.Value<string>("mode"), "group", StringComparison.Ordinal))
+                    .Select(resolution => resolution.Value<string>("findingId"))
+                    .Where(findingId => !string.IsNullOrWhiteSpace(findingId)),
+                StringComparer.Ordinal);
+            if (groupedFindingIds.Count == 0)
+            {
+                return;
+            }
+
+            Dictionary<string, JObject> nodesById = ReadSnapshotNodes(context);
+            var movedSources = new HashSet<string>(
+                (plan["moves"] as JArray ?? new JArray()).OfType<JObject>()
+                    .Select(move => move.Value<string>("source"))
+                    .Where(source => !string.IsNullOrWhiteSpace(source)),
+                StringComparer.Ordinal);
+            var protectedContainers = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JObject finding in findings.OfType<JObject>())
+            {
+                if (!groupedFindingIds.Contains(finding.Value<string>("id") ?? string.Empty))
+                {
+                    continue;
+                }
+
+                string currentReference = finding.Value<string>("parent");
+                while (TryGetSnapshotNode(nodesById, currentReference, out JObject currentNode))
+                {
+                    protectedContainers.Add(currentReference);
+                    if (movedSources.Contains(currentReference))
+                    {
+                        break;
+                    }
+
+                    string parentId = currentNode.Value<string>("parentId");
+                    if (string.IsNullOrWhiteSpace(parentId))
+                    {
+                        break;
+                    }
+
+                    currentReference = "node:" + parentId;
+                }
+            }
+
+            for (int index = removals.Count - 1; index >= 0; index--)
+            {
+                if (removals[index] is JObject removal &&
+                    protectedContainers.Contains(removal.Value<string>("source") ?? string.Empty))
+                {
+                    removals.RemoveAt(index);
+                }
+            }
         }
 
         private static Dictionary<string, JObject> ReadSnapshotNodes(PsdHierarchyChatContext context)

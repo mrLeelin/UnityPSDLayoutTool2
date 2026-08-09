@@ -218,6 +218,12 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
             fail(f"duplicate empty container removal source: {source}")
         removal_sources.add(source)
 
+    empty_container_removals = sorted(
+        empty_container_removals,
+        key=lambda removal: removal["source"].count("/"),
+        reverse=True,
+    )
+
     if "tightBounds" not in raw:
         tight_bounds = [{"target": "@" + wrapper["id"]} for wrapper in wrappers]
 

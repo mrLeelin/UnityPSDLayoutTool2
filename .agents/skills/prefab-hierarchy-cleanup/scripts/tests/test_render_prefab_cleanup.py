@@ -553,6 +553,24 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertLess(generated.index(move), generated.index(removal))
         self.assertNotIn("PrefabUtility.SaveAsPrefabAsset(root, outputPath)", generated)
 
+    def test_nested_empty_container_removals_are_normalized_deepest_first(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        outer = "RewardPanel/Root/LegacyGroup"
+        inner = outer + "/NestedGroup"
+        raw_plan["emptyContainerRemovals"] = [
+            {"source": outer},
+            {"source": inner},
+        ]
+
+        normalized = normalize_plan(raw_plan, "preflight")
+
+        self.assertEqual(
+            [removal["source"] for removal in normalized["empty_container_removals"]],
+            [inner, outer],
+        )
+
     def test_preflight_tightens_planned_targets_after_moves(self):
         raw_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
