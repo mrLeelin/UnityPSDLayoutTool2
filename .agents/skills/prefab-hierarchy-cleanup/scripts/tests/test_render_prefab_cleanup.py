@@ -672,6 +672,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         state_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
         )
+        state_plan["moves"] = []
         state_sources = [
             "RewardPanel/Root/Title",
             "RewardPanel/Root/Subtitle",
@@ -899,6 +900,26 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertIn("void CopyVariantStateOverrides(Transform source, Transform destination)", generated)
         preflight = render(normalize_plan(plan, "preflight"), "preflight")
         self.assertNotIn("Variant component Prefab target already exists", preflight)
+
+    def test_variant_sources_split_by_a_move_fail_before_payload_rendering(self):
+        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
+        extraction = plan["variantComponentExtractions"][0]
+        plan["componentFamilyDecisions"] = [{
+            "parent": extraction["template"].rsplit("/", 1)[0],
+            "sources": [instance["source"] for instance in extraction["instances"]],
+            "mode": "variant",
+            "extractionId": extraction["id"],
+            "reason": "The visible rows share one component with observed variants.",
+        }]
+        template_parent = extraction["template"].rsplit("/", 1)[0]
+        plan["moves"] = [{
+            "source": extraction["states"][1]["source"],
+            "destination": template_parent.rsplit("/", 1)[0],
+            "siblingIndex": 0,
+        }]
+
+        with self.assertRaisesRegex(ValueError, "sources must remain direct siblings after planned moves"):
+            normalize_plan(plan, "preflight")
 
     def test_single_state_variant_directs_plan_repair_to_component_extraction(self):
         plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")

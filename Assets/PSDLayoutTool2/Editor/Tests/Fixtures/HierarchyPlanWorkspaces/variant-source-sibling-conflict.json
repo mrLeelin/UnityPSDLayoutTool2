@@ -1,0 +1,7 @@
+{
+  "error": "variantComponentExtractions[1] variant sources must remain direct siblings after planned moves; template=7日签到拆分/[Root]/组 16/[FlatSibling_flat_sibling_001]; templateParent=@day_card_markers; source=7日签到拆分/[Root]/组 16/[FlatSibling_flat_sibling_007]; sourceParent=7日签到拆分/[Root]/组 16. Remove or align the conflicting move.",
+  "expectedCategory": "PlanPreparation",
+  "expectedState": "NoSafeChanges",
+  "expectedCandidateIds": [],
+  "expectedNodeIds": []
+}

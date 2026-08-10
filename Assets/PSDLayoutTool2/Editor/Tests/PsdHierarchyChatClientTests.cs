@@ -163,6 +163,28 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void GeneratedFlatSiblingWrappersUnderNonEnglishParentUseExecutableFallbackName()
+        {
+            var nodes = new JArray
+            {
+                CreateCandidateNode("n000001", string.Empty, "ExampleView", 0, 1),
+                CreateCandidateNode("n000002", "n000001", "组 16", 0, 3),
+                CreateCandidateNode("n000003", "n000002", "[FlatSibling_flat_sibling_001]", 0, 1),
+                CreateCandidateNode("n000004", "n000002", "[FlatSibling_flat_sibling_002]", 1, 1),
+                CreateCandidateNode("n000005", "n000002", "[FlatSibling_flat_sibling_003]", 2, 1),
+                CreateCandidateNode("n000006", "n000003", "RewardIcon", 0, 0),
+                CreateCandidateNode("n000007", "n000004", "RewardAmount", 0, 0),
+                CreateCandidateNode("n000008", "n000005", "DayLabel", 0, 0),
+            };
+
+            JObject candidate = (JObject)PsdHierarchyChatContextBuilder
+                .BuildComponentFamilyCandidates(nodes)
+                .Single();
+
+            Assert.That(candidate.Value<string>("suggestedAssetName"), Is.EqualTo("ReusableItem"));
+        }
+
+        [Test]
         public void GeneratedFlatSiblingWrappersUnderDuplicateRootContainerAreNotComponentCandidates()
         {
             var nodes = new JArray
@@ -672,6 +694,34 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void RecoveryPromptIncludesTheFailedAssetPathAndCurrentAssetEvidence()
+        {
+            var context = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                "{\"fingerprint\":\"snapshot-123\",\"nodes\":[]}",
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json",
+                new[]
+                {
+                    "Assets/UI/Texture/Currency_Power_2_385.png",
+                });
+
+            string prompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRecoveryPrompt(
+                "textureRenames[41].from asset did not load: Assets/UI/Texture/Currency_Power_2_383.png",
+                context);
+
+            Assert.That(prompt, Does.Contain("Currency_Power_2_383.png"));
+            Assert.That(prompt, Does.Contain("Currency_Power_2_385.png"));
+            Assert.That(prompt, Does.Contain("remove or replace"));
+        }
+
+        [Test]
         public void ClaudeDirectPromptSuppliesTheCanonicalExecutablePlanContract()
         {
             const string planFormat =
@@ -707,6 +757,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("\"wrappers\""));
             Assert.That(prompt, Does.Contain("\"moves\""));
             Assert.That(prompt, Does.Contain("\"renames\""));
+            Assert.That(prompt, Does.Contain("containmentResolutions"));
+            Assert.That(prompt, Does.Contain("flatSiblingResolutions"));
             Assert.That(prompt, Does.Contain("wrapperCreations").And.Contain("Do not use"));
             Assert.That(prompt, Does.Contain("snapshot-123.json"));
             Assert.That(prompt, Does.Contain("node:<id>"));
@@ -714,6 +766,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("Unity derives the internal prefabName"));
             Assert.That(prompt, Does.Contain("one observed state for every distinct recursive structure"));
             Assert.That(prompt, Does.Contain("must not be skipped"));
+            Assert.That(prompt, Does.Contain("Keep the five-section review concise")
+                .And.Contain("complete JSON plan has priority"));
             Assert.That(prompt, Does.Not.Contain("Target Prefab: E:/Project"));
         }
 

@@ -724,6 +724,7 @@
             if (string.IsNullOrEmpty(sourceGuid))
             {
                 prefabPath = configuredPrefabPath;
+                PsdLogger.Info("Prefab target resolution: source GUID is empty; using configured path=" + prefabPath);
                 return true;
             }
 
@@ -731,6 +732,9 @@
                     sourceGuid, configuredPrefabPath, out string movedPrefabPath))
             {
                 prefabPath = movedPrefabPath;
+                PsdLogger.Info(
+                    "Prefab target resolution: binding GUID resolved configured path=" +
+                    configuredPrefabPath + " to=" + prefabPath);
                 return true;
             }
 
@@ -740,6 +744,9 @@
                     profilePath, configuredPrefabPath, out movedPrefabPath))
             {
                 prefabPath = movedPrefabPath;
+                PsdLogger.Info(
+                    "Prefab target resolution: hierarchy Profile GUID resolved configured path=" +
+                    configuredPrefabPath + " to=" + prefabPath);
                 return true;
             }
 
@@ -747,10 +754,14 @@
                     sourceGuid, configuredPrefabPath, out movedPrefabPath))
             {
                 prefabPath = movedPrefabPath;
+                PsdLogger.Info(
+                    "Prefab target resolution: cleanup replay Profile GUID resolved configured path=" +
+                    configuredPrefabPath + " to=" + prefabPath);
                 return true;
             }
 
             prefabPath = configuredPrefabPath;
+            PsdLogger.Info("Prefab target resolution: using configured path=" + prefabPath);
             return true;
         }
 
@@ -1038,6 +1049,18 @@
                             sourceGuid, prefabRelativePath, out boundHierarchyProfile);
                     prefabSaveRoute = ResolvePrefabSaveRoute(
                         prefabImportMode, hasCleanupReplayProfile, hasHierarchyProfile);
+                    if (prefabImportMode == PrefabImportMode.IncrementalUpdate)
+                    {
+                        PsdLogger.Info(
+                            "Incremental route: sourceGuid=" + sourceGuid +
+                            ", targetPrefab=" + prefabRelativePath +
+                            ", targetGuid=" + AssetDatabase.AssetPathToGUID(prefabRelativePath) +
+                            ", cleanupProfile=" + hasCleanupReplayProfile +
+                            ", hierarchyProfile=" + hasHierarchyProfile +
+                            ", saveRoute=" + prefabSaveRoute +
+                            ", hierarchyProfilePath=" +
+                            PsdPrefabTransactionalSave.GetProfilePath(prefabRelativePath, sourceGuid));
+                    }
                     if (prefabSaveRoute == PrefabSaveRoute.Rejected)
                     {
                         string requiredProfile =
@@ -1068,6 +1091,7 @@
                     "Conversion plan created. nodes=" + sourceModel.nodes.Count +
                     ", added=" + conversionPlan.Count(PsdPrefabChangeKind.Added) +
                     ", updated=" + conversionPlan.Count(PsdPrefabChangeKind.Updated) +
+                    ", unchanged=" + conversionPlan.Count(PsdPrefabChangeKind.Unchanged) +
                     ", removed=" + conversionPlan.Count(PsdPrefabChangeKind.Removed));
 
                 if (CreatePrefab && IsTargetPrefabOpenInPrefabMode(prefabRelativePath))
@@ -1271,6 +1295,15 @@
                     {
                         PsdLogger.Step("Save prefab: " + prefabRelativePath);
                         EditorUtility.DisplayProgressBar("PSD Layout Tool 2", "保存 Prefab...", 0.95f);
+                        IReadOnlyDictionary<string, RectTransform> generatedUiNodes =
+                            CaptureGeneratedUiNodeRegistry();
+                        if (prefabImportMode == PrefabImportMode.IncrementalUpdate)
+                        {
+                            PsdLogger.Info(
+                                "Incremental candidate registry: nodes=" + generatedUiNodes.Count +
+                                ", saveRoute=" + prefabSaveRoute +
+                                ", selectedPrefabForOverwrite=" + ShouldSavePrefab(prefabRelativePath));
+                        }
                         switch (prefabSaveRoute)
                         {
                             case PrefabSaveRoute.FullCandidateSave:
@@ -1280,6 +1313,15 @@
                             case PrefabSaveRoute.CleanupReplay:
                                 if (prefabImportMode == PrefabImportMode.FullGenerateWithCleanupReplay)
                                 {
+                                    if (PsdHierarchyCleanupReplayProfile.RequiresRebind(
+                                            normalizedAssetPath,
+                                            prefabRelativePath,
+                                            out string rebindReason))
+                                    {
+                                        throw new InvalidOperationException(
+                                            "Cleanup replay Profile requires a fresh confirmed plan before another generated candidate can replace the current Prefab. " +
+                                            rebindReason);
+                                    }
                                     if (PrefabUtility.SaveAsPrefabAsset(importRootGameObject, prefabRelativePath) == null)
                                         throw new InvalidOperationException(
                                             "Fresh generated Prefab candidate could not be saved before cleanup replay.");
@@ -1315,7 +1357,7 @@
                                         conversionPlan.changes,
                                         prefabRelativePath,
                                         importRootGameObject,
-                                        CaptureGeneratedUiNodeRegistry()))
+                                        generatedUiNodes))
                                     throw new InvalidOperationException(
                                         "Hierarchy Profile incremental update could not be applied; the existing organized Prefab was kept unchanged.");
                                 break;
@@ -1982,7 +2024,22 @@
                 PsdHierarchyReconciliationResult reconciliation = null;
                 PsdHierarchyPlan plan;
                 working = UnityEngine.Object.Instantiate(persisted);
+                PsdLogger.Info(
+                    "Incremental hierarchy profile: path=" + profilePath +
+                    ", sourceGuid=" + working.sourcePsdGuid +
+                    ", targetGuid=" + working.targetPrefabGuid +
+                    ", targetPath=" + working.targetPrefabPath +
+                    ", profileNodes=" + (working.nodes != null ? working.nodes.Count : 0) +
+                    ", profileGroups=" + (working.groups != null ? working.groups.Count : 0));
                 reconciliation = working.Reconcile(sourceModel);
+                PsdLogger.Info(
+                    "Incremental reconciliation: requiresReplan=" + reconciliation.requiresReplan +
+                    ", contentOnly=" + DescribeStableIds(reconciliation.contentOnlyStableIds) +
+                    ", geometryValidation=" + DescribeStableIds(reconciliation.geometryValidationStableIds) +
+                    ", invalidatedScope=" + DescribeStableIds(reconciliation.focusedInvalidatedScopeStableIds) +
+                    ", new=" + DescribeStableIds(reconciliation.unsortedNewStableIds) +
+                    ", unstable=" + DescribeStableIds(reconciliation.unsortedUnstableIds) +
+                    ", pendingMissing=" + DescribeStableIds(reconciliation.pendingMissingStableIds));
                 if (reconciliation.requiresReplan || reconciliation.unsortedNewStableIds.Count > 0 ||
                     reconciliation.unsortedUnstableIds.Count > 0)
                     throw new InvalidOperationException(
@@ -2053,6 +2110,12 @@
                     importerValueSyncStableIds.UnionWith(reconciliation.contentOnlyStableIds);
                     importerValueSyncStableIds.UnionWith(reconciliation.geometryValidationStableIds);
                 }
+                PsdLogger.Info(
+                    "Incremental value synchronization: updatedByDiff=" +
+                    DescribeStableIds((conversionChanges ?? Array.Empty<PsdPrefabNodeChange>())
+                        .Where(change => change != null && change.kind == PsdPrefabChangeKind.Updated)
+                        .Select(change => change.stableId)) +
+                    ", effectiveSync=" + DescribeStableIds(importerValueSyncStableIds));
 
                 PsdPrefabIncrementalMergeResult merge = PsdPrefabIncrementalMerge.Merge(
                     prefabPath, existingContents, candidateRoot, candidateRegistry, working,
@@ -2061,10 +2124,15 @@
                         : Enumerable.Empty<PsdHierarchyProfileGroup>(),
                     plan,
                     importerValueSyncStableIds);
+                PsdLogger.Info(
+                    "Incremental merge completed: generated=" + merge.generatedByStableId.Count +
+                    ", groups=" + merge.groupsByKey.Count +
+                    ", pendingMissing=" + DescribeStableIds(merge.pendingMissingStableIds));
                 PsdPrefabTransactionalSave.Save(
                     prefabPath, existingContents, profilePath, working,
                     merge.generatedByStableId, merge.groupsByKey,
                     Array.Empty<string>(), null, persisted == null);
+                PsdLogger.Info("Incremental transactional save completed: " + prefabPath);
                 return true;
             }
             finally
@@ -2072,6 +2140,18 @@
                 if (existingContents != null) PrefabUtility.UnloadPrefabContents(existingContents);
                 if (working != null) UnityEngine.Object.DestroyImmediate(working);
             }
+        }
+
+        private static string DescribeStableIds(IEnumerable<string> stableIds)
+        {
+            const int maxIds = 20;
+            string[] values = (stableIds ?? Enumerable.Empty<string>())
+                .Where(value => !string.IsNullOrEmpty(value))
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+            string shown = string.Join(",", values.Take(maxIds).ToArray());
+            return "count=" + values.Length + ", ids=[" + shown +
+                   (values.Length > maxIds ? ",..." : string.Empty) + "]";
         }
 
         private static PsdHierarchyPlan CreatePlanFromProfile(

@@ -382,6 +382,52 @@ namespace PsdLayoutTool2.Tests
             Assert.That(PsdHierarchyCleanupReplayCoordinator.GetTransientRetryDelaySeconds(3), Is.EqualTo(8));
         }
 
+        [TestCase("Direct child was not found: Root/CardBackground", true)]
+        [TestCase("textureRenames[41].from asset did not load: Assets/UI/Missing.png", true)]
+        [TestCase("Native payload compilation failed: Unity server is starting.", false)]
+        public void ReplayFailureClassifierSeparatesPermanentProfileDriftFromTransientStartupFailures(
+            string failure,
+            bool isPermanent)
+        {
+            Assert.That(
+                PsdHierarchyCleanupReplayCoordinator.IsPermanentReplayFailure(failure),
+                Is.EqualTo(isPermanent));
+        }
+
+        [Test]
+        public void PermanentReplayFailureRequiresAFreshPlanUntilTheProfileIsReplaced()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
+            EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
+            AssetDatabase.CreateAsset(profile, profilePath);
+            AssetDatabase.SaveAssetIfDirty(profile);
+
+            Assert.That(PsdHierarchyCleanupReplayProfile.TryMarkRequiresRebindByGuid(
+                SourceGuid,
+                TargetPath,
+                "Direct child was not found: Root/CardBackground"), Is.True);
+            Assert.That(PsdHierarchyCleanupReplayProfile.RequiresRebindByGuid(
+                SourceGuid,
+                TargetPath,
+                out string reason), Is.True);
+            Assert.That(reason, Does.Contain("Direct child was not found"));
+            Assert.That(profile.TryBuildReplayPlans(
+                SourceGuid,
+                TargetPath,
+                "Assets/PSDLayoutTool2Settings/HierarchyReplayTemp/candidate.prefab",
+                out _,
+                out string replayError), Is.False);
+            Assert.That(replayError, Does.Contain("requires a fresh confirmed plan"));
+
+            profile.Initialize(SourceGuid, TargetPath, CreateRunnerPlan("recovery_component"));
+
+            Assert.That(PsdHierarchyCleanupReplayProfile.RequiresRebindByGuid(
+                SourceGuid,
+                TargetPath,
+                out _), Is.False);
+        }
+
         [Test]
         public void MissingTargetWithoutAReplayProfileKeepsNormalPrefabSaveEligible()
         {

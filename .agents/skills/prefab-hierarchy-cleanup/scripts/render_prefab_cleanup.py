@@ -92,6 +92,39 @@ def validate_wrapper_reference(
         fail(unknown_wrapper_message)
 
 
+def validate_extraction_sibling_topology_after_moves(
+    extractions: list[dict[str, Any]],
+    label: str,
+    moves: list[dict[str, Any]],
+    include_instances: bool,
+) -> None:
+    moved_parents = {
+        move["source"]: move["destination"]
+        for move in moves
+    }
+
+    def planned_parent(path: str) -> str:
+        return moved_parents.get(path, path.rsplit("/", 1)[0] if "/" in path else "")
+
+    for extraction_index, extraction in enumerate(extractions):
+        template = extraction["template"]
+        expected_parent = planned_parent(template)
+        sources = [template]
+        sources.extend(state["source"] for state in extraction["states"])
+        if include_instances:
+            sources.extend(instance["source"] for instance in extraction["instances"])
+
+        for source in dict.fromkeys(sources):
+            source_parent = planned_parent(source)
+            if source_parent != expected_parent:
+                fail(
+                    f"{label}[{extraction_index}] sources must remain direct siblings after planned moves: "
+                    f"template={template}; templateParent={expected_parent}; "
+                    f"source={source}; sourceParent={source_parent}. "
+                    "Remove or align the conflicting move."
+                )
+
+
 def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     if mode not in {"apply", "preflight", "verify", "reapply"}:
         fail(f"unsupported render mode: {mode}")
@@ -777,6 +810,19 @@ def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     for wrapper_id in wrapper_ids:
         if "@" + wrapper_id not in tight_targets:
             fail(f"wrappers must have a tightBounds entry: @{wrapper_id}")
+
+    validate_extraction_sibling_topology_after_moves(
+        state_component_extractions,
+        "stateComponentExtractions",
+        moves,
+        include_instances=False,
+    )
+    validate_extraction_sibling_topology_after_moves(
+        variant_component_extractions,
+        "variantComponentExtractions",
+        moves,
+        include_instances=True,
+    )
 
     asset_targets: set[str] = set()
     for label, entries in (("textureRenames", texture_renames), ("spriteAtlasRenames", atlas_renames)):

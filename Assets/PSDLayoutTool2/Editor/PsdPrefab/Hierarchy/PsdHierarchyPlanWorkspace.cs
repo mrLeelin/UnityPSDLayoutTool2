@@ -203,7 +203,7 @@ namespace PsdLayoutTool2
             return true;
         }
 
-        private static PsdHierarchyPlanIssue CreateIssue(
+        internal static PsdHierarchyPlanIssue CreateIssue(
             PsdHierarchyPlanIssueCategory category,
             PsdHierarchyPlanIssueSeverity severity,
             string summary,

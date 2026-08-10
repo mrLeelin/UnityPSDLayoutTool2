@@ -93,6 +93,28 @@ namespace PsdLayoutTool2
                 out error);
         }
 
+        public static bool TryOpenLocalRepair(string sourcePsdAssetPath, out string error)
+        {
+            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
+            if (!TryResolvePrefabAvailability(
+                    sourcePsdAssetPath,
+                    PsdImporter.OutputMode,
+                    PsdImporter.OutputFolderName,
+                    PsdImporter.PrefabMode,
+                    path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
+                    out string targetPrefabPath,
+                    out string availabilityError))
+            {
+                error = availabilityError;
+                return false;
+            }
+
+            return PsdHierarchyLocalRepairWindow.TryOpen(
+                sourcePsdAssetPath,
+                targetPrefabPath,
+                out error);
+        }
+
         /// <summary>
         /// Supports an already-organized legacy Prefab whose semantic file name differs from
         /// the PSD file name. Only one direct Prefab under the generated Prefab folder is

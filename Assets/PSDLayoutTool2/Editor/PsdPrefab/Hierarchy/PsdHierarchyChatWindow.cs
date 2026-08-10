@@ -19,6 +19,9 @@ namespace PsdLayoutTool2
         internal const string ThinkingIndicatorElementName = "psd-hierarchy-chat-thinking";
         internal const string AgentInfoElementName = "psd-hierarchy-chat-agent-info";
         internal const string OpenCliButtonName = "psd-hierarchy-chat-open-cli";
+        internal const string OpenLocalRepairButtonName = "psd-hierarchy-chat-open-local-repair";
+        internal const string RecoverySectionName = "psd-hierarchy-chat-recovery";
+        internal const string RegeneratePlanButtonName = "psd-hierarchy-chat-regenerate-plan";
         internal const string CopyMessageButtonClassName = "psd-hierarchy-chat-message-copy";
 
         private const string StyleSheetGuid = "18f53073502d4d7e89345f900b727c7e";
@@ -43,6 +46,12 @@ namespace PsdLayoutTool2
         private bool isSending;
         private bool hasAppliedCleanupStage;
         private bool hasActiveConnection;
+        private bool requiresReplayProfileReplacement;
+        private string pendingRecoveryFailure = string.Empty;
+        private Label recoverySummary;
+        private Button regeneratePlanButton;
+        private PsdHierarchyPlanWorkspace currentWorkspace;
+        private PsdHierarchyPlanWorkspaceView workspaceView;
 
         [MenuItem("Tools/PSD Layout Tool 2/AI Hierarchy Chat")]
         private static void ShowEmptyWindow()
@@ -83,6 +92,13 @@ namespace PsdLayoutTool2
             Initialize(chatContext, false);
         }
 
+        internal PsdHierarchyPlanWorkspace CurrentWorkspaceForTests => currentWorkspace;
+
+        internal void SetWorkspaceForTests(PsdHierarchyPlanWorkspace workspace)
+        {
+            SetPlanWorkspace(workspace);
+        }
+
         private void Initialize(PsdHierarchyChatContext chatContext)
         {
             Initialize(chatContext, true);
@@ -97,10 +113,15 @@ namespace PsdLayoutTool2
             hasAppliedCleanupStage = PsdHierarchyCleanupReplayProfile.HasConfirmedStages(
                 chatContext.sourcePsdAssetPath,
                 chatContext.targetPrefabAssetPath);
+            requiresReplayProfileReplacement = PsdHierarchyCleanupReplayProfile.RequiresRebind(
+                chatContext.sourcePsdAssetPath,
+                chatContext.targetPrefabAssetPath,
+                out pendingRecoveryFailure);
             hasActiveConnection = false;
             activeConnection = default(PsdHierarchyChatConnection);
             cliSessionId = string.Empty;
             pendingPlanJson = string.Empty;
+            currentWorkspace = null;
             RebuildUi();
             if (autoSendInitialRequest)
             {
@@ -190,8 +211,20 @@ namespace PsdLayoutTool2
             };
             openCliButton.AddToClassList("psd-hierarchy-chat-open-cli");
             header.Add(openCliButton);
+            var openLocalRepairButton = new Button(OpenLocalRepairWindow)
+            {
+                name = OpenLocalRepairButtonName,
+                text = "局部整理",
+                tooltip = "打开独立的局部整理窗口，分析当前 Prefab Stage 中选中的节点。",
+            };
+            openLocalRepairButton.AddToClassList("psd-hierarchy-chat-open-local-repair");
+            header.Add(openLocalRepairButton);
             RefreshConnectionUi();
             root.Add(header);
+            root.Add(CreateRecoverySection());
+            workspaceView = new PsdHierarchyPlanWorkspaceView();
+            root.Add(workspaceView);
+            workspaceView.Bind(currentWorkspace, CreateWorkspaceActions());
 
             messagesView = new ScrollView { name = MessagesElementName };
             messagesView.AddToClassList("psd-hierarchy-chat-messages");
@@ -218,6 +251,40 @@ namespace PsdLayoutTool2
             footer.Add(sendButton);
             composer.Add(footer);
             root.Add(composer);
+        }
+
+        private VisualElement CreateRecoverySection()
+        {
+            var section = new VisualElement { name = RecoverySectionName };
+            section.AddToClassList("psd-hierarchy-chat-recovery");
+            section.Add(new Label("计划恢复"));
+            recoverySummary = new Label();
+            section.Add(recoverySummary);
+            regeneratePlanButton = new Button(RequestRecoveryPlan)
+            {
+                name = RegeneratePlanButtonName,
+                text = "基于当前快照重新生成",
+                tooltip = "刷新当前 Prefab 快照，并基于失败原因请求一份新的待确认计划。",
+            };
+            section.Add(regeneratePlanButton);
+            UpdateRecoveryUi(canStartRequest: !isSending);
+            return section;
+        }
+
+        private void UpdateRecoveryUi(bool canStartRequest)
+        {
+            bool hasRecovery = !string.IsNullOrWhiteSpace(pendingRecoveryFailure);
+            if (recoverySummary != null)
+            {
+                recoverySummary.text = hasRecovery
+                    ? "上次计划未修改 Prefab。恢复请求会重新读取当前层级和资源证据。"
+                    : "当前没有需要恢复的失败计划。";
+            }
+
+            if (regeneratePlanButton != null)
+            {
+                regeneratePlanButton.SetEnabled(hasRecovery && canStartRequest);
+            }
         }
 
         private static Button CreatePingButton(string elementName, string assetPath, string assetType)
@@ -250,6 +317,68 @@ namespace PsdLayoutTool2
 
             Selection.activeObject = asset;
             EditorGUIUtility.PingObject(asset);
+        }
+
+        private PsdHierarchyPlanWorkspaceActions CreateWorkspaceActions()
+        {
+            return new PsdHierarchyPlanWorkspaceActions
+            {
+                keepOriginalStructure = KeepOriginalStructure,
+                locateNodes = LocateWorkspaceNodes,
+                retryAnalysis = RequestRecoveryPlan,
+                exportDiagnostics = ExportWorkspaceDiagnostics,
+            };
+        }
+
+        private void KeepOriginalStructure(string issueId)
+        {
+            if (currentWorkspace == null || !currentWorkspace.TryKeepOriginalStructure(issueId))
+            {
+                return;
+            }
+
+            SetPlanWorkspace(currentWorkspace);
+            PersistWorkspaceDiagnostics(currentWorkspace);
+            AppendMessage("system", "已记录“保持原结构”。该问题不会产生可执行变更。");
+        }
+
+        private void LocateWorkspaceNodes(string[] nodeIds)
+        {
+            if (context == null || nodeIds == null || nodeIds.Length == 0)
+            {
+                return;
+            }
+
+            string[] paths = nodeIds
+                .Select(nodeId => context.TryGetNodePath(nodeId, out string path) ? path : string.Empty)
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            PingAsset(context.targetPrefabAssetPath);
+            AppendMessage(
+                "system",
+                paths.Length > 0
+                    ? "受影响节点：\n" + string.Join("\n", paths)
+                    : "当前快照中未找到这些节点；请刷新快照后重试。");
+        }
+
+        private void ExportWorkspaceDiagnostics()
+        {
+            if (context == null || currentWorkspace == null)
+            {
+                return;
+            }
+
+            PsdHierarchyPlanWorkspaceStoreResult result =
+                PsdHierarchyPlanWorkspaceStore.TrySave(context.projectRoot, currentWorkspace);
+            if (!result.success)
+            {
+                AppendMessage("system", "导出诊断失败：" + result.error);
+                return;
+            }
+
+            AppendMessage("system", "诊断已导出：" + result.path);
+            EditorUtility.RevealInFinder(result.path);
         }
 
         private void QueueInitialRequest()
@@ -287,14 +416,14 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            SetPendingPlan(string.Empty);
+            SetPlanWorkspace(null);
             if (!TryRefreshContextBeforeNewRequest(out string refreshError))
             {
-                AppendMessage(
-                    "system",
-                    "发送前无法刷新当前 Prefab 权威快照：" + refreshError +
-                    "。本轮未请求 AI，也未修改 Prefab。");
-                SetSending(false, "快照刷新失败");
+                HandleCompletedPlanFailure(
+                    string.Empty,
+                    string.Empty,
+                    PsdHierarchyPlanIssueCategory.Infrastructure,
+                    "发送前无法刷新当前 Prefab 权威快照：" + refreshError);
                 return;
             }
 
@@ -324,6 +453,16 @@ namespace PsdLayoutTool2
 
             error = string.Empty;
             return true;
+        }
+
+        private void OpenLocalRepairWindow()
+        {
+            if (context == null)
+            {
+                return;
+            }
+
+            PsdHierarchyLocalRepairWindow.Open(context);
         }
 
         internal static bool HasAuthoritativeAnalysisChanged(
@@ -382,8 +521,11 @@ namespace PsdLayoutTool2
 
             if (!TryResolveConnection(out PsdHierarchyChatConnection connection, out string configurationError))
             {
-                AppendMessage("system", configurationError);
-                SetSending(false, "请先完成全局配置。");
+                HandleCompletedPlanFailure(
+                    string.Empty,
+                    string.Empty,
+                    PsdHierarchyPlanIssueCategory.Infrastructure,
+                    configurationError);
                 return;
             }
 
@@ -408,6 +550,8 @@ namespace PsdLayoutTool2
                 string lastAssistantReply = string.Empty;
                 string lastPlanError = string.Empty;
                 string initialReviewText = string.Empty;
+                PsdHierarchyPlanIssueCategory lastFailureCategory =
+                    PsdHierarchyPlanIssueCategory.PlanExtraction;
                 for (int repairAttempt = 0; repairAttempt <= MaxAutomaticPlanRepairAttempts; repairAttempt++)
                 {
                     PsdHierarchyChatSendResult result = await PsdHierarchyChatClient.SendWithCliSessionAsync(
@@ -418,10 +562,12 @@ namespace PsdLayoutTool2
                     if (!result.success)
                     {
                         HideThinkingIndicator();
-                        SetPendingPlan(string.Empty);
                         string prefix = repairAttempt == 0 ? string.Empty : "AI 自动补全失败：";
-                        AppendMessage("system", prefix + result.message + "。本轮未修改 Prefab。");
-                        SetSending(false, repairAttempt == 0 ? "发送失败" : "自动补全失败");
+                        HandleCompletedPlanFailure(
+                            initialReviewText,
+                            lastAssistantReply,
+                            PsdHierarchyPlanIssueCategory.Infrastructure,
+                            prefix + result.message);
                         return;
                     }
 
@@ -438,6 +584,8 @@ namespace PsdLayoutTool2
                         initialReviewText = PsdHierarchyChatCleanupExecution.ExtractReviewText(result.message);
                     }
 
+                    bool hasPlanPayload = !string.IsNullOrWhiteSpace(
+                        PsdHierarchyChatCleanupExecution.ExtractJsonCodeBlock(result.message));
                     if (PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                             result.message,
                             context,
@@ -455,17 +603,25 @@ namespace PsdLayoutTool2
                                 initialReviewText,
                                 planJson);
                             AppendMessage("assistant", reviewableReply);
-                            SetPendingPlan(planJson);
+                            SetPlanWorkspace(PsdHierarchyChatCleanupExecution.CreateReadyWorkspace(
+                                context,
+                                initialReviewText,
+                                result.message,
+                                planJson));
                             AppendMessage("system", "方案已就绪。点击“确认并更新”或回复“确认”即可直接更新当前 Prefab；确认不会再发送给 AI。 ");
                             SetSending(false, "方案待确认");
                             return;
                         }
 
                         lastPlanError = validation.message;
+                        lastFailureCategory = PsdHierarchyPlanIssueCategory.RunnerPreflight;
                     }
                     else
                     {
                         lastPlanError = planError;
+                        lastFailureCategory = hasPlanPayload
+                            ? PsdHierarchyPlanIssueCategory.PlanPreparation
+                            : PsdHierarchyPlanIssueCategory.PlanExtraction;
                     }
 
                     if (repairAttempt >= MaxAutomaticPlanRepairAttempts)
@@ -476,6 +632,12 @@ namespace PsdLayoutTool2
                     int nextAttempt = repairAttempt + 1;
                     string repairPrompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(lastPlanError, context);
                     conversation.Add(new PsdHierarchyChatMessage("user", repairPrompt));
+                    if (TryResetCliSessionForAutomaticPlanRepair(
+                            connection.connectionMode,
+                            ref cliSessionId))
+                    {
+                        RefreshConnectionUi();
+                    }
                     ShowThinkingIndicator(
                         "AI 返回的计划未通过校验，正在同一会话自动补全（" + nextAttempt + "/" +
                         MaxAutomaticPlanRepairAttempts + "）...");
@@ -485,27 +647,20 @@ namespace PsdLayoutTool2
                 }
 
                 HideThinkingIndicator();
-                SetPendingPlan(string.Empty);
-                ResetFailedPlanConversation();
-                string failedReply = string.IsNullOrWhiteSpace(initialReviewText)
-                    ? lastAssistantReply
-                    : initialReviewText;
-                if (!string.IsNullOrWhiteSpace(failedReply))
-                {
-                    AppendMessage("assistant", failedReply);
-                }
-
-                AppendMessage(
-                    "system",
-                    "AI 自动补全 " + MaxAutomaticPlanRepairAttempts + " 次后仍未生成可执行计划：" +
-                    lastPlanError + "。本轮未修改 Prefab。");
-                SetSending(false, "计划生成失败");
+                HandleCompletedPlanFailure(
+                    initialReviewText,
+                    lastAssistantReply,
+                    lastFailureCategory,
+                    lastPlanError);
             }
             catch (Exception exception)
             {
                 HideThinkingIndicator();
-                AppendMessage("system", "AI 对话发生异常：" + exception.Message);
-                SetSending(false, "发送失败");
+                HandleCompletedPlanFailure(
+                    string.Empty,
+                    string.Empty,
+                    PsdHierarchyPlanIssueCategory.Infrastructure,
+                    "AI 对话发生异常：" + exception.Message);
             }
             finally
             {
@@ -533,26 +688,40 @@ namespace PsdLayoutTool2
             ShowThinkingIndicator("正在校验已确认方案，并通过 Unity Editor API 更新 Prefab...");
             SetSending(true, "正在更新 Prefab...");
             bool queueComponentExtractionFollowUp = false;
-            bool queueFailureReanalysis = false;
-            string applyFailure = string.Empty;
             try
             {
                 PsdHierarchyChatCleanupExecutionResult result =
                     await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(
                         context,
                         planToApply,
-                        ShouldReplaceReplayProfile(hasAppliedCleanupStage));
+                        ShouldReplaceReplayProfile(
+                            hasAppliedCleanupStage,
+                            requiresReplayProfileReplacement));
                 HideThinkingIndicator();
                 AppendMessage("system", result.message);
-                SetSending(false, result.success ? "更新完成" : "更新失败");
                 if (result.success)
                 {
                     hasAppliedCleanupStage = true;
+                    requiresReplayProfileReplacement = false;
+                    pendingRecoveryFailure = string.Empty;
+                    SetPlanWorkspace(null);
                 }
                 queueComponentExtractionFollowUp = result.success &&
                                                    IsHierarchyOnlyPlan(planToApply);
                 if (!result.success)
                 {
+                    bool requiresProfileReplacement =
+                        PsdHierarchyCleanupReplayCoordinator.IsPermanentReplayFailure(result.message);
+                    requiresReplayProfileReplacement |= requiresProfileReplacement;
+                    if (requiresProfileReplacement)
+                    {
+                        string sourceGuid = AssetDatabase.AssetPathToGUID(context.sourcePsdAssetPath);
+                        PsdHierarchyCleanupReplayProfile.TryMarkRequiresRebindByGuid(
+                            sourceGuid,
+                            context.targetPrefabAssetPath,
+                            result.message);
+                    }
+
                     bool discarded = PsdHierarchyChatCleanupExecution.TryDiscardFailedReplayStage(
                         context,
                         planToApply,
@@ -566,15 +735,23 @@ namespace PsdLayoutTool2
                         AppendMessage("system", "未能清理失败计划的旧重放阶段：" + discardError);
                     }
 
-                    applyFailure = result.message;
-                    queueFailureReanalysis = true;
+                    HandleApplyFailure(
+                        planToApply,
+                        result.message,
+                        infrastructureFailure: false);
+                }
+                if (result.success)
+                {
+                    SetSending(false, "更新完成");
                 }
             }
             catch (Exception exception)
             {
                 HideThinkingIndicator();
-                AppendMessage("system", "更新 Prefab 时发生异常：" + exception.Message);
-                SetSending(false, "更新失败");
+                HandleApplyFailure(
+                    planToApply,
+                    "更新 Prefab 时发生异常：" + exception.Message,
+                    infrastructureFailure: true);
             }
             finally
             {
@@ -586,32 +763,122 @@ namespace PsdLayoutTool2
             {
                 QueueComponentExtractionFollowUp();
             }
-            else if (queueFailureReanalysis)
+        }
+
+        internal void HandleCompletedPlanFailure(
+            string reviewText,
+            string rawAssistantReply,
+            PsdHierarchyPlanIssueCategory category,
+            string error)
+        {
+            PsdHierarchyPlanWorkspace workspace =
+                PsdHierarchyChatCleanupExecution.CreateIssueWorkspace(
+                    context,
+                    reviewText,
+                    rawAssistantReply,
+                    category,
+                    error);
+            SetPlanWorkspace(workspace);
+            pendingRecoveryFailure = string.IsNullOrWhiteSpace(error)
+                ? "The previous plan could not be prepared."
+                : error.Trim();
+            PersistWorkspaceDiagnostics(workspace);
+
+            if (!string.IsNullOrWhiteSpace(reviewText))
             {
-                QueueFailedApplyReanalysis(applyFailure);
+                AppendMessage("assistant", reviewText);
+            }
+
+            AppendMessage(
+                "system",
+                category == PsdHierarchyPlanIssueCategory.Infrastructure
+                    ? "当前环境阻止了分析或校验。详情、重试和诊断导出仍保留在“待处理问题”中；本轮未修改 Prefab。"
+                    : "分析已完成，但当前没有可安全执行的变更。请在“待处理问题”中处理；本轮未修改 Prefab。");
+            UpdateRecoveryUi(canStartRequest: true);
+            SetSending(
+                false,
+                category == PsdHierarchyPlanIssueCategory.Infrastructure
+                    ? "环境阻塞"
+                    : "存在待处理问题");
+        }
+
+        internal void HandleApplyFailure(
+            string planJson,
+            string error,
+            bool infrastructureFailure)
+        {
+            PsdHierarchyPlanIssueCategory category = infrastructureFailure
+                ? PsdHierarchyPlanIssueCategory.Infrastructure
+                : PsdHierarchyPlanIssueCategory.RunnerPreflight;
+            PsdHierarchyPlanWorkspace workspace =
+                PsdHierarchyChatCleanupExecution.CreateIssueWorkspace(
+                    context,
+                    currentWorkspace?.reviewText,
+                    currentWorkspace?.rawAssistantReply,
+                    category,
+                    error,
+                    planJson);
+            SetPlanWorkspace(workspace);
+            pendingRecoveryFailure = string.IsNullOrWhiteSpace(error)
+                ? "The confirmed plan could not be applied."
+                : error.Trim();
+            PersistWorkspaceDiagnostics(workspace);
+            AppendMessage(
+                "system",
+                "原计划已保留为禁用批次，不会自动重试。请在“待处理问题”中查看详情或重新分析。");
+            UpdateRecoveryUi(canStartRequest: true);
+            SetSending(false, infrastructureFailure ? "环境阻塞" : "存在待处理问题");
+        }
+
+        private void PersistWorkspaceDiagnostics(PsdHierarchyPlanWorkspace workspace)
+        {
+            if (context == null || workspace == null)
+            {
+                return;
+            }
+
+            PsdHierarchyPlanWorkspaceStoreResult result =
+                PsdHierarchyPlanWorkspaceStore.TrySave(context.projectRoot, workspace);
+            if (!result.success)
+            {
+                AppendMessage("system", "自动保存计划诊断失败：" + result.error);
             }
         }
 
-        private void QueueFailedApplyReanalysis(string failure)
+        internal static bool TryResetCliSessionForAutomaticPlanRepair(
+            PsdHierarchyAiConnectionMode connectionMode,
+            ref string cliSessionId)
         {
-            if (!PsdHierarchyChatContextBuilder.TryCreate(
-                    context.sourcePsdAssetPath,
-                    context.targetPrefabAssetPath,
-                    out PsdHierarchyChatContext refreshedContext,
-                    out string error))
+            if (connectionMode != PsdHierarchyAiConnectionMode.LocalCli)
+            {
+                return false;
+            }
+
+            cliSessionId = string.Empty;
+            return true;
+        }
+
+        private void RequestRecoveryPlan()
+        {
+            if (context == null || isSending || string.IsNullOrWhiteSpace(pendingRecoveryFailure))
+            {
+                return;
+            }
+
+            if (!TryRefreshContextBeforeNewRequest(out string error))
             {
                 AppendMessage("system", "更新失败后无法刷新当前 Prefab 快照：" + error);
                 return;
             }
 
-            context = refreshedContext;
             ResetFailedPlanConversation();
             AppendMessage("system", "已刷新当前 Prefab 快照，正在基于失败原因生成新的待确认计划。");
-            rootVisualElement.schedule.Execute(() => SendMessage(
-                "The confirmed cleanup plan failed before the Prefab was saved. Re-analyze the current authoritative snapshot and return a complete replacement JSON plan. Do not repeat the failed extraction unchanged and do not request confirmation in this reply. Failure detail:\n" +
-                (failure ?? string.Empty),
+            SendMessage(
+                PsdHierarchyChatClient.BuildJsonOnlyPlanRecoveryPrompt(
+                    pendingRecoveryFailure,
+                    context),
                 false,
-                false)).ExecuteLater(1);
+                false);
         }
 
         private void QueueComponentExtractionFollowUp()
@@ -660,7 +927,16 @@ namespace PsdLayoutTool2
 
         internal static bool ShouldReplaceReplayProfile(bool hasAppliedCleanupStage)
         {
-            return !hasAppliedCleanupStage;
+            return ShouldReplaceReplayProfile(
+                hasAppliedCleanupStage,
+                requiresReplayProfileReplacement: false);
+        }
+
+        internal static bool ShouldReplaceReplayProfile(
+            bool hasAppliedCleanupStage,
+            bool requiresReplayProfileReplacement)
+        {
+            return !hasAppliedCleanupStage || requiresReplayProfileReplacement;
         }
 
         internal void ShowThinkingIndicator(string content = "正在分析：读取整理技能、完整层级、节点几何、组件与重复结构...")
@@ -702,6 +978,7 @@ namespace PsdLayoutTool2
             if (draftField != null) draftField.SetEnabled(!sending);
             if (sendButton != null) sendButton.SetEnabled(!sending);
             if (statusLabel != null) statusLabel.text = status;
+            UpdateRecoveryUi(canStartRequest: !sending);
         }
 
         private void SetPendingPlan(string planJson)
@@ -721,8 +998,24 @@ namespace PsdLayoutTool2
             }
         }
 
+        private void SetPlanWorkspace(PsdHierarchyPlanWorkspace workspace)
+        {
+            currentWorkspace = workspace;
+            if (workspace != null && workspace.TryGetEnabledPlan(out string planJson))
+            {
+                SetPendingPlan(planJson);
+            }
+            else
+            {
+                SetPendingPlan(string.Empty);
+            }
+
+            workspaceView?.Bind(workspace, CreateWorkspaceActions());
+        }
+
         private void ResetFailedPlanConversation()
         {
+            SetPlanWorkspace(null);
             ResetConversationForFreshSnapshot(conversation, ref cliSessionId);
             RefreshConnectionUi();
         }

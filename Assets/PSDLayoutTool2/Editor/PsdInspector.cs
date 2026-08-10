@@ -353,6 +353,19 @@
                         }
                     }
 
+                    if (hierarchyOrganizerAvailable && GUILayout.Button(
+                            new GUIContent(
+                                Localize("局部整理", "Local Repair"),
+                                "打开独立的局部整理窗口，读取当前 Prefab Stage 中选中的节点。"),
+                            GUILayout.Height(24)))
+                    {
+                        string localRepairError;
+                        if (!PsdHierarchyOrganizerEntry.TryOpenLocalRepair(assetPath, out localRepairError))
+                        {
+                            EditorUtility.DisplayDialog("PSDLayoutTool2", localRepairError, "确定");
+                        }
+                    }
+
                     EditorGUILayout.EndHorizontal();
 
                     GUILayout.Space(3);

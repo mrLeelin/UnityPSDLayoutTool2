@@ -27,6 +27,32 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void AutomaticPlanRepairForcesANewLocalCliConversation()
+        {
+            string cliSessionId = "stale-cli-session";
+
+            bool reset = PsdHierarchyChatWindow.TryResetCliSessionForAutomaticPlanRepair(
+                PsdHierarchyAiConnectionMode.LocalCli,
+                ref cliSessionId);
+
+            Assert.That(reset, Is.True);
+            Assert.That(cliSessionId, Is.Empty);
+        }
+
+        [Test]
+        public void AutomaticPlanRepairLeavesCustomApiSessionStateUntouched()
+        {
+            string cliSessionId = "not-a-cli-session";
+
+            bool reset = PsdHierarchyChatWindow.TryResetCliSessionForAutomaticPlanRepair(
+                PsdHierarchyAiConnectionMode.CustomApi,
+                ref cliSessionId);
+
+            Assert.That(reset, Is.False);
+            Assert.That(cliSessionId, Is.EqualTo("not-a-cli-session"));
+        }
+
+        [Test]
         public void SamePrefabFingerprintWithChangedCandidateAnalysisRequiresConversationReset()
         {
             const string fingerprint = "same-prefab-fingerprint";
@@ -67,6 +93,19 @@ namespace PsdLayoutTool2.Tests
                 Is.EqualTo(expected));
         }
 
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public void RecoveryAfterAnIncompatibleReplayReplacesTheReplayProfile(
+            bool hasAppliedCleanupStage,
+            bool expected)
+        {
+            Assert.That(
+                PsdHierarchyChatWindow.ShouldReplaceReplayProfile(
+                    hasAppliedCleanupStage,
+                    requiresReplayProfileReplacement: true),
+                Is.EqualTo(expected));
+        }
+
         [Test]
         public void WindowBuildsOnlyChatControls()
         {
@@ -89,6 +128,16 @@ namespace PsdLayoutTool2.Tests
                     Is.Null);
                 Assert.That(window.rootVisualElement.Q<TextField>(PsdHierarchyChatWindow.DraftFieldName), Is.Not.Null);
                 Assert.That(window.rootVisualElement.Q<Button>(PsdHierarchyChatWindow.SendButtonName), Is.Not.Null);
+                Assert.That(
+                    window.rootVisualElement.Q<Button>(PsdHierarchyChatWindow.OpenLocalRepairButtonName),
+                    Is.Not.Null);
+                Assert.That(
+                    window.rootVisualElement.Q<VisualElement>(PsdHierarchyChatWindow.RecoverySectionName),
+                    Is.Not.Null);
+                Button recoveryButton = window.rootVisualElement.Q<Button>(
+                    PsdHierarchyChatWindow.RegeneratePlanButtonName);
+                Assert.That(recoveryButton, Is.Not.Null);
+                Assert.That(recoveryButton.enabledSelf, Is.False);
                 Assert.That(
                     window.rootVisualElement.Q<Label>(PsdHierarchyChatWindow.AgentInfoElementName).text,
                     Does.Contain("Agent"));
@@ -123,7 +172,7 @@ namespace PsdLayoutTool2.Tests
             }
             finally
             {
-                window.Close();
+                Object.DestroyImmediate(window);
             }
         }
 

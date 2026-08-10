@@ -154,7 +154,8 @@ namespace PsdLayoutTool2
             string planFormatContent = "",
             string hierarchySnapshotJson = "",
             string hierarchySnapshotFingerprint = "",
-            string hierarchySnapshotFullPath = "")
+            string hierarchySnapshotFullPath = "",
+            IReadOnlyList<string> assetRenameSourcePaths = null)
         {
             this.projectRoot = projectRoot ?? string.Empty;
             this.sourcePsdAssetPath = sourcePsdAssetPath ?? string.Empty;
@@ -166,7 +167,21 @@ namespace PsdLayoutTool2
             this.hierarchySnapshotJson = hierarchySnapshotJson ?? string.Empty;
             this.hierarchySnapshotFingerprint = hierarchySnapshotFingerprint ?? string.Empty;
             this.hierarchySnapshotFullPath = hierarchySnapshotFullPath ?? string.Empty;
+            hasAuthoritativeAssetRenameSourcePaths = assetRenameSourcePaths != null;
+            this.assetRenameSourcePaths = (assetRenameSourcePaths ?? Array.Empty<string>())
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => path.Replace('\\', '/').Trim())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            assetRenameSourcePathSet = new HashSet<string>(
+                this.assetRenameSourcePaths,
+                StringComparer.Ordinal);
             nodePathsById = ParseNodePaths(this.hierarchySnapshotJson);
+            nodeIdsByPath = nodePathsById.ToDictionary(
+                pair => pair.Value,
+                pair => pair.Key,
+                StringComparer.Ordinal);
             directChildrenByPath = ParseDirectChildren(this.hierarchySnapshotJson);
             componentFamilyCandidates = ParseComponentFamilyCandidates(this.hierarchySnapshotJson);
             containmentFindings = ParseContainmentFindings(this.hierarchySnapshotJson);
@@ -183,6 +198,8 @@ namespace PsdLayoutTool2
         internal readonly string hierarchySnapshotJson;
         internal readonly string hierarchySnapshotFingerprint;
         internal readonly string hierarchySnapshotFullPath;
+        internal readonly bool hasAuthoritativeAssetRenameSourcePaths;
+        internal readonly IReadOnlyList<string> assetRenameSourcePaths;
         internal readonly IReadOnlyList<PsdHierarchyComponentFamilyCandidate> componentFamilyCandidates;
 
         // Kept as raw snapshot JSON: the plan writer copies these entries through to the
@@ -190,11 +207,19 @@ namespace PsdLayoutTool2
         internal readonly JArray containmentFindings;
         internal readonly JArray flatSiblingFindings;
         private readonly Dictionary<string, string> nodePathsById;
+        private readonly Dictionary<string, string> nodeIdsByPath;
         private readonly Dictionary<string, IReadOnlyList<PsdHierarchySnapshotChild>> directChildrenByPath;
+        private readonly HashSet<string> assetRenameSourcePathSet;
+        internal PsdHierarchyLocalRepairScope localRepairScope;
 
         internal bool TryGetNodePath(string nodeId, out string path)
         {
             return nodePathsById.TryGetValue(nodeId ?? string.Empty, out path);
+        }
+
+        internal bool TryGetNodeId(string path, out string nodeId)
+        {
+            return nodeIdsByPath.TryGetValue(path ?? string.Empty, out nodeId);
         }
 
         internal bool TryGetDirectChildren(
@@ -202,6 +227,11 @@ namespace PsdLayoutTool2
             out IReadOnlyList<PsdHierarchySnapshotChild> children)
         {
             return directChildrenByPath.TryGetValue(parentPath ?? string.Empty, out children);
+        }
+
+        internal bool IsAssetRenameSourcePathAllowed(string assetPath)
+        {
+            return assetRenameSourcePathSet.Contains((assetPath ?? string.Empty).Replace('\\', '/').Trim());
         }
 
         internal string BuildInstructions()
@@ -212,6 +242,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Inspect first and provide a complete, reviewable plan. Do not claim to have edited a local asset: the Unity chat window performs the approved update.");
             builder.AppendLine("Do not invoke PowerShell, Python, Unity runners, or file-writing tools yourself.");
             builder.AppendLine("Your first reply must contain the human-readable review in Simplified Chinese, followed by exactly one complete UTF-8 JSON plan in a fenced ```json code block that follows the supplied plan format.");
+            builder.AppendLine("Keep the five-section review concise (one or two short sentences per section); the complete JSON plan has priority and must not be truncated.");
             builder.AppendLine("The JSON root must contain \"version\": 2, \"snapshotFingerprint\" copied exactly from the supplied snapshot, and every required operation array, including empty arrays for unused operations. The window rejects incomplete JSON before it can be confirmed.");
             builder.AppendLine("If that reply fails plan validation, the Unity chat window automatically sends the validation error back in this same AI session. Treat that message as an internal correction request: return only one complete replacement JSON code block, never a patch, and never ask the user to retry or send another message. The window preserves the initial five-section review for the user.");
             builder.AppendLine("The user will inspect that reply. When the user replies with an explicit confirmation, the Unity chat window validates the JSON and directly runs the approved plan through Unity Editor APIs. Do not ask for an additional confirmation, output-mode choice, or manual script command.");
@@ -221,14 +252,31 @@ namespace PsdLayoutTool2
             builder.AppendLine("Private-asset naming is reviewed through textureRenames[].toName and spriteAtlasRenames[].toName. When either array is non-empty, Unity derives the internal prefabName from their one common PascalCase name ending with View. Keep the required prefabName field present for schema stability, but do not guess it independently or change it instead of the reviewed rename targets.");
             builder.AppendLine(PsdHierarchyChatClient.PlanIdentifierContract);
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
+            if (localRepairScope != null)
+            {
+                builder.AppendLine("This is a local repair stage. Only operate inside the following locked scope: " + localRepairScope.Describe() + ".");
+                builder.AppendLine("Do not move, rename, remove, or create a wrapper outside the selected repair boundary. Do not perform component extraction, asset renames, or flat-sibling auto-grouping in this stage; return empty arrays for all of those operations.");
+                builder.AppendLine("Selected hierarchy paths: " + string.Join("; ", localRepairScope.selectedPaths));
+            }
             builder.AppendLine("Do not propose, create, copy, or offer a .cleaned.prefab or any other replacement Prefab. Any later approved cleanup must target the supplied Prefab in place while preserving visual layout, generated assets, bindings, and unrelated components.");
-            builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Each componentFamilyDecision for a supplied candidate must copy its candidateId, parent, and complete sources exactly. Candidates marked requiresExtraction:true must use component, state, variant, or stateful mode; skip is forbidden for them. Candidates marked requiresExtraction:false are advisory and may use skip with concrete structural evidence; do not force a variant solely because sibling names repeat. Do not silently omit a repeated component family.");
-            builder.AppendLine("When the snapshot includes flatSiblingFindings, set every finding's flatSiblingResolutions mode to group. Unity deterministically derives the wrapper id as <findingId>_group, the exact finding parent, the observed background siblingIndex, every listed member move in listed order, and tightBounds; do not invent alternate wrapper ids or destinations. These fields are normalized from the authoritative snapshot before execution.");
+            if (localRepairScope == null)
+            {
+                builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Each componentFamilyDecision for a supplied candidate must copy its candidateId, parent, and complete sources exactly. Candidates marked requiresExtraction:true must use component, state, variant, or stateful mode; skip is forbidden for them. Candidates marked requiresExtraction:false are advisory and may use skip with concrete structural evidence; do not force a variant solely because sibling names repeat. Do not silently omit a repeated component family.");
+                builder.AppendLine("When the snapshot includes flatSiblingFindings, set every finding's flatSiblingResolutions mode to group. Unity deterministically derives the wrapper id as <findingId>_group, the exact finding parent, the observed background siblingIndex, every listed member move in listed order, and tightBounds; do not invent alternate wrapper ids or destinations. These fields are normalized from the authoritative snapshot before execution.");
+            }
             builder.AppendLine("For a mandatory variant family, create one observed state for every distinct recursive structure and map every source to an exact matching state. Even when every source has a distinct structure, the mandatory family must not be skipped or reduced to hierarchy-only cleanup.");
             builder.AppendLine("Every extracted assetPath must be a new PascalCase .prefab directly under the target Prefab's sibling Common directory. Multiple non-overlapping component families and hierarchy cleanup operations are intentionally supported in one reviewed plan.");
             builder.AppendLine("Return an auditable analysis summary, not private chain-of-thought. In Simplified Chinese, use exactly these sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence.");
             builder.AppendLine("Source PSD: " + sourcePsdAssetPath);
             builder.AppendLine("Target Prefab: " + targetPrefabAssetPath);
+            if (hasAuthoritativeAssetRenameSourcePaths)
+            {
+                builder.AppendLine("For textureRenames[].from and spriteAtlasRenames[].from, use only an exact path from the authoritative list below. If a needed path is absent, omit that rename; never guess a filename or numeric suffix.");
+                builder.AppendLine("===== BEGIN ALLOWED ASSET RENAME SOURCES =====");
+                foreach (string assetPath in assetRenameSourcePaths)
+                    builder.AppendLine(assetPath);
+                builder.AppendLine("===== END ALLOWED ASSET RENAME SOURCES =====");
+            }
             builder.AppendLine();
             builder.AppendLine("===== BEGIN prefab-hierarchy-cleanup/SKILL.md =====");
             builder.AppendLine(skillContent);
@@ -457,6 +505,7 @@ namespace PsdLayoutTool2
 
         private const string LegacyPackageRootRelativePath = "Assets/UnityPSDLayoutTool2";
         private const string ScriptAssetPathMarker = "/Assets/PSDLayoutTool2/";
+        private const string ReusableItemFallbackName = "ReusableItem";
 
         internal const long MaxContextFileBytes = 512 * 1024;
 
@@ -528,6 +577,9 @@ namespace PsdLayoutTool2
                 return false;
             }
 
+            IReadOnlyList<string> assetRenameSourcePaths =
+                CollectAssetRenameSourcePaths(prefabAssetPath);
+
             context = new PsdHierarchyChatContext(
                 projectRoot,
                 NormalizeAssetPath(sourcePsdAssetPath),
@@ -538,9 +590,37 @@ namespace PsdLayoutTool2
                 planFormatContent,
                 hierarchySnapshotJson,
                 snapshotFingerprint,
-                hierarchySnapshotFullPath);
+                hierarchySnapshotFullPath,
+                assetRenameSourcePaths);
             error = string.Empty;
             return true;
+        }
+
+        private static IReadOnlyList<string> CollectAssetRenameSourcePaths(string prefabAssetPath)
+        {
+            return AssetDatabase.GetDependencies(prefabAssetPath, true)
+                .Select(NormalizeAssetPath)
+                .Where(IsAssetRenameSourcePath)
+                .Where(path => AssetDatabase.LoadMainAssetAtPath(path) != null)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        private static bool IsAssetRenameSourcePath(string assetPath)
+        {
+            switch (Path.GetExtension(assetPath ?? string.Empty).ToLowerInvariant())
+            {
+                case ".png":
+                case ".jpg":
+                case ".jpeg":
+                case ".tga":
+                case ".psd":
+                case ".spriteatlas":
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         private static bool TryBuildHierarchySnapshot(
@@ -1294,12 +1374,26 @@ namespace PsdLayoutTool2
 
         private static string ToSuggestedAssetName(string stem)
         {
-            if (string.IsNullOrEmpty(stem))
+            if (string.IsNullOrWhiteSpace(stem))
             {
-                return "ReusableItem";
+                return ReusableItemFallbackName;
             }
 
-            return char.ToUpperInvariant(stem[0]) + stem.Substring(1);
+            string suggestedAssetName = char.ToUpperInvariant(stem[0]) + stem.Substring(1);
+            return IsAsciiIdentifier(suggestedAssetName)
+                ? suggestedAssetName
+                : ReusableItemFallbackName;
+        }
+
+        private static bool IsAsciiIdentifier(string value)
+        {
+            return !string.IsNullOrEmpty(value) &&
+                   ((value[0] >= 'A' && value[0] <= 'Z') ||
+                    (value[0] >= 'a' && value[0] <= 'z')) &&
+                   value.Skip(1).All(character =>
+                       (character >= 'A' && character <= 'Z') ||
+                       (character >= 'a' && character <= 'z') ||
+                       (character >= '0' && character <= '9'));
         }
 
         private static bool HasConsistentRectTransformFrame(IReadOnlyList<JObject> nodes)
@@ -1740,8 +1834,8 @@ namespace PsdLayoutTool2
         private const int MaxClaudePromptCharacters = 6000;
         private const string RequiredPlanRootFields =
             "\"version\", \"snapshotFingerprint\", \"prefabAssetPath\", \"output\", \"prefabName\", \"wrappers\", \"moves\", \"renames\", " +
-            "\"emptyContainerRemovals\", \"tightBounds\", \"textureRenames\", \"spriteAtlasRenames\", " +
-            "\"componentFamilyDecisions\", \"flatSiblingResolutions\", \"componentExtractions\", \"stateComponentExtractions\", " +
+            "\"emptyContainerRemovals\", \"tightBounds\", \"textureRenames\", \"spriteAtlasRenames\", \"containmentResolutions\", \"flatSiblingResolutions\", " +
+            "\"componentFamilyDecisions\", \"componentExtractions\", \"stateComponentExtractions\", " +
             "\"variantComponentExtractions\", \"statefulComponentExtractions\", \"verify\"";
         internal const string PlanIdentifierContract =
             "Every wrappers[].id must use lower snake_case matching [a-z][a-z0-9_]*; examples: screen, screen_root, day_markers. Do not use uppercase, hyphens, spaces, brackets, or @ in an id. The @ prefix is only for a later reference such as @screen_root. Apply the same lower snake_case rule to all extraction IDs and state IDs.";
@@ -1759,6 +1853,7 @@ namespace PsdLayoutTool2
             "四、原地整理方案：给出完整目标树与每项调整。\n" +
             "五、验证清单：列出应用前后必须检查的不变量。\n" +
             "在上述五个章节后，必须额外附上一个完整的 ```json 计划代码块，严格遵循随附计划格式。\n" +
+            "CRITICAL: 层级快照中所有 requiresExtraction=true 的 componentFamilyCandidates 都必须在计划中处理。对于每个强制候选，必须在 componentFamilyDecisions 中添加一个决策条目，并在对应的抽取数组（componentExtractions/stateComponentExtractions/variantComponentExtractions/statefulComponentExtractions）中添加完整的抽取合约。如果候选的 recommendedMode 是 stateful，必须仔细分析每个实例的子节点，明确区分哪些是公共部分（Common），哪些是状态变化部分（States），并为每个实例提供完整的 commonSourceNames 和 stateSourceNames 映射。绝不能跳过或忽略 requiresExtraction=true 的候选。\n" +
             "本次主界面只原地更新当前目标 Prefab，不创建、复制或另存新的屏幕 Prefab；仅当证据充分时，才可在计划中声明经确认的 Prefab/Common 复用组件。\n" +
             "不要声称已经修改本地文件。用户确认该计划后，Unity 窗口会直接更新 Prefab。";
 
@@ -1781,6 +1876,8 @@ namespace PsdLayoutTool2
             builder.AppendLine("Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.");
             builder.AppendLine(PlanIdentifierContract);
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.");
+            builder.AppendLine("CRITICAL: Every componentFamilyDecisions[].candidateId must be an EXACT candidate ID from the authoritative snapshot's componentFamilyCandidates array. Never invent, modify, or guess a candidate ID. If the error says 'candidateId 未出现在当前快照候选中', it means you referenced a candidate ID that does not exist in the snapshot—remove that decision or replace it with an exact observed candidate ID. Re-read the snapshot's componentFamilyCandidates before adding any decision.");
+            builder.AppendLine("CRITICAL: Every emptyContainerRemovals entry must reference a container that will be COMPLETELY EMPTY after all moves execute. Before adding a container to emptyContainerRemovals, verify that EVERY child node under that container has a corresponding move operation that relocates it elsewhere. If any child remains unmoved, the container is not empty and must NOT be in emptyContainerRemovals. When the error says 'Container is not empty after planned moves', it means you listed a container for removal that still has children—either move ALL its children first, or remove that container from emptyContainerRemovals.");
             builder.AppendLine("Do not guess or preserve an asset rename expectedGuid. Use an empty expectedGuid string in the version 2 replacement plan; Unity resolves the current GUID from each existing from path.");
             builder.AppendLine("Do not repair prefabName by guessing. For private asset renames, Unity derives the internal prefabName from the reviewed toName values: every texture name must share one '<PrefabName>_' prefix and every SpriteAtlas toName must equal that same PascalCase name ending with View. Repair conflicting toName values themselves; prefabName alone cannot repair the plan.");
             builder.AppendLine("Every verify.directChildren entry must use a non-empty, unique list of direct-child names in post-apply sibling order. List each child name exactly once; never duplicate a name as a placeholder or count.");
@@ -1791,6 +1888,29 @@ namespace PsdLayoutTool2
             builder.AppendLine("For every flatSiblingFindings entry in the authoritative snapshot, include exactly one flatSiblingResolutions entry with mode=group and wrapperId=<findingId>_group. Unity replaces any AI wrapper, move, or tightBounds details with the deterministic values derived from the finding; do not use keep or an unrelated existing container.");
             AppendRequiredComponentFamilyRepairContract(builder, context);
             AppendFlatSiblingRepairContract(builder, context);
+            return builder.ToString();
+        }
+
+        internal static string BuildJsonOnlyPlanRecoveryPrompt(
+            string failureDetail,
+            PsdHierarchyChatContext context)
+        {
+            string detail = string.IsNullOrWhiteSpace(failureDetail)
+                ? "The previously confirmed cleanup plan could not be applied."
+                : failureDetail.Trim();
+            var builder = new StringBuilder();
+            builder.AppendLine("The confirmed cleanup plan failed before the Prefab was saved. Re-analyze the current authoritative snapshot and return one complete replacement JSON plan.");
+            builder.AppendLine("Failure detail: " + detail);
+            builder.AppendLine("Do not reuse a failed hierarchy assumption. Every existing-node reference and direct-child contract must be rebuilt from the current authoritative snapshot.");
+            builder.AppendLine("For every textureRenames[].from or spriteAtlasRenames[].from, use only an exact path from the current allowed asset source list. If the failed path is absent, remove or replace that operation; never guess an incremented filename.");
+            if (context?.hasAuthoritativeAssetRenameSourcePaths == true)
+            {
+                builder.AppendLine("===== BEGIN CURRENT ALLOWED ASSET RENAME SOURCES =====");
+                foreach (string assetPath in context.assetRenameSourcePaths)
+                    builder.AppendLine(assetPath);
+                builder.AppendLine("===== END CURRENT ALLOWED ASSET RENAME SOURCES =====");
+            }
+            builder.AppendLine("Return exactly one complete UTF-8 JSON plan in one fenced ```json code block. Do not output prose, headings, explanations, diffs, or Markdown outside that code block. This must be a full replacement plan, not a patch. Do not ask the user to retry or confirm.");
             return builder.ToString();
         }
 
@@ -1932,6 +2052,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Do not use any other tool. Do not edit, create, rename, or delete any file.");
             builder.AppendLine("Return a concise, reviewable hierarchy-cleanup plan in Simplified Chinese with exactly these five sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单.");
             builder.AppendLine("After those five sections, return exactly one complete UTF-8 JSON plan in a fenced ```json code block. The JSON is an executable contract, not illustrative pseudo-JSON.");
+            builder.AppendLine("Keep the five-section review concise (one or two short sentences per section); the complete JSON plan has priority and must not be truncated.");
             builder.AppendLine("Use exactly these required root fields: " + RequiredPlanRootFields + ". Use [] for every unused operation array.");
             builder.AppendLine("Do not use legacy field names such as wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. The main Prefab output must be in_place at the exact target path.");
             builder.AppendLine("Use version 2 and copy snapshotFingerprint exactly from the authoritative snapshot.");

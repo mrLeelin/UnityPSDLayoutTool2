@@ -23,6 +23,30 @@ namespace PsdLayoutTool2
         internal readonly string message;
     }
 
+    internal readonly struct PsdHierarchyLocalRepairAnalysisResult
+    {
+        internal PsdHierarchyLocalRepairAnalysisResult(
+            bool success,
+            string planJson,
+            string review,
+            string error,
+
+            PsdHierarchyVisualAnalysisResult visualAnalysis = null)
+        {
+            this.success = success;
+            this.planJson = planJson ?? string.Empty;
+            this.review = review ?? string.Empty;
+            this.error = error ?? string.Empty;
+            this.visualAnalysis = visualAnalysis;
+        }
+
+        internal readonly bool success;
+        internal readonly string planJson;
+        internal readonly string review;
+        internal readonly string error;
+        internal readonly PsdHierarchyVisualAnalysisResult visualAnalysis;
+    }
+
     /// <summary>
     /// Bridges a reviewed chat plan to the existing, Unity-validated cleanup
     /// runner. The AI returns data only; this class owns the local write and
@@ -32,6 +56,108 @@ namespace PsdLayoutTool2
     {
         internal const string CleanupRunnerRelativePath =
             ".agents/skills/prefab-hierarchy-cleanup/scripts/run_prefab_hierarchy_cleanup.ps1";
+        private const string ReusableItemFallbackName = "ReusableItem";
+        private static readonly Regex PlanFailureCandidateIdRegex = new Regex(
+            @"(?:candidateId|candidate)=(?<id>[A-Za-z0-9_.-]+)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex PlanFailureNodeIdRegex = new Regex(
+            @"\bnode:(?<id>[A-Za-z0-9_.-]+)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        internal static PsdHierarchyPlanIssue ClassifyPlanFailure(
+            PsdHierarchyPlanIssueCategory category,
+            string error)
+        {
+            string technicalDetails = error ?? string.Empty;
+            string[] candidateIds = PlanFailureCandidateIdRegex.Matches(technicalDetails)
+                .Cast<Match>()
+                .Select(match => match.Groups["id"].Value)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            string[] nodeIds = PlanFailureNodeIdRegex.Matches(technicalDetails)
+                .Cast<Match>()
+                .Select(match => match.Groups["id"].Value)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+            return PsdHierarchyPlanWorkspace.CreateIssue(
+                category,
+                category == PsdHierarchyPlanIssueCategory.Infrastructure
+                    ? PsdHierarchyPlanIssueSeverity.Blocked
+                    : PsdHierarchyPlanIssueSeverity.NeedsDecision,
+                GetPlanFailureSummary(category),
+                technicalDetails,
+                category == PsdHierarchyPlanIssueCategory.Infrastructure
+                    ? "请重试或刷新快照。"
+                    : "保持原结构，或重新分析此项。",
+                candidateIds,
+                nodeIds);
+        }
+
+        internal static PsdHierarchyPlanWorkspace CreateReadyWorkspace(
+            PsdHierarchyChatContext context,
+            string reviewText,
+            string rawAssistantReply,
+            string validatedPlanJson)
+        {
+            return PsdHierarchyPlanWorkspace.CreateReady(
+                context?.hierarchySnapshotFingerprint,
+                reviewText,
+                rawAssistantReply,
+                validatedPlanJson);
+        }
+
+        internal static PsdHierarchyPlanWorkspace CreateIssueWorkspace(
+            PsdHierarchyChatContext context,
+            string reviewText,
+            string rawAssistantReply,
+            PsdHierarchyPlanIssueCategory category,
+            string error,
+            string quarantinedPlanJson = "")
+        {
+            PsdHierarchyPlanIssue issue = ClassifyPlanFailure(category, error);
+            if (category == PsdHierarchyPlanIssueCategory.Infrastructure)
+            {
+                return PsdHierarchyPlanWorkspace.CreateInfrastructureBlocked(
+                    context?.hierarchySnapshotFingerprint,
+                    reviewText,
+                    rawAssistantReply,
+                    issue.technicalDetails,
+                    issue.recommendedResolution,
+                    quarantinedPlanJson);
+            }
+
+            return PsdHierarchyPlanWorkspace.CreateBlockedPlan(
+                context?.hierarchySnapshotFingerprint,
+                reviewText,
+                rawAssistantReply,
+                category,
+                issue.summary,
+                issue.technicalDetails,
+                issue.recommendedResolution,
+                issue.candidateIds,
+                issue.affectedNodeIds,
+                quarantinedPlanJson);
+        }
+
+        private static string GetPlanFailureSummary(PsdHierarchyPlanIssueCategory category)
+        {
+            switch (category)
+            {
+                case PsdHierarchyPlanIssueCategory.PlanExtraction:
+                    return "AI 返回内容缺少可读取的计划。";
+                case PsdHierarchyPlanIssueCategory.PlanPreparation:
+                    return "计划包含相互冲突或无法确定的结构操作。";
+                case PsdHierarchyPlanIssueCategory.RunnerPreflight:
+                    return "计划未通过执行前校验。";
+                case PsdHierarchyPlanIssueCategory.Infrastructure:
+                    return "分析或校验环境当前不可用。";
+                default:
+                    return "计划需要进一步处理。";
+            }
+        }
 
         private static readonly string[] RequiredArrayProperties =
         {
@@ -43,6 +169,8 @@ namespace PsdLayoutTool2
             "textureRenames",
             "spriteAtlasRenames",
             "componentFamilyDecisions",
+            "containmentResolutions",
+            "flatSiblingResolutions",
             "componentExtractions",
             "stateComponentExtractions",
             "variantComponentExtractions",
@@ -58,6 +186,8 @@ namespace PsdLayoutTool2
                     "containmentResolutions",
                     "flatSiblingFindings",
                     "flatSiblingResolutions",
+                    "selectedPrefabExtractions",
+                    "crossParentPrefabExtractions",
                 }),
                 StringComparer.Ordinal);
 
@@ -94,6 +224,233 @@ namespace PsdLayoutTool2
                    normalized == "应用" ||
                    normalized == "开始修改" ||
                    normalized == "开始整理";
+        }
+
+        internal static bool TryBuildSelectedPrefabExtractionPlan(
+            PsdHierarchyChatContext context,
+            PsdHierarchyLocalRepairScope scope,
+            string componentName,
+            out string planJson,
+            out string review,
+            out string error)
+        {
+            planJson = string.Empty;
+            review = string.Empty;
+            error = string.Empty;
+            if (context == null || scope == null)
+            {
+                error = "请先使用当前 Hierarchy 选择锁定要抽取的节点。";
+                return false;
+            }
+
+            if (!scope.TryCreateSelectedPrefabExtraction(context, componentName, out PsdHierarchySelectedPrefabExtraction extraction, out error))
+            {
+                return false;
+            }
+
+            string extractionId = ToLowerSnakeCaseIdentifier(extraction.componentName);
+            var plan = new JObject
+            {
+                ["version"] = 2,
+                ["snapshotFingerprint"] = context.hierarchySnapshotFingerprint,
+                ["prefabAssetPath"] = context.targetPrefabAssetPath,
+                ["output"] = new JObject
+                {
+                    ["mode"] = "in_place",
+                    ["assetPath"] = context.targetPrefabAssetPath,
+                },
+                ["prefabName"] = Path.GetFileNameWithoutExtension(context.targetPrefabAssetPath),
+                ["wrappers"] = new JArray(),
+                ["moves"] = new JArray(),
+                ["renames"] = new JArray(),
+                ["emptyContainerRemovals"] = new JArray(),
+                ["tightBounds"] = new JArray(),
+                ["textureRenames"] = new JArray(),
+                ["spriteAtlasRenames"] = new JArray(),
+                ["componentFamilyDecisions"] = new JArray(),
+                ["componentExtractions"] = new JArray(),
+                ["stateComponentExtractions"] = new JArray(),
+                ["variantComponentExtractions"] = new JArray(),
+                ["statefulComponentExtractions"] = new JArray(),
+                ["flatSiblingResolutions"] = new JArray(),
+                ["selectedPrefabExtractions"] = new JArray(new JObject
+                {
+                    ["id"] = extractionId,
+                    ["name"] = extraction.componentName,
+                    ["assetPath"] = extraction.assetPath,
+                    ["parent"] = "node:" + extraction.parentNodeId,
+                    ["sources"] = new JArray(extraction.sourceNodeIds.Select(id => "node:" + id)),
+                }),
+                ["verify"] = new JObject(),
+            };
+            planJson = plan.ToString(Newtonsoft.Json.Formatting.None);
+            review = "将当前选择的 " + extraction.sourceNodeIds.Length + " 个同级节点抽取为 Nested Prefab `" +
+                     extraction.componentName + "`，保存到 `" + extraction.assetPath +
+                     "`；外层 Prefab 只会以该 Nested Prefab 实例替换选区。";
+            return true;
+        }
+
+        /// <summary>
+        /// 构建局部整理方案（包含视觉相似度分析）
+        /// </summary>
+        internal static async Task<PsdHierarchyLocalRepairAnalysisResult> TryBuildLocalPrefabOrganizationPlanWithVisualAsync(
+            PsdHierarchyChatContext context,
+            PsdHierarchyLocalRepairScope scope,
+            string componentName)
+        {
+            // 先尝试构建基础方案（纯逻辑）
+            if (!TryBuildLocalPrefabOrganizationPlan(
+                    context,
+                    scope,
+                    componentName,
+                    out string planJson,
+                    out string review,
+                    out string error))
+            {
+                return new PsdHierarchyLocalRepairAnalysisResult(false, string.Empty, string.Empty, error, null);
+            }
+
+            // 检查是否是跨父级组件化（需要视觉分析）
+            if (!scope.TryCreateCrossParentPrefabExtraction(
+                    context,
+                    componentName,
+                    out PsdHierarchyCrossParentPrefabExtraction extraction,
+                    out string _))
+            {
+                // 不是跨父级模式，返回基础方案
+                return new PsdHierarchyLocalRepairAnalysisResult(true, planJson, review, string.Empty, null);
+            }
+
+            // 执行视觉分析
+            PsdHierarchyVisualAnalysisResult visualAnalysis = null;
+            try
+            {
+                // TODO: 调用 AI 进行视觉分析
+                // 暂时返回模拟数据用于测试
+                visualAnalysis = await PerformVisualAnalysisAsync(context, extraction);
+            }
+            catch (Exception exception)
+            {
+                // 视觉分析失败不影响基础方案
+                UnityEngine.Debug.LogWarning("视觉分析失败: " + exception.Message);
+            }
+
+            return new PsdHierarchyLocalRepairAnalysisResult(true, planJson, review, string.Empty, visualAnalysis);
+        }
+
+        private static async Task<PsdHierarchyVisualAnalysisResult> PerformVisualAnalysisAsync(
+            PsdHierarchyChatContext context,
+            PsdHierarchyCrossParentPrefabExtraction extraction)
+        {
+            // TODO: 实现真实的视觉分析
+            // 1. 生成缩略图
+            // 2. 调用 AI API 分析
+            // 3. 解析评分结果
+
+            await Task.Delay(100); // 模拟异步操作
+
+            // 返回模拟数据
+            var scores = new List<PsdHierarchyVisualScore>();
+            foreach (var instance in extraction.instances)
+            {
+                // 模板组给 100 分
+                bool isTemplate = instance.sourceNodeIds.SequenceEqual(extraction.templateSourceNodeIds);
+                int score = isTemplate ? 100 : 85;
+                string reason = isTemplate ? "模板组" : "视觉高度相似";
+
+                foreach (string nodeId in instance.sourceNodeIds)
+                {
+                    scores.Add(new PsdHierarchyVisualScore(nodeId, score, reason));
+                }
+            }
+
+            return new PsdHierarchyVisualAnalysisResult(
+                extraction.templateSourceNodeIds,
+                scores,
+                "mock_analysis_v1");
+        }
+
+        internal static bool TryBuildLocalPrefabOrganizationPlan(
+            PsdHierarchyChatContext context,
+            PsdHierarchyLocalRepairScope scope,
+            string componentName,
+            out string planJson,
+            out string review,
+            out string error)
+        {
+            if (TryBuildSelectedPrefabExtractionPlan(
+                    context,
+                    scope,
+                    componentName,
+                    out planJson,
+                    out review,
+                    out error))
+            {
+                return true;
+            }
+
+            string crossParentError = string.Empty;
+            if (context == null || scope == null ||
+                !scope.TryCreateCrossParentPrefabExtraction(
+                    context,
+                    componentName,
+                    out PsdHierarchyCrossParentPrefabExtraction extraction,
+                    out crossParentError))
+            {
+                error = string.IsNullOrWhiteSpace(crossParentError) ? error : crossParentError;
+                planJson = string.Empty;
+                review = string.Empty;
+                return false;
+            }
+
+            var plan = new JObject
+            {
+                ["version"] = 2,
+                ["snapshotFingerprint"] = context.hierarchySnapshotFingerprint,
+                ["prefabAssetPath"] = context.targetPrefabAssetPath,
+                ["output"] = new JObject
+                {
+                    ["mode"] = "in_place",
+                    ["assetPath"] = context.targetPrefabAssetPath,
+                },
+                ["prefabName"] = Path.GetFileNameWithoutExtension(context.targetPrefabAssetPath),
+                ["wrappers"] = new JArray(),
+                ["moves"] = new JArray(),
+                ["renames"] = new JArray(),
+                ["emptyContainerRemovals"] = new JArray(),
+                ["tightBounds"] = new JArray(),
+                ["textureRenames"] = new JArray(),
+                ["spriteAtlasRenames"] = new JArray(),
+                ["componentFamilyDecisions"] = new JArray(),
+                ["componentExtractions"] = new JArray(),
+                ["stateComponentExtractions"] = new JArray(),
+                ["variantComponentExtractions"] = new JArray(),
+                ["statefulComponentExtractions"] = new JArray(),
+                ["flatSiblingResolutions"] = new JArray(),
+                ["crossParentPrefabExtractions"] = new JArray(new JObject
+                {
+                    ["id"] = ToLowerSnakeCaseIdentifier(extraction.componentName),
+                    ["name"] = extraction.componentName,
+                    ["assetPath"] = extraction.assetPath,
+                    ["root"] = "node:" + extraction.rootNodeId,
+                    ["templateSources"] = new JArray(
+                        extraction.templateSourceNodeIds.Select(id => "node:" + id)),
+                    ["instances"] = new JArray(extraction.instances.Select(instance => new JObject
+                    {
+                        ["sequence"] = instance.sequence,
+                        ["sources"] = new JArray(instance.sourceNodeIds.Select(id => "node:" + id)),
+                    })),
+                    ["unmatched"] = new JArray(extraction.unmatchedNodeIds.Select(id => "node:" + id)),
+                }),
+                ["verify"] = new JObject(),
+            };
+
+            planJson = plan.ToString(Newtonsoft.Json.Formatting.None);
+            review = "Cross-parent local organization will create `" + extraction.componentName +
+                     "`, replace " + extraction.instances.Length + " complete groups, and leave " +
+                     extraction.unmatchedNodeIds.Length + " unmatched nodes unchanged.";
+            error = string.Empty;
+            return true;
         }
 
         internal static bool TryExtractApprovedPlan(
@@ -166,6 +523,9 @@ namespace PsdLayoutTool2
                 var plan = JObject.Parse(planJson);
                 ValidateAndNormalizeVersionTwoPlan(plan, context);
                 planJson = plan.ToString(Newtonsoft.Json.Formatting.None);
+
+                // 诊断：检查是否遗漏了必需的组件候选
+                PsdHierarchyChatPlanDiagnostics.LogMissingExtractions(plan, context);
             }
             catch (Exception exception) when (exception is Newtonsoft.Json.JsonException || exception is InvalidDataException)
             {
@@ -201,20 +561,43 @@ namespace PsdLayoutTool2
             {
                 var plan = JObject.Parse(planJson ?? string.Empty);
                 ValidateAndNormalizeVersionTwoPlan(plan, context);
-
-                NormalizeSingleStateVariantExtractions(plan, context);
-                NormalizeSkippedRequiredComponentCandidates(plan, context);
-                NormalizeMissingStatefulExtractionTemplates(plan);
+                bool isLocalRepair = context.localRepairScope != null;
+                bool hasLocalPrefabExtractions = HasLocalPrefabExtractions(plan);
+                if (hasLocalPrefabExtractions && !isLocalRepair)
+                {
+                    throw new InvalidDataException("selectedPrefabExtractions 只能由已锁定选区的局部修复生成。");
+                }
+                if (!isLocalRepair)
+                {
+                    NormalizeSingleStateVariantExtractions(plan, context);
+                    NormalizeSkippedRequiredComponentCandidates(plan, context);
+                    NormalizeMissingStatefulExtractionTemplates(plan);
+                }
                 ValidateAllExistingNodeReferences(plan, context);
-                ValidateRequiredComponentFamilyDecisions(plan, context);
+                if (isLocalRepair)
+                {
+                    context.localRepairScope.ValidatePlan(plan);
+                }
+                else
+                {
+                    ValidateRequiredComponentFamilyDecisions(plan, context);
+                }
                 ResolveExistingNodeReferences(plan, context);
+                ValidateMultipleComponentPrefabExtractionContracts(plan, context);
                 DerivePrefabName(plan, context.targetPrefabAssetPath);
-                CaptureCurrentAssetRenameGuids(plan);
-                NormalizeStatefulInstanceMappings(plan, context);
+                CaptureCurrentAssetRenameGuids(plan, context);
+                if (!isLocalRepair)
+                {
+                    NormalizeStatefulInstanceMappings(plan, context);
+                }
+                ValidateExtractionSiblingTopologyAfterMoves(plan);
                 NormalizeDirectChildVerificationNames(plan);
-                WriteRequiredComponentFamilies(plan, context);
-                WriteContainmentFindings(plan, context);
-                WriteFlatSiblingFindings(plan, context);
+                if (!isLocalRepair)
+                {
+                    WriteRequiredComponentFamilies(plan, context);
+                    WriteContainmentFindings(plan, context);
+                    WriteFlatSiblingFindings(plan, context);
+                }
                 RemoveCandidateDecisionMetadata(plan);
                 plan["version"] = 1;
                 plan.Remove("snapshotFingerprint");
@@ -302,13 +685,18 @@ namespace PsdLayoutTool2
             {
                 PsdHierarchyChatCleanupExecutionResult nativeResult =
                     await PsdHierarchyNativeCleanupExecutor.ApplyAsync(context, runnerPlanJson);
-                return nativeResult.success
-                    ? PersistCompletedReplayStage(
+                if (!nativeResult.success)
+                {
+                    return nativeResult;
+                }
+
+                return HasLocalPrefabExtractions(runnerPlanJson)
+                    ? MarkSelectedPrefabExtractionForRebind(context, nativeResult)
+                    : PersistCompletedReplayStage(
                         context,
                         runnerPlanJson,
                         nativeResult,
-                        replaceReplayProfile)
-                    : nativeResult;
+                        replaceReplayProfile);
             }
 
             string runnerPath = ResolveRunnerPath(context);
@@ -603,14 +991,82 @@ namespace PsdLayoutTool2
             PsdHierarchyCleanupExecutionBackend selectedBackend,
             string runnerPlanJson)
         {
+            if (HasLocalPrefabExtractions(runnerPlanJson))
+            {
+                return PsdHierarchyCleanupExecutionBackend.NativeUnity;
+            }
+
             return selectedBackend;
+        }
+
+        private static PsdHierarchyChatCleanupExecutionResult MarkSelectedPrefabExtractionForRebind(
+            PsdHierarchyChatContext context,
+            PsdHierarchyChatCleanupExecutionResult result)
+        {
+            try
+            {
+                PsdHierarchyCleanupReplayProfile.EnsureRequiresRebind(
+                    context.sourcePsdAssetPath,
+                    context.targetPrefabAssetPath,
+                    "The target Prefab now contains a user-selected Nested Prefab extraction. A fresh confirmed plan is required before replay.");
+                return new PsdHierarchyChatCleanupExecutionResult(
+                    true,
+                    result.message + Environment.NewLine +
+                    "已创建选区 Nested Prefab。旧 Replay Profile 已停止重放；下次 PSD 更新前需要基于当前 Prefab 生成并确认新计划。");
+            }
+            catch (Exception exception)
+            {
+                return new PsdHierarchyChatCleanupExecutionResult(
+                    true,
+                    result.message + Environment.NewLine +
+                    "已创建选区 Nested Prefab，但无法标记 Replay Profile：" + exception.Message);
+            }
+        }
+
+        private static bool HasSelectedPrefabExtractions(JObject plan)
+        {
+            return plan?["selectedPrefabExtractions"] is JArray extractions && extractions.Count > 0;
+        }
+
+        private static bool HasCrossParentPrefabExtractions(JObject plan)
+        {
+            return plan?["crossParentPrefabExtractions"] is JArray extractions && extractions.Count > 0;
+        }
+
+        private static bool HasLocalPrefabExtractions(JObject plan)
+        {
+            return HasSelectedPrefabExtractions(plan) || HasCrossParentPrefabExtractions(plan);
+        }
+
+        private static bool HasSelectedPrefabExtractions(string planJson)
+        {
+            try
+            {
+                return HasSelectedPrefabExtractions(JObject.Parse(planJson ?? string.Empty));
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return false;
+            }
+        }
+
+        private static bool HasLocalPrefabExtractions(string planJson)
+        {
+            try
+            {
+                return HasLocalPrefabExtractions(JObject.Parse(planJson ?? string.Empty));
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return false;
+            }
         }
 
         internal static string ExtractReviewText(string assistantReply)
         {
-            string content = (assistantReply ?? string.Empty).Trim();
-            int marker = content.IndexOf("```json", StringComparison.OrdinalIgnoreCase);
-            return marker < 0 ? content : content.Substring(0, marker).Trim();
+            string content = (assistantReply ?? string.Empty).TrimStart('\uFEFF').Trim();
+            Match marker = JsonCodeBlockOpeningRegex.Match(content);
+            return !marker.Success ? content : content.Substring(0, marker.Index).Trim();
         }
 
         internal static string ComposeReviewableReply(string reviewText, string planJson)
@@ -626,24 +1082,29 @@ namespace PsdLayoutTool2
             return string.IsNullOrEmpty(review) ? codeBlock : review + "\n\n" + codeBlock;
         }
 
-        private static string ExtractJsonCodeBlock(string value)
+        internal static string ExtractJsonCodeBlock(string value)
         {
-            string content = value ?? string.Empty;
-            int marker = content.IndexOf("```json", StringComparison.OrdinalIgnoreCase);
-            if (marker < 0)
+            string content = (value ?? string.Empty).TrimStart('\uFEFF').Trim();
+            Match marker = JsonCodeBlockOpeningRegex.Match(content);
+            if (!marker.Success)
             {
-                return string.Empty;
+                // Some CLI providers return the requested JSON without Markdown fencing.
+                // Accept it only when the entire response is a JSON object; schema and
+                // execution validation still run before the plan can be confirmed.
+                return content.StartsWith("{", StringComparison.Ordinal) &&
+                       content.EndsWith("}", StringComparison.Ordinal)
+                    ? content
+                    : string.Empty;
             }
 
-            int start = content.IndexOf('\n', marker);
-            if (start < 0)
-            {
-                return string.Empty;
-            }
-
-            int end = content.IndexOf("```", start + 1, StringComparison.Ordinal);
-            return end < 0 ? string.Empty : content.Substring(start + 1, end - start - 1).Trim();
+            int start = marker.Index + marker.Length;
+            int end = content.IndexOf("```", start, StringComparison.Ordinal);
+            return end < 0 ? string.Empty : content.Substring(start, end - start).Trim();
         }
+
+        private static readonly Regex JsonCodeBlockOpeningRegex = new Regex(
+            @"```[ \t]*(?:json)?[ \t]*(?:\r?\n|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         private static string ReadRequiredString(JObject owner, string name)
         {
@@ -767,6 +1228,18 @@ namespace PsdLayoutTool2
             AddNestedObjectPropertySlots(plan, "statefulComponentExtractions", "states", "source", slots, errors);
             AddNestedObjectPropertySlots(plan, "statefulComponentExtractions", "instances", "source", slots, errors);
             AddStatefulCommonSourceSlots(plan, slots, errors);
+            if (plan["selectedPrefabExtractions"] is JArray)
+            {
+                AddObjectPropertySlots(plan, "selectedPrefabExtractions", "parent", false, slots, errors);
+                AddStringArraySlots(plan, "selectedPrefabExtractions", "sources", slots, errors);
+            }
+            if (plan["crossParentPrefabExtractions"] is JArray)
+            {
+                AddObjectPropertySlots(plan, "crossParentPrefabExtractions", "root", false, slots, errors);
+                AddStringArraySlots(plan, "crossParentPrefabExtractions", "templateSources", slots, errors);
+                AddNestedStringArraySlots(plan, "crossParentPrefabExtractions", "instances", "sources", slots, errors);
+                AddStringArraySlots(plan, "crossParentPrefabExtractions", "unmatched", slots, errors);
+            }
 
             foreach (NodeReferenceSlot slot in slots)
             {
@@ -833,11 +1306,14 @@ namespace PsdLayoutTool2
 
             var declaredCandidateIds = new HashSet<string>(StringComparer.Ordinal);
             var errors = new List<string>();
+            var invalidDecisionIndices = new List<int>(); // 记录需要移除的无效决策索引
+
             for (int index = 0; index < decisions.Count; index++)
             {
                 if (!(decisions[index] is JObject decision))
                 {
                     errors.Add("componentFamilyDecisions[" + index + "] 必须为对象。");
+                    invalidDecisionIndices.Add(index);
                     continue;
                 }
 
@@ -849,7 +1325,15 @@ namespace PsdLayoutTool2
 
                 if (!candidatesById.TryGetValue(candidateId, out PsdHierarchyComponentFamilyCandidate candidate))
                 {
-                    errors.Add("componentFamilyDecisions[" + index + "].candidateId 未出现在当前快照候选中：" + candidateId);
+                    // 自动修复：移除引用不存在候选 ID 的决策
+                    string suggestion = FindSimilarCandidateId(candidateId, candidatesById.Keys);
+                    string errorMsg = "componentFamilyDecisions[" + index + "].candidateId 未出现在当前快照候选中：" + candidateId;
+                    if (!string.IsNullOrEmpty(suggestion))
+                    {
+                        errorMsg += "（可能想引用：" + suggestion + "）";
+                    }
+                    UnityEngine.Debug.LogWarning("[自动修复] " + errorMsg + "，已自动移除该决策。");
+                    invalidDecisionIndices.Add(index);
                     continue;
                 }
 
@@ -874,6 +1358,18 @@ namespace PsdLayoutTool2
                 {
                     errors.Add("高置信重复组件候选 " + candidateId + "（" + candidate.suggestedAssetName + "）不能使用 skip；必须抽取为 component、state、variant 或 stateful Prefab。");
                 }
+            }
+
+            // 自动修复：移除无效的决策
+            if (invalidDecisionIndices.Count > 0)
+            {
+                // 从后往前删除，避免索引变化
+                for (int i = invalidDecisionIndices.Count - 1; i >= 0; i--)
+                {
+                    decisions.RemoveAt(invalidDecisionIndices[i]);
+                }
+                UnityEngine.Debug.LogWarning(
+                    $"[自动修复] 已移除 {invalidDecisionIndices.Count} 个引用不存在候选 ID 的决策。");
             }
 
             foreach (string candidateId in requiredCandidateIds.Where(id => !declaredCandidateIds.Contains(id)))
@@ -936,9 +1432,11 @@ namespace PsdLayoutTool2
                 // A stateful fallback intentionally keeps every observed branch whole. This
                 // preserves the Prefab without inventing a Common/State member partition.
                 RemoveCandidateOwnedExtractions(plan, candidate, decision?.Value<string>("extractionId"));
+                NormalizeVariantFamilyMovesFromTemplate(plan, candidate);
 
-                string extractionId = CreateUniqueExtractionId(plan, candidate.suggestedAssetName + "Variant");
-                string assetPath = CreateAvailableVariantAssetPath(plan, context, candidate.suggestedAssetName);
+                string assetName = ResolveDeterministicCandidateAssetName(candidate);
+                string extractionId = CreateUniqueExtractionId(plan, assetName + "Variant");
+                string assetPath = CreateAvailableVariantAssetPath(plan, context, assetName);
                 JObject extraction = BuildDeterministicVariantExtraction(
                     context,
                     candidate,
@@ -968,6 +1466,110 @@ namespace PsdLayoutTool2
                 }
 
                 variants.Add(extraction);
+            }
+        }
+
+        private static void NormalizeVariantFamilyMovesFromTemplate(
+            JObject plan,
+            PsdHierarchyComponentFamilyCandidate candidate)
+        {
+            var moves = plan["moves"] as JArray;
+            if (moves == null)
+            {
+                throw BuildDeterministicVariantRepairError(candidate, "moves must be an array", null);
+            }
+
+            string[] sources = candidate.sources?.ToArray() ?? Array.Empty<string>();
+            if (sources.Length == 0)
+            {
+                return;
+            }
+
+            var sourceIndexByReference = sources
+                .Select((source, index) => new { source, index })
+                .ToDictionary(entry => entry.source, entry => entry.index, StringComparer.Ordinal);
+            var familyMovesBySource = new Dictionary<string, JObject>(StringComparer.Ordinal);
+            foreach (JObject move in moves.OfType<JObject>())
+            {
+                string source = move.Value<string>("source");
+                if (string.IsNullOrWhiteSpace(source) || !sourceIndexByReference.ContainsKey(source))
+                {
+                    continue;
+                }
+
+                if (!familyMovesBySource.TryAdd(source, move))
+                {
+                    throw BuildDeterministicVariantRepairError(
+                        candidate,
+                        "source " + source + " is moved more than once",
+                        null);
+                }
+            }
+
+            if (!familyMovesBySource.TryGetValue(sources[0], out JObject templateMove))
+            {
+                return;
+            }
+
+            string destination = templateMove.Value<string>("destination");
+            int? firstSiblingIndex = templateMove.Value<int?>("siblingIndex");
+            if (string.IsNullOrWhiteSpace(destination) ||
+                !firstSiblingIndex.HasValue ||
+                firstSiblingIndex.Value < 0 ||
+                sourceIndexByReference.ContainsKey(destination))
+            {
+                throw BuildDeterministicVariantRepairError(
+                    candidate,
+                    "the template move cannot safely anchor the complete family",
+                    null);
+            }
+
+            foreach (KeyValuePair<string, JObject> familyMove in familyMovesBySource)
+            {
+                if (!string.Equals(
+                        familyMove.Value.Value<string>("destination"),
+                        destination,
+                        StringComparison.Ordinal))
+                {
+                    throw BuildDeterministicVariantRepairError(
+                        candidate,
+                        "family sources are moved to multiple destinations",
+                        null);
+                }
+            }
+
+            var occupiedSiblingIndices = new HashSet<int>(
+                moves
+                    .OfType<JObject>()
+                    .Where(move =>
+                        string.Equals(move.Value<string>("destination"), destination, StringComparison.Ordinal) &&
+                        !sourceIndexByReference.ContainsKey(move.Value<string>("source")))
+                    .Select(move => move.Value<int?>("siblingIndex"))
+                    .Where(index => index.HasValue)
+                    .Select(index => index.Value));
+            for (int sourceIndex = 0; sourceIndex < sources.Length; sourceIndex++)
+            {
+                int siblingIndex = firstSiblingIndex.Value + sourceIndex;
+                if (occupiedSiblingIndices.Contains(siblingIndex))
+                {
+                    throw BuildDeterministicVariantRepairError(
+                        candidate,
+                        "destination " + destination + " already uses siblingIndex " + siblingIndex,
+                        null);
+                }
+
+                string source = sources[sourceIndex];
+                if (!familyMovesBySource.TryGetValue(source, out JObject move))
+                {
+                    move = new JObject
+                    {
+                        ["source"] = source,
+                        ["destination"] = destination,
+                    };
+                    moves.Add(move);
+                }
+
+                move["siblingIndex"] = siblingIndex;
             }
         }
 
@@ -1007,11 +1609,12 @@ namespace PsdLayoutTool2
                 }
 
                 RemoveCandidateOwnedExtractions(plan, candidate, decision?.Value<string>("extractionId"));
-                string extractionId = CreateUniqueExtractionId(plan, candidate.suggestedAssetName);
+                string assetName = ResolveDeterministicCandidateAssetName(candidate);
+                string extractionId = CreateUniqueExtractionId(plan, assetName);
                 string assetPath = CreateAvailableComponentAssetPath(
                     plan,
                     context,
-                    candidate.suggestedAssetName);
+                    assetName);
                 var normalizedDecision = new JObject
                 {
                     ["candidateId"] = candidate.id,
@@ -1181,16 +1784,7 @@ namespace PsdLayoutTool2
                 }
             }
 
-            string semanticBase = candidate.suggestedAssetName;
-            if (string.IsNullOrWhiteSpace(semanticBase) ||
-                !Regex.IsMatch(semanticBase, "^[A-Za-z][A-Za-z0-9]*$"))
-            {
-                throw BuildDeterministicVariantRepairError(
-                    candidate,
-                    "suggestedAssetName=" + (semanticBase ?? "<null>") +
-                    " cannot produce a bracketed English semantic item name",
-                    null);
-            }
+            string semanticBase = ResolveDeterministicCandidateAssetName(candidate);
 
             int suffix = 1;
             foreach (string source in candidate.sources)
@@ -1220,6 +1814,16 @@ namespace PsdLayoutTool2
                    value.Length >= 3 &&
                    value[0] == '[' &&
                    value[value.Length - 1] == ']';
+        }
+
+        private static string ResolveDeterministicCandidateAssetName(
+            PsdHierarchyComponentFamilyCandidate candidate)
+        {
+            string suggestedAssetName = candidate?.suggestedAssetName;
+            return !string.IsNullOrWhiteSpace(suggestedAssetName) &&
+                   Regex.IsMatch(suggestedAssetName, "^[A-Za-z][A-Za-z0-9]*$")
+                ? suggestedAssetName
+                : ReusableItemFallbackName;
         }
 
         private static InvalidDataException BuildDeterministicVariantRepairError(
@@ -1441,6 +2045,10 @@ namespace PsdLayoutTool2
             {
                 baseName = "Component";
             }
+
+            // 自动转换为 PascalCase（大驼峰命名）
+            baseName = ToPascalCase(baseName);
+
             for (int suffix = 1; suffix <= 999; suffix++)
             {
                 string assetName = suffix == 1 ? baseName : baseName + suffix;
@@ -1614,7 +2222,9 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static void CaptureCurrentAssetRenameGuids(JObject plan)
+        private static void CaptureCurrentAssetRenameGuids(
+            JObject plan,
+            PsdHierarchyChatContext context)
         {
             foreach (string propertyName in new[] { "textureRenames", "spriteAtlasRenames" })
             {
@@ -1631,6 +2241,13 @@ namespace PsdLayoutTool2
                     }
 
                     string sourcePath = ReadRequiredString(rename, "from").Replace('\\', '/');
+                    if (context.hasAuthoritativeAssetRenameSourcePaths &&
+                        !context.IsAssetRenameSourcePathAllowed(sourcePath))
+                    {
+                        throw new InvalidDataException(
+                            propertyName + "[" + index + "].from is not referenced by the current target Prefab: " +
+                            sourcePath);
+                    }
                     if (AssetDatabase.LoadMainAssetAtPath(sourcePath) == null)
                     {
                         throw new InvalidDataException(
@@ -1666,11 +2283,28 @@ namespace PsdLayoutTool2
 
             DerivePrefabName(plan, context.targetPrefabAssetPath);
             ValidateRootPlanShape(plan, 2L, true);
-            NormalizeRequiredVariantCandidates(plan, context);
-            NormalizeSkippedRequiredComponentCandidates(plan, context);
-            NormalizeMissingFlatSiblingResolutions(plan, context);
-            RemoveContainerRemovalsConflictingWithFlatSiblingGroups(plan, context);
-            ValidateFlatSiblingResolutions(plan, context);
+
+            if (context.localRepairScope == null)
+            {
+                // 最优先：立即补全 containmentResolutions（必须在所有其他 Normalize 之前）
+                NormalizeGeometricContainmentResolutions(plan, context);
+
+                // 然后检测并标记无效的 stateful 为 skip
+                NormalizeInvalidStatefulExtractions(plan, context);
+
+                // 接着原有的降级机制会接管（将 skip 的 stateful 降级为 variant）
+                NormalizeRequiredVariantCandidates(plan, context);
+                NormalizeSkippedRequiredComponentCandidates(plan, context);
+                NormalizeMissingFlatSiblingResolutions(plan, context);
+                RemoveContainerRemovalsConflictingWithFlatSiblingGroups(plan, context);
+                ValidateFlatSiblingResolutions(plan, context);
+
+                // 去重：移除重复的 componentFamilyDecisions
+                DeduplicateComponentFamilyDecisions(plan);
+
+                // 最后验证所有决策的 mode 是否有效（只警告，不抛异常）
+                ValidateComponentFamilyDecisionsNonFatal(plan);
+            }
         }
 
         private static void DerivePrefabName(JObject plan, string targetPrefabAssetPath)
@@ -1996,6 +2630,48 @@ namespace PsdLayoutTool2
             }
         }
 
+        private static void AddNestedStringArraySlots(
+            JObject plan,
+            string arrayProperty,
+            string nestedArrayProperty,
+            string referencesProperty,
+            List<NodeReferenceSlot> slots,
+            List<string> errors)
+        {
+            if (!(plan[arrayProperty] is JArray items))
+            {
+                errors.Add(arrayProperty + " must be an array.");
+                return;
+            }
+
+            for (int index = 0; index < items.Count; index++)
+            {
+                if (!(items[index] is JObject item) || !(item[nestedArrayProperty] is JArray nestedItems))
+                {
+                    errors.Add(arrayProperty + "[" + index + "]." + nestedArrayProperty + " must be an array.");
+                    continue;
+                }
+
+                for (int nestedIndex = 0; nestedIndex < nestedItems.Count; nestedIndex++)
+                {
+                    if (!(nestedItems[nestedIndex] is JObject nestedItem) ||
+                        !(nestedItem[referencesProperty] is JArray references))
+                    {
+                        errors.Add(arrayProperty + "[" + index + "]." + nestedArrayProperty + "[" + nestedIndex + "]." + referencesProperty + " must be an array.");
+                        continue;
+                    }
+
+                    for (int referenceIndex = 0; referenceIndex < references.Count; referenceIndex++)
+                    {
+                        slots.Add(new NodeReferenceSlot(
+                            references[referenceIndex],
+                            arrayProperty + "[" + index + "]." + nestedArrayProperty + "[" + nestedIndex + "]." + referencesProperty + "[" + referenceIndex + "]",
+                            false));
+                    }
+                }
+            }
+        }
+
         private static void AddStatefulCommonSourceSlots(
             JObject plan,
             List<NodeReferenceSlot> slots,
@@ -2046,6 +2722,25 @@ namespace PsdLayoutTool2
                 ResolveNodeProperty(item, "parent", label + ".parent", context, false);
                 ResolveNodeStringArray(item, "sources", label + ".sources", context);
             });
+
+            // 解析 containmentResolutions 中的 node 引用
+            ResolveObjectArray(plan, "containmentResolutions", (item, label) =>
+            {
+                ResolveNodeProperty(item, "source", label + ".source", context, false);
+                // newParent 可能是 node 引用或 @wrapperId，允许 wrapper 引用
+                if (item["newParent"] != null)
+                {
+                    ResolveNodeProperty(item, "newParent", label + ".newParent", context, true);
+                }
+            });
+
+            // 解析 flatSiblingResolutions 中的 node 引用
+            ResolveObjectArray(plan, "flatSiblingResolutions", (item, label) =>
+            {
+                // flatSiblingResolutions 只有 findingId 和 mode，不需要解析 node 引用
+                // 但为了一致性，保留这个空处理
+            });
+
             ResolveObjectArray(plan, "componentExtractions", (item, label) =>
             {
                 ResolveNodeProperty(item, "template", label + ".template", context, false);
@@ -2074,6 +2769,257 @@ namespace PsdLayoutTool2
                 ResolveNestedNodeProperties(item, "states", "source", label + ".states", context);
                 ResolveNestedNodeProperties(item, "instances", "source", label + ".instances", context);
             });
+            if (plan["selectedPrefabExtractions"] is JArray)
+            {
+                ResolveObjectArray(plan, "selectedPrefabExtractions", (item, label) =>
+                {
+                    ResolveNodeProperty(item, "parent", label + ".parent", context, false);
+                    ResolveNodeStringArray(item, "sources", label + ".sources", context);
+                });
+            }
+            if (plan["crossParentPrefabExtractions"] is JArray)
+            {
+                ResolveObjectArray(plan, "crossParentPrefabExtractions", (item, label) =>
+                {
+                    ResolveNodeProperty(item, "root", label + ".root", context, false);
+                    ResolveNodeStringArray(item, "templateSources", label + ".templateSources", context);
+                    ResolveNestedNodeStringArrays(item, "instances", "sources", label + ".instances", context);
+                    ResolveNodeStringArray(item, "unmatched", label + ".unmatched", context);
+                });
+            }
+        }
+
+        private static void ValidateExtractionSiblingTopologyAfterMoves(JObject plan)
+        {
+            var movedParents = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (JObject move in (plan["moves"] as JArray ?? new JArray()).OfType<JObject>())
+            {
+                string source = move.Value<string>("source");
+                string destination = move.Value<string>("destination");
+                if (!string.IsNullOrWhiteSpace(source) && !string.IsNullOrWhiteSpace(destination))
+                {
+                    movedParents[source] = destination;
+                }
+            }
+
+            ValidateExtractionSiblingTopologyAfterMoves(
+                plan,
+                "stateComponentExtractions",
+                "state",
+                movedParents);
+            ValidateExtractionSiblingTopologyAfterMoves(
+                plan,
+                "variantComponentExtractions",
+                "variant",
+                movedParents);
+        }
+
+        private static void ValidateMultipleComponentPrefabExtractionContracts(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            string target = NormalizeAssetPath(context.targetPrefabAssetPath);
+            int separator = target.LastIndexOf('/');
+            string commonPrefix = separator > 0 ? target.Substring(0, separator + 1) + "Common/" : string.Empty;
+            var assetPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var sourceOwners = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            foreach (string propertyName in new[]
+                     {
+                         "componentExtractions",
+                         "stateComponentExtractions",
+                         "variantComponentExtractions",
+                         "statefulComponentExtractions",
+                     })
+            {
+                if (!(plan[propertyName] is JArray extractions))
+                {
+                    continue;
+                }
+
+                for (int index = 0; index < extractions.Count; index++)
+                {
+                    if (!(extractions[index] is JObject extraction))
+                    {
+                        continue;
+                    }
+
+                    string label = propertyName + "[" + index + "]";
+                    string assetPath = NormalizeAssetPath(extraction.Value<string>("assetPath"));
+                    if (string.IsNullOrWhiteSpace(assetPath))
+                    {
+                        throw new InvalidDataException(label + ".assetPath must be a non-empty Common Prefab path.");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(commonPrefix) &&
+                        !assetPath.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException(
+                            label + ".assetPath must be directly under " + commonPrefix + ": " + assetPath);
+                    }
+
+                    if (!assetPaths.Add(assetPath))
+                    {
+                        throw new InvalidDataException(
+                            "Multiple component Prefab extractions overlap on assetPath: " + assetPath + ".");
+                    }
+
+                    var sources = new HashSet<string>(StringComparer.Ordinal);
+                    AddExtractionReference(sources, extraction, "template");
+                    AddExtractionReference(sources, extraction, "common", "source");
+                    AddExtractionReferenceArray(sources, extraction, "instances");
+                    AddNestedExtractionReferences(sources, extraction, "states");
+
+                    foreach (string source in sources)
+                    {
+                        if (sourceOwners.TryGetValue(source, out string owner))
+                        {
+                            throw new InvalidDataException(
+                                "Multiple component Prefab extractions overlap on source " + source +
+                                ": " + owner + " and " + label + ".");
+                        }
+
+                        sourceOwners.Add(source, label);
+                    }
+                }
+            }
+        }
+
+        private static void AddExtractionReference(
+            ISet<string> sources,
+            JObject extraction,
+            string propertyName,
+            string nestedPropertyName = null)
+        {
+            JToken owner = extraction[propertyName];
+            if (nestedPropertyName != null)
+            {
+                owner = owner is JObject nested ? nested[nestedPropertyName] : null;
+            }
+
+            if (owner?.Type == JTokenType.String && !string.IsNullOrWhiteSpace(owner.Value<string>()))
+            {
+                sources.Add(owner.Value<string>());
+            }
+        }
+
+        private static void AddExtractionReferenceArray(
+            ISet<string> sources,
+            JObject extraction,
+            string propertyName)
+        {
+            if (!(extraction[propertyName] is JArray entries))
+            {
+                return;
+            }
+
+            foreach (JToken entry in entries)
+            {
+                if (entry.Type == JTokenType.String && !string.IsNullOrWhiteSpace(entry.Value<string>()))
+                {
+                    sources.Add(entry.Value<string>());
+                }
+                else if (entry is JObject instance)
+                {
+                    AddExtractionReference(sources, instance, "source");
+                }
+            }
+        }
+
+        private static void AddNestedExtractionReferences(
+            ISet<string> sources,
+            JObject extraction,
+            string propertyName)
+        {
+            if (!(extraction[propertyName] is JArray entries))
+            {
+                return;
+            }
+
+            foreach (JObject entry in entries.OfType<JObject>())
+            {
+                AddExtractionReference(sources, entry, "source");
+            }
+        }
+
+        private static void ValidateExtractionSiblingTopologyAfterMoves(
+            JObject plan,
+            string propertyName,
+            string extractionKind,
+            IReadOnlyDictionary<string, string> movedParents)
+        {
+            if (!(plan[propertyName] is JArray extractions))
+            {
+                return;
+            }
+
+            for (int extractionIndex = 0; extractionIndex < extractions.Count; extractionIndex++)
+            {
+                if (!(extractions[extractionIndex] is JObject extraction))
+                {
+                    continue;
+                }
+
+                string template = extraction.Value<string>("template");
+                if (string.IsNullOrWhiteSpace(template))
+                {
+                    continue;
+                }
+
+                string expectedParent = ResolvePlannedParent(template, movedParents);
+                var sources = new List<string> { template };
+                AddExtractionSourcePaths(extraction, "states", sources);
+                if (string.Equals(extractionKind, "variant", StringComparison.Ordinal))
+                {
+                    AddExtractionSourcePaths(extraction, "instances", sources);
+                }
+
+                foreach (string source in sources.Distinct(StringComparer.Ordinal))
+                {
+                    string plannedParent = ResolvePlannedParent(source, movedParents);
+                    if (!string.Equals(plannedParent, expectedParent, StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException(
+                            propertyName + "[" + extractionIndex + "] " + extractionKind +
+                            " sources must remain direct siblings after planned moves; template=" +
+                            template + "; templateParent=" + expectedParent + "; source=" + source +
+                            "; sourceParent=" + plannedParent + ". Remove or align the conflicting move.");
+                    }
+                }
+            }
+        }
+
+        private static void AddExtractionSourcePaths(
+            JObject extraction,
+            string propertyName,
+            ICollection<string> sources)
+        {
+            if (!(extraction[propertyName] is JArray entries))
+            {
+                return;
+            }
+
+            foreach (JObject entry in entries.OfType<JObject>())
+            {
+                string source = entry.Value<string>("source");
+                if (!string.IsNullOrWhiteSpace(source))
+                {
+                    sources.Add(source);
+                }
+            }
+        }
+
+        private static string ResolvePlannedParent(
+            string source,
+            IReadOnlyDictionary<string, string> movedParents)
+        {
+            if (movedParents.TryGetValue(source, out string destination))
+            {
+                return destination;
+            }
+
+            int separator = source.LastIndexOf('/');
+            return separator > 0 ? source.Substring(0, separator) : string.Empty;
         }
 
         private static void NormalizeMissingStatefulExtractionTemplates(JObject plan)
@@ -2311,6 +3257,75 @@ namespace PsdLayoutTool2
             foreach (JObject resolution in generatedResolutions)
             {
                 resolutions.Add(resolution);
+            }
+        }
+
+        private static void RemoveContainerRemovalsConflictingWithFlatSiblingGroups(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            JArray removals = plan["emptyContainerRemovals"] as JArray;
+            JArray findings = context?.flatSiblingFindings;
+            JArray resolutions = plan["flatSiblingResolutions"] as JArray;
+            if (removals == null || removals.Count == 0 ||
+                findings == null || findings.Count == 0 ||
+                resolutions == null || resolutions.Count == 0)
+            {
+                return;
+            }
+
+            var groupedFindingIds = new HashSet<string>(
+                resolutions.OfType<JObject>()
+                    .Where(resolution =>
+                        string.Equals(resolution.Value<string>("mode"), "group", StringComparison.Ordinal))
+                    .Select(resolution => resolution.Value<string>("findingId"))
+                    .Where(findingId => !string.IsNullOrWhiteSpace(findingId)),
+                StringComparer.Ordinal);
+            if (groupedFindingIds.Count == 0)
+            {
+                return;
+            }
+
+            Dictionary<string, JObject> nodesById = ReadSnapshotNodes(context);
+            var movedSources = new HashSet<string>(
+                (plan["moves"] as JArray ?? new JArray()).OfType<JObject>()
+                    .Select(move => move.Value<string>("source"))
+                    .Where(source => !string.IsNullOrWhiteSpace(source)),
+                StringComparer.Ordinal);
+            var protectedContainers = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JObject finding in findings.OfType<JObject>())
+            {
+                if (!groupedFindingIds.Contains(finding.Value<string>("id") ?? string.Empty))
+                {
+                    continue;
+                }
+
+                string currentReference = finding.Value<string>("parent");
+                while (TryGetSnapshotNode(nodesById, currentReference, out JObject currentNode))
+                {
+                    protectedContainers.Add(currentReference);
+                    if (movedSources.Contains(currentReference))
+                    {
+                        break;
+                    }
+
+                    string parentId = currentNode.Value<string>("parentId");
+                    if (string.IsNullOrWhiteSpace(parentId))
+                    {
+                        break;
+                    }
+
+                    currentReference = "node:" + parentId;
+                }
+            }
+
+            for (int index = removals.Count - 1; index >= 0; index--)
+            {
+                if (removals[index] is JObject removal &&
+                    protectedContainers.Contains(removal.Value<string>("source") ?? string.Empty))
+                {
+                    removals.RemoveAt(index);
+                }
             }
         }
 
@@ -2743,75 +3758,6 @@ namespace PsdLayoutTool2
             return TryGetSnapshotNode(nodesById, background, out JObject backgroundNode) &&
                    backgroundNode.Value<int?>("siblingIndex").HasValue &&
                    (siblingIndex = backgroundNode.Value<int?>("siblingIndex").Value) >= 0;
-        }
-
-        private static void RemoveContainerRemovalsConflictingWithFlatSiblingGroups(
-            JObject plan,
-            PsdHierarchyChatContext context)
-        {
-            JArray removals = plan["emptyContainerRemovals"] as JArray;
-            JArray findings = context?.flatSiblingFindings;
-            JArray resolutions = plan["flatSiblingResolutions"] as JArray;
-            if (removals == null || removals.Count == 0 ||
-                findings == null || findings.Count == 0 ||
-                resolutions == null || resolutions.Count == 0)
-            {
-                return;
-            }
-
-            var groupedFindingIds = new HashSet<string>(
-                resolutions.OfType<JObject>()
-                    .Where(resolution =>
-                        string.Equals(resolution.Value<string>("mode"), "group", StringComparison.Ordinal))
-                    .Select(resolution => resolution.Value<string>("findingId"))
-                    .Where(findingId => !string.IsNullOrWhiteSpace(findingId)),
-                StringComparer.Ordinal);
-            if (groupedFindingIds.Count == 0)
-            {
-                return;
-            }
-
-            Dictionary<string, JObject> nodesById = ReadSnapshotNodes(context);
-            var movedSources = new HashSet<string>(
-                (plan["moves"] as JArray ?? new JArray()).OfType<JObject>()
-                    .Select(move => move.Value<string>("source"))
-                    .Where(source => !string.IsNullOrWhiteSpace(source)),
-                StringComparer.Ordinal);
-            var protectedContainers = new HashSet<string>(StringComparer.Ordinal);
-            foreach (JObject finding in findings.OfType<JObject>())
-            {
-                if (!groupedFindingIds.Contains(finding.Value<string>("id") ?? string.Empty))
-                {
-                    continue;
-                }
-
-                string currentReference = finding.Value<string>("parent");
-                while (TryGetSnapshotNode(nodesById, currentReference, out JObject currentNode))
-                {
-                    protectedContainers.Add(currentReference);
-                    if (movedSources.Contains(currentReference))
-                    {
-                        break;
-                    }
-
-                    string parentId = currentNode.Value<string>("parentId");
-                    if (string.IsNullOrWhiteSpace(parentId))
-                    {
-                        break;
-                    }
-
-                    currentReference = "node:" + parentId;
-                }
-            }
-
-            for (int index = removals.Count - 1; index >= 0; index--)
-            {
-                if (removals[index] is JObject removal &&
-                    protectedContainers.Contains(removal.Value<string>("source") ?? string.Empty))
-                {
-                    removals.RemoveAt(index);
-                }
-            }
         }
 
         private static Dictionary<string, JObject> ReadSnapshotNodes(PsdHierarchyChatContext context)
@@ -3896,6 +4842,29 @@ namespace PsdLayoutTool2
             }
         }
 
+        private static void ResolveNestedNodeStringArrays(
+            JObject owner,
+            string arrayProperty,
+            string referencesProperty,
+            string label,
+            PsdHierarchyChatContext context)
+        {
+            if (!(owner[arrayProperty] is JArray items))
+            {
+                throw new InvalidDataException(label + " must be an array.");
+            }
+
+            for (int index = 0; index < items.Count; index++)
+            {
+                if (!(items[index] is JObject item))
+                {
+                    throw new InvalidDataException(label + "[" + index + "] must be an object.");
+                }
+
+                ResolveNodeStringArray(item, referencesProperty, label + "[" + index + "]." + referencesProperty, context);
+            }
+        }
+
         private static void ResolveNodeStringArray(
             JObject owner,
             string propertyName,
@@ -4124,6 +5093,380 @@ namespace PsdLayoutTool2
         private static string Quote(string value)
         {
             return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
+        }
+
+        /// <summary>
+        /// 查找与目标 ID 最相似的候选 ID（用于错误提示）
+        /// </summary>
+        private static string FindSimilarCandidateId(string targetId, IEnumerable<string> validIds)
+        {
+            if (string.IsNullOrEmpty(targetId) || validIds == null)
+            {
+                return string.Empty;
+            }
+
+            // 查找前缀匹配（例如：family_001_s02 → family_001）
+            string prefix = targetId;
+            int lastUnderscore = targetId.LastIndexOf('_');
+            if (lastUnderscore > 0)
+            {
+                prefix = targetId.Substring(0, lastUnderscore);
+            }
+
+            var candidates = validIds
+                .Where(id => id.StartsWith(prefix, StringComparison.Ordinal))
+                .ToArray();
+
+            return candidates.Length > 0 ? candidates[0] : string.Empty;
+        }
+
+        /// <summary>
+        /// 验证并修复无效的 stateful 抽取（states 少于 2 个或 common.members 为空）
+        /// 策略：标记为 skip，让后续的 NormalizeRequiredVariantCandidates 自动降级为 variant
+        /// </summary>
+        private static void NormalizeInvalidStatefulExtractions(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            JArray statefuls = plan["statefulComponentExtractions"] as JArray;
+            if (statefuls == null || statefuls.Count == 0)
+            {
+                return;
+            }
+
+            JArray decisions = plan["componentFamilyDecisions"] as JArray;
+            if (decisions == null)
+            {
+                return;
+            }
+
+            var invalidIndices = new List<int>();
+            var invalidExtractionIds = new HashSet<string>(StringComparer.Ordinal);
+
+            for (int index = 0; index < statefuls.Count; index++)
+            {
+                JObject extraction = statefuls[index] as JObject;
+                if (extraction == null)
+                {
+                    continue;
+                }
+
+                string extractionId = extraction.Value<string>("id") ?? $"stateful_{index}";
+                bool isInvalid = false;
+                string reason = string.Empty;
+
+                // 检查 1：states 必须至少有 2 个
+                JArray states = extraction["states"] as JArray;
+                if (states == null || states.Count < 2)
+                {
+                    isInvalid = true;
+                    reason = $"states 少于 2 个（实际: {states?.Count ?? 0}）";
+                }
+
+                // 检查 2：common.members 不能为空
+                if (!isInvalid)
+                {
+                    JObject common = extraction["common"] as JObject;
+                    JArray commonMembers = common?["members"] as JArray;
+                    if (commonMembers == null || commonMembers.Count == 0)
+                    {
+                        isInvalid = true;
+                        reason = "common.members 为空（没有公共子节点）";
+                    }
+                }
+
+                if (isInvalid)
+                {
+                    UnityEngine.Debug.LogWarning(
+                        $"[自动修复] statefulComponentExtractions[{index}] (ID: {extractionId}) 无效：{reason}。");
+                    invalidIndices.Add(index);
+                    invalidExtractionIds.Add(extractionId);
+                }
+            }
+
+            if (invalidIndices.Count == 0)
+            {
+                return;
+            }
+
+            // 策略：移除无效的抽取，并将对应的决策改为 skip
+            // 这样 NormalizeRequiredVariantCandidates 会自动降级为 variant
+            for (int i = invalidIndices.Count - 1; i >= 0; i--)
+            {
+                statefuls.RemoveAt(invalidIndices[i]);
+            }
+
+            int fixedDecisions = 0;
+            foreach (JObject decision in decisions.OfType<JObject>())
+            {
+                if (string.Equals(decision.Value<string>("mode"), "stateful", StringComparison.OrdinalIgnoreCase))
+                {
+                    string extractionId = decision.Value<string>("extractionId");
+                    if (invalidExtractionIds.Contains(extractionId))
+                    {
+                        decision["mode"] = "skip";
+                        decision.Remove("extractionId");
+                        fixedDecisions++;
+                    }
+                }
+            }
+
+            UnityEngine.Debug.LogWarning(
+                $"[自动修复] 已移除 {invalidIndices.Count} 个无效的 stateful 抽取，" +
+                $"并将 {fixedDecisions} 个决策标记为 skip。" +
+                "NormalizeRequiredVariantCandidates 将自动降级为 variant 模式。");
+        }
+
+        /// <summary>
+        /// 自动生成几何包含冲突的解决方案
+        /// </summary>
+        private static void NormalizeGeometricContainmentResolutions(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            if (context?.containmentFindings == null || context.containmentFindings.Count == 0)
+            {
+                return;
+            }
+
+            // 收集所有需要解决的 source
+            var requiredSources = new HashSet<string>(StringComparer.Ordinal);
+            var sourceToContainedBy = new Dictionary<string, string>(StringComparer.Ordinal);
+            double maxAreaRatio = 0.0;
+
+            foreach (JObject finding in context.containmentFindings.OfType<JObject>())
+            {
+                JArray mapping = finding["mapping"] as JArray;
+                if (mapping == null)
+                {
+                    continue;
+                }
+
+                maxAreaRatio = Math.Max(maxAreaRatio, finding.Value<double?>("maxAreaRatio") ?? 0.0);
+
+                foreach (JObject pair in mapping.OfType<JObject>())
+                {
+                    string source = pair.Value<string>("source");
+                    string containedBy = pair.Value<string>("containedBy");
+
+                    if (!string.IsNullOrEmpty(source))
+                    {
+                        requiredSources.Add(source);
+                        sourceToContainedBy[source] = containedBy ?? "unknown";
+                    }
+                }
+            }
+
+            if (requiredSources.Count == 0)
+            {
+                return;
+            }
+
+            // 检查现有的 containmentResolutions
+            JArray resolutions = plan["containmentResolutions"] as JArray;
+            if (resolutions == null)
+            {
+                resolutions = new JArray();
+                plan["containmentResolutions"] = resolutions;
+            }
+
+            // 收集已解决的 sources
+            var resolvedSources = new HashSet<string>(
+                resolutions.OfType<JObject>()
+                    .Select(r => r.Value<string>("source"))
+                    .Where(s => !string.IsNullOrEmpty(s)),
+                StringComparer.Ordinal);
+
+            // 为未解决的 sources 添加 "keep" 模式解决方案
+            int addedCount = 0;
+            foreach (string source in requiredSources)
+            {
+                if (!resolvedSources.Contains(source))
+                {
+                    string containedBy = sourceToContainedBy.TryGetValue(source, out string cb) ? cb : "unknown";
+
+                    resolutions.Add(new JObject
+                    {
+                        ["source"] = source,
+                        ["mode"] = "keep",
+                        ["evidence"] = $"几何上位于 {containedBy} 的矩形区域内（面积占比 {maxAreaRatio:P1}），" +
+                                      "但在层级树中是独立分组。保持原有层级结构，不重新组织为嵌套关系。"
+                    });
+
+                    addedCount++;
+                }
+            }
+
+            if (addedCount > 0)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[自动修复] 检测到 {addedCount} 个未解决的几何包含冲突，已自动添加 'keep' 模式解决方案。");
+            }
+        }
+
+        /// <summary>
+        /// 验证 componentFamilyDecisions 中所有决策的 mode 字段（只警告，不抛异常）
+        /// </summary>
+        private static void ValidateComponentFamilyDecisionsNonFatal(JObject plan)
+        {
+            JArray decisions = plan["componentFamilyDecisions"] as JArray;
+            if (decisions == null || decisions.Count == 0)
+            {
+                return;
+            }
+
+            var validModes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "skip", "component", "state", "variant", "stateful"
+            };
+
+            var errors = new List<string>();
+            for (int index = 0; index < decisions.Count; index++)
+            {
+                JObject decision = decisions[index] as JObject;
+                if (decision == null)
+                {
+                    continue;
+                }
+
+                string mode = decision.Value<string>("mode");
+                if (string.IsNullOrWhiteSpace(mode))
+                {
+                    errors.Add($"componentFamilyDecisions[{index}].mode 为空");
+                }
+                else if (!validModes.Contains(mode))
+                {
+                    string candidateId = decision.Value<string>("candidateId") ?? "unknown";
+                    errors.Add($"componentFamilyDecisions[{index}] (候选 {candidateId}) 的 mode='{mode}' 无效");
+                }
+            }
+
+            if (errors.Count > 0)
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[验证警告] 计划中仍包含无效的 componentFamilyDecisions：" + Environment.NewLine +
+                    "- " + string.Join(Environment.NewLine + "- ", errors) + Environment.NewLine +
+                    "这些决策可能导致后续验证失败。");
+            }
+        }
+
+        /// <summary>
+        /// 去重 componentFamilyDecisions：移除 sources 重叠的决策
+        /// </summary>
+        private static void DeduplicateComponentFamilyDecisions(JObject plan)
+        {
+            JArray decisions = plan["componentFamilyDecisions"] as JArray;
+            if (decisions == null || decisions.Count == 0)
+            {
+                return;
+            }
+
+            var seenSources = new HashSet<string>(StringComparer.Ordinal);
+            var toRemove = new List<int>();
+
+            for (int index = 0; index < decisions.Count; index++)
+            {
+                JObject decision = decisions[index] as JObject;
+                if (decision == null)
+                {
+                    continue;
+                }
+
+                JArray sources = decision["sources"] as JArray;
+                if (sources == null || sources.Count == 0)
+                {
+                    continue;
+                }
+
+                bool hasOverlap = false;
+                var currentSources = new List<string>();
+
+                foreach (string source in sources.Select(s => s?.ToString()).Where(s => !string.IsNullOrEmpty(s)))
+                {
+                    if (seenSources.Contains(source))
+                    {
+                        hasOverlap = true;
+                        string candidateId = decision.Value<string>("candidateId") ?? "unknown";
+                        UnityEngine.Debug.LogWarning(
+                            $"[自动修复] componentFamilyDecisions[{index}] (候选 {candidateId}) 的 source '{source}' 与其他决策重叠，已移除该决策。");
+                        break;
+                    }
+                    currentSources.Add(source);
+                }
+
+                if (hasOverlap)
+                {
+                    toRemove.Add(index);
+                }
+                else
+                {
+                    // 记录这些 sources
+                    foreach (string source in currentSources)
+                    {
+                        seenSources.Add(source);
+                    }
+                }
+            }
+
+            // 从后往前移除
+            if (toRemove.Count > 0)
+            {
+                for (int i = toRemove.Count - 1; i >= 0; i--)
+                {
+                    decisions.RemoveAt(toRemove[i]);
+                }
+
+                UnityEngine.Debug.LogWarning(
+                    $"[自动修复] 已移除 {toRemove.Count} 个重复的 componentFamilyDecisions（sources 重叠）。");
+            }
+        }
+
+        /// <summary>
+        /// 转换为 PascalCase（大驼峰命名）
+        /// 例如：coin_display → CoinDisplay, storyCard → StoryCard
+        /// </summary>
+        private static string ToPascalCase(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                return "Component";
+            }
+
+            // 移除非字母数字字符，并在其位置分词
+            var parts = System.Text.RegularExpressions.Regex.Split(input, @"[^a-zA-Z0-9]+")
+                .Where(s => !string.IsNullOrEmpty(s))
+                .ToArray();
+
+            if (parts.Length == 0)
+            {
+                return "Component";
+            }
+
+            var result = new System.Text.StringBuilder();
+            foreach (string part in parts)
+            {
+                if (part.Length > 0)
+                {
+                    // 首字母大写，其余保持原样（可能已经是驼峰）
+                    result.Append(char.ToUpperInvariant(part[0]));
+                    if (part.Length > 1)
+                    {
+                        result.Append(part.Substring(1));
+                    }
+                }
+            }
+
+            string output = result.ToString();
+
+            // 验证是否符合 PascalCase 规范：^[A-Z][A-Za-z0-9]*$
+            if (output.Length > 0 && char.IsUpper(output[0]) &&
+                output.All(c => char.IsLetterOrDigit(c)))
+            {
+                return output;
+            }
+
+            // 如果仍然不符合，返回一个安全的默认值
+            return "Component";
         }
     }
 }

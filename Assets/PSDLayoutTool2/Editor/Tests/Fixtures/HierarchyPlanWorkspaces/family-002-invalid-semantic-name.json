@@ -1,0 +1,17 @@
+{
+  "error": "Deterministic component-family repair failed: candidateId=family_002; asset=组 16; recommendedMode=variant; sources=node:n000059,node:n000064,node:n000069,node:n000074,node:n000079,node:n000084,node:n000089; reason=suggestedAssetName=组 16 cannot produce a bracketed English semantic item name.",
+  "expectedCategory": "PlanPreparation",
+  "expectedState": "NoSafeChanges",
+  "expectedCandidateIds": [
+    "family_002"
+  ],
+  "expectedNodeIds": [
+    "n000059",
+    "n000064",
+    "n000069",
+    "n000074",
+    "n000079",
+    "n000084",
+    "n000089"
+  ]
+}

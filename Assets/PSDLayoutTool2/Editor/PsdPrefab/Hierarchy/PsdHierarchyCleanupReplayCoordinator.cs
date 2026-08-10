@@ -186,6 +186,21 @@ namespace PsdLayoutTool2
                             record.replayPlanJsonStages[stageIndex]);
                     if (!replay.success)
                     {
+                        if (IsPermanentReplayFailure(replay.message))
+                        {
+                            PsdHierarchyCleanupReplayProfile.TryMarkRequiresRebindByGuid(
+                                record.sourcePsdGuid,
+                                targetPath,
+                                replay.message);
+                            Debug.LogError(
+                                "PSD Prefab cleanup replay stage " + (stageIndex + 1) + "/" +
+                                record.replayPlanJsonStages.Count +
+                                " is incompatible with the current generated Prefab. " +
+                                "The existing organized Prefab was kept unchanged and the replay Profile now requires a fresh confirmed plan. " +
+                                replay.message);
+                            return;
+                        }
+
                         bool retryAutomatically = ScheduleTransientStartupRetry(record, stageIndex, replay.message);
                         WritePendingReplayRecord(pendingRecordPath, record);
                         retainForRetry = true;
@@ -537,6 +552,16 @@ namespace PsdLayoutTool2
         {
             return !string.IsNullOrWhiteSpace(message) &&
                    message.IndexOf("Unity server is starting", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal static bool IsPermanentReplayFailure(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return false;
+
+            return message.IndexOf("Direct child was not found:", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("asset did not load:", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("has no Unity GUID:", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("is not referenced by the current target Prefab:", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         internal static int GetTransientRetryDelaySeconds(int retryAttempt)

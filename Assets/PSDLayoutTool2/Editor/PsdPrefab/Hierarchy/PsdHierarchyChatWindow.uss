@@ -104,6 +104,38 @@
     border-color: rgb(73, 78, 86);
 }
 
+.psd-hierarchy-chat-open-local-repair {
+    align-self: flex-start;
+    height: 24px;
+    margin-top: 7px;
+    margin-left: 6px;
+    padding-left: 8px;
+    padding-right: 8px;
+    color: rgb(246, 224, 184);
+    background-color: rgb(91, 72, 44);
+    border-width: 1px;
+    border-color: rgb(155, 119, 65);
+    font-size: 10px;
+}
+
+.psd-hierarchy-chat-open-local-repair:hover {
+    background-color: rgb(112, 88, 51);
+    border-color: rgb(212, 167, 91);
+}
+
+.psd-local-repair-panel {
+    flex-shrink: 0;
+    margin-bottom: 10px;
+    padding: 10px;
+    background-color: rgb(42, 47, 54);
+    border-width: 1px;
+    border-color: rgb(66, 73, 82);
+}
+
+.psd-hierarchy-local-repair .unity-base-field__label {
+    min-width: 108px;
+}
+
 .psd-hierarchy-chat-messages {
     flex-grow: 1;
     min-height: 300px;
@@ -229,4 +261,149 @@
 .psd-hierarchy-chat-empty-state {
     padding: 16px;
     color: rgb(205, 212, 221);
+}
+
+.psd-hierarchy-plan-workspace {
+    flex-shrink: 0;
+    margin-bottom: 10px;
+    padding-top: 9px;
+    padding-bottom: 9px;
+    border-top-width: 1px;
+    border-bottom-width: 1px;
+    border-top-color: rgb(75, 82, 91);
+    border-bottom-color: rgb(75, 82, 91);
+}
+
+.psd-hierarchy-plan-workspace-header {
+    min-height: 26px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.psd-hierarchy-plan-workspace-title {
+    color: rgb(244, 246, 249);
+    font-size: 13px;
+    unity-font-style: bold;
+}
+
+.psd-hierarchy-plan-workspace-summary {
+    margin-top: 4px;
+    color: rgb(173, 184, 197);
+    font-size: 10px;
+    white-space: normal;
+}
+
+.psd-hierarchy-plan-workspace-issues {
+    margin-top: 7px;
+}
+
+.psd-hierarchy-plan-workspace-issue {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    border-top-width: 1px;
+    border-top-color: rgb(62, 69, 77);
+}
+
+.psd-hierarchy-plan-workspace-issue-heading {
+    min-height: 20px;
+    flex-direction: row;
+    align-items: flex-start;
+}
+
+.psd-hierarchy-plan-workspace-issue-state {
+    flex-shrink: 0;
+    min-width: 52px;
+    margin-right: 7px;
+    padding: 2px 5px;
+    font-size: 9px;
+    unity-font-style: bold;
+    -unity-text-align: middle-center;
+}
+
+.psd-hierarchy-plan-workspace-state-attention {
+    color: rgb(252, 226, 178);
+    background-color: rgb(91, 72, 44);
+}
+
+.psd-hierarchy-plan-workspace-state-blocked {
+    color: rgb(250, 205, 205);
+    background-color: rgb(103, 52, 52);
+}
+
+.psd-hierarchy-plan-workspace-state-resolved {
+    color: rgb(201, 232, 214);
+    background-color: rgb(48, 88, 66);
+}
+
+.psd-hierarchy-plan-workspace-issue-summary {
+    flex-grow: 1;
+    color: rgb(232, 236, 241);
+    font-size: 11px;
+    white-space: normal;
+}
+
+.psd-hierarchy-plan-workspace-metadata {
+    margin-top: 4px;
+    color: rgb(157, 169, 183);
+    font-size: 9px;
+    white-space: normal;
+}
+
+.psd-hierarchy-plan-workspace-recommendation {
+    margin-top: 5px;
+    color: rgb(203, 214, 225);
+    font-size: 10px;
+    white-space: normal;
+}
+
+.psd-hierarchy-plan-workspace-actions {
+    min-height: 24px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 7px;
+}
+
+.psd-hierarchy-plan-workspace-button {
+    min-width: 68px;
+    height: 24px;
+    margin-right: 5px;
+    margin-bottom: 3px;
+    padding-left: 7px;
+    padding-right: 7px;
+    color: rgb(210, 219, 228);
+    background-color: rgb(55, 62, 70);
+    border-width: 1px;
+    border-color: rgb(86, 96, 107);
+    font-size: 10px;
+}
+
+.psd-hierarchy-plan-workspace-button:hover {
+    background-color: rgb(68, 77, 87);
+    border-color: rgb(112, 141, 169);
+}
+
+.psd-hierarchy-plan-workspace-button:disabled {
+    color: rgb(125, 134, 144);
+    background-color: rgb(47, 51, 57);
+    border-color: rgb(65, 70, 77);
+}
+
+.psd-hierarchy-plan-workspace-button-secondary {
+    min-width: 72px;
+    margin-right: 0;
+    color: rgb(196, 220, 242);
+    background-color: rgb(48, 78, 106);
+    border-color: rgb(77, 119, 153);
+}
+
+.psd-hierarchy-plan-workspace-technical-details {
+    margin-top: 5px;
+    padding: 7px;
+    color: rgb(190, 199, 210);
+    background-color: rgb(26, 29, 33);
+    border-left-width: 2px;
+    border-left-color: rgb(100, 111, 124);
+    font-size: 9px;
+    white-space: normal;
 }

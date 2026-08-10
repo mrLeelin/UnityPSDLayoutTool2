@@ -86,7 +86,7 @@ namespace PsdLayoutTool2
             try
             {
                 root = PrefabUtility.LoadPrefabContents(prefabPath);
-                ApplyPlan(root, JObject.Parse(planJson));
+                ApplyPlan(root, JObject.Parse(planJson), applySelectedPrefabExtractions: false);
                 return new PsdHierarchyChatCleanupExecutionResult(true, string.Empty);
             }
             catch (Exception exception)
@@ -116,10 +116,12 @@ namespace PsdLayoutTool2
             }
 
             GameObject root = null;
+            string prefabFullPath = GetProjectAssetFullPath(prefabPath);
+            byte[] prefabBackup = File.Exists(prefabFullPath) ? File.ReadAllBytes(prefabFullPath) : null;
             try
             {
                 root = PrefabUtility.LoadPrefabContents(prefabPath);
-                ApplyPlan(root, JObject.Parse(planJson));
+                ApplyPlan(root, JObject.Parse(planJson), applySelectedPrefabExtractions: true);
                 if (PrefabUtility.SaveAsPrefabAsset(root, prefabPath) == null)
                 {
                     throw new InvalidOperationException("Failed to save Prefab: " + prefabPath);
@@ -129,6 +131,8 @@ namespace PsdLayoutTool2
             }
             catch (Exception exception)
             {
+                RestorePrefabBackup(prefabPath, prefabFullPath, prefabBackup);
+                DeleteCreatedCrossParentPrefabAssets(planJson);
                 return new PsdHierarchyChatCleanupExecutionResult(false, "Native Unity Prefab update failed: " + exception.Message);
             }
             finally
@@ -142,6 +146,55 @@ namespace PsdLayoutTool2
             return new PsdHierarchyChatCleanupExecutionResult(
                 true,
                 "Prefab updated by the Native Unity backend." + VerifyPersistedPrefab(prefabPath, planJson));
+        }
+
+        private static string GetProjectAssetFullPath(string assetPath)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            return Path.Combine(projectRoot, (assetPath ?? string.Empty).Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        private static void RestorePrefabBackup(string prefabPath, string prefabFullPath, byte[] prefabBackup)
+        {
+            if (prefabBackup == null || string.IsNullOrWhiteSpace(prefabFullPath))
+            {
+                return;
+            }
+
+            try
+            {
+                File.WriteAllBytes(prefabFullPath, prefabBackup);
+                AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceUpdate);
+            }
+            catch
+            {
+                // Preserve the original execution failure as the useful error for callers.
+            }
+        }
+
+        private static void DeleteCreatedCrossParentPrefabAssets(string planJson)
+        {
+            try
+            {
+                JArray extractions = JObject.Parse(planJson ?? string.Empty)["crossParentPrefabExtractions"] as JArray;
+                if (extractions == null)
+                {
+                    return;
+                }
+
+                foreach (JObject extraction in extractions.OfType<JObject>())
+                {
+                    string assetPath = extraction.Value<string>("assetPath");
+                    if (!string.IsNullOrWhiteSpace(assetPath) && AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null)
+                    {
+                        AssetDatabase.DeleteAsset(assetPath);
+                    }
+                }
+            }
+            catch
+            {
+                // Preserve the original execution failure as the useful error for callers.
+            }
         }
 
         internal static async Task<PsdHierarchyChatCleanupExecutionResult> ValidateAsync(
@@ -249,7 +302,10 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static void ApplyPlan(GameObject root, JObject plan)
+        private static void ApplyPlan(
+            GameObject root,
+            JObject plan,
+            bool applySelectedPrefabExtractions)
         {
             var wrapperParents = new List<Transform>();
             var moves = new List<NativeMove>();
@@ -261,6 +317,8 @@ namespace PsdLayoutTool2
             JArray renameOperations = ReadArray(plan, "renames");
             JArray tightBoundsOperations = ReadArray(plan, "tightBounds");
             JArray removalOperations = ReadArray(plan, "emptyContainerRemovals");
+            JArray selectedPrefabExtractions = plan["selectedPrefabExtractions"] as JArray ?? new JArray();
+            JArray crossParentPrefabExtractions = plan["crossParentPrefabExtractions"] as JArray ?? new JArray();
 
             for (int index = 0; index < wrappers.Count; index++)
             {
@@ -366,9 +424,481 @@ namespace PsdLayoutTool2
 
             foreach (Transform container in emptyContainerRemovals)
             {
+                // 智能过滤：跳过仍然有子节点的容器（AI 规划错误的容错处理）
+                if (container != null && container.childCount > 0)
+                {
+                    UnityEngine.Debug.LogWarning(
+                        $"跳过删除非空容器：{GetFullPath(container)}（包含 {container.childCount} 个子节点）。" +
+                        "这通常是 AI 规划错误，已自动跳过以避免执行失败。");
+                    continue;
+                }
+
                 RemoveEmptyContainer(root.transform, container);
             }
 
+            ApplySelectedPrefabExtractions(root, selectedPrefabExtractions, applySelectedPrefabExtractions);
+            ApplyCrossParentPrefabExtractions(root, crossParentPrefabExtractions, applySelectedPrefabExtractions);
+
+        }
+
+        private static void ApplyCrossParentPrefabExtractions(
+            GameObject root,
+            JArray extractions,
+            bool createAssets)
+        {
+            for (int extractionIndex = 0; extractionIndex < extractions.Count; extractionIndex++)
+            {
+                JObject extraction = ReadObject(
+                    extractions[extractionIndex],
+                    "crossParentPrefabExtractions[" + extractionIndex + "]");
+                string label = "crossParentPrefabExtractions[" + extractionIndex + "]";
+                string componentName = ReadString(extraction, "name", label);
+                string assetPath = ReadString(extraction, "assetPath", label);
+                Transform componentRoot = FindByPath(root, ReadString(extraction, "root", label)).transform;
+                if (!(componentRoot is RectTransform))
+                {
+                    throw new InvalidOperationException(label + ".root must use RectTransform.");
+                }
+
+                if (!IsPascalCaseIdentifier(componentName))
+                {
+                    throw new InvalidOperationException(label + ".name must be a PascalCase identifier.");
+                }
+
+                ValidateNewPrefabAssetPath(assetPath, componentName, label);
+                var templateSources = ReadCrossParentSources(root, extraction["templateSources"] as JArray, label + ".templateSources");
+                if (templateSources.Count < 2)
+                {
+                    throw new InvalidOperationException(label + ".templateSources requires at least two nodes.");
+                }
+
+                if (!(extraction["instances"] is JArray instanceOperations) || instanceOperations.Count < 2)
+                {
+                    throw new InvalidOperationException(label + ".instances requires at least two complete groups.");
+                }
+
+                var groups = new List<IReadOnlyList<Transform>>();
+                var allSources = new HashSet<Transform>();
+                bool includesTemplate = false;
+                for (int instanceIndex = 0; instanceIndex < instanceOperations.Count; instanceIndex++)
+                {
+                    JObject instance = ReadObject(instanceOperations[instanceIndex], label + ".instances[" + instanceIndex + "]");
+                    List<Transform> sources = ReadCrossParentSources(
+                        root,
+                        instance["sources"] as JArray,
+                        label + ".instances[" + instanceIndex + "].sources");
+                    if (sources.Count != templateSources.Count)
+                    {
+                        throw new InvalidOperationException(label + ".instances[" + instanceIndex + "] has a different member count.");
+                    }
+
+                    foreach (Transform source in sources)
+                    {
+                        if (!source.IsChildOf(componentRoot) || source == componentRoot || !allSources.Add(source))
+                        {
+                            throw new InvalidOperationException(label + ".instances must contain unique descendants of the common root.");
+                        }
+
+                        AssertCrossParentSourceIsSafe(componentRoot, source, label);
+                    }
+
+                    includesTemplate |= new HashSet<Transform>(sources).SetEquals(templateSources);
+                    groups.Add(sources);
+                }
+
+                if (!includesTemplate)
+                {
+                    throw new InvalidOperationException(label + ".instances must include the templateSources group.");
+                }
+
+                foreach (Transform source in templateSources)
+                {
+                    if (!source.IsChildOf(componentRoot) || source == componentRoot || !allSources.Contains(source))
+                    {
+                        throw new InvalidOperationException(label + ".templateSources must be one reviewed group below the common root.");
+                    }
+                }
+
+                AssertNoExternalReferences(root.transform, allSources, componentName);
+                if (!createAssets)
+                {
+                    continue;
+                }
+
+                CreateCrossParentPrefabAsset(
+                    componentRoot,
+                    templateSources,
+                    groups,
+                    componentName,
+                    assetPath);
+            }
+        }
+
+        private static List<Transform> ReadCrossParentSources(GameObject root, JArray sourcePaths, string label)
+        {
+            if (sourcePaths == null || sourcePaths.Count == 0)
+            {
+                throw new InvalidOperationException(label + " must contain source paths.");
+            }
+
+            var sources = new List<Transform>();
+            var seenSources = new HashSet<Transform>();
+            foreach (JToken sourcePath in sourcePaths)
+            {
+                if (sourcePath.Type != JTokenType.String || string.IsNullOrWhiteSpace(sourcePath.Value<string>()))
+                {
+                    throw new InvalidOperationException(label + " must contain non-empty source paths.");
+                }
+
+                Transform source = FindByPath(root, sourcePath.Value<string>()).transform;
+                if (!(source is RectTransform) || !seenSources.Add(source))
+                {
+                    throw new InvalidOperationException(label + " must contain unique RectTransform nodes.");
+                }
+
+                sources.Add(source);
+            }
+
+            return sources;
+        }
+
+        private static void AssertCrossParentSourceIsSafe(Transform componentRoot, Transform source, string label)
+        {
+            for (Transform current = source.parent; current != null && current != componentRoot; current = current.parent)
+            {
+                if (current.localScale != Vector3.one || Quaternion.Angle(current.localRotation, Quaternion.identity) > 0.001f)
+                {
+                    throw new InvalidOperationException(label + " cannot cross a scaled or rotated UI parent: " + current.name + ".");
+                }
+
+                foreach (Component component in current.GetComponents<Component>())
+                {
+                    if (component == null || component is Transform)
+                    {
+                        continue;
+                    }
+
+                    string typeName = component.GetType().Name;
+                    if (typeName == "Canvas" || typeName == "CanvasGroup" || typeName == "Mask" ||
+                        typeName == "RectMask2D" || typeName == "ScrollRect" ||
+                        typeName.Contains("Layout", StringComparison.Ordinal) ||
+                        typeName == "ContentSizeFitter" || typeName == "AspectRatioFitter")
+                    {
+                        throw new InvalidOperationException(label + " cannot cross UI behavior parent: " + current.name + " (" + typeName + ").");
+                    }
+                }
+            }
+        }
+
+        private static void CreateCrossParentPrefabAsset(
+            Transform componentRoot,
+            IReadOnlyList<Transform> templateSources,
+            IReadOnlyList<IReadOnlyList<Transform>> groups,
+            string componentName,
+            string assetPath)
+        {
+            EnsureAssetFolder(assetPath);
+            GameObject wrapper = CreateWrapper(componentRoot, componentName, componentRoot.childCount);
+            bool assetCreated = false;
+            try
+            {
+                foreach (Transform source in templateSources)
+                {
+                    source.SetParent(wrapper.transform, true);
+                }
+
+                GameObject componentAsset = PrefabUtility.SaveAsPrefabAsset(wrapper, assetPath);
+                if (componentAsset == null)
+                {
+                    throw new InvalidOperationException("Failed to save cross-parent local Prefab: " + assetPath);
+                }
+
+                assetCreated = true;
+                foreach (IReadOnlyList<Transform> group in groups)
+                {
+                    GameObject instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject;
+                    if (instance == null)
+                    {
+                        throw new InvalidOperationException("Failed to instantiate cross-parent local Prefab: " + assetPath);
+                    }
+
+                    Transform destinationRoot = instance.transform;
+                    destinationRoot.SetParent(componentRoot, false);
+                    ResetCrossParentInstanceRoot(destinationRoot);
+                    if (destinationRoot.childCount != group.Count)
+                    {
+                        throw new InvalidOperationException("Cross-parent local Prefab member count changed after instantiation.");
+                    }
+
+                    for (int sourceIndex = 0; sourceIndex < group.Count; sourceIndex++)
+                    {
+                        CopyCrossParentSourceState(componentRoot, group[sourceIndex], destinationRoot.GetChild(sourceIndex));
+                    }
+                }
+
+                foreach (IReadOnlyList<Transform> group in groups)
+                {
+                    foreach (Transform source in group)
+                    {
+                        if (source != null && source.gameObject != wrapper)
+                        {
+                            UnityEngine.Object.DestroyImmediate(source.gameObject);
+                        }
+                    }
+                }
+
+                UnityEngine.Object.DestroyImmediate(wrapper);
+            }
+            catch
+            {
+                if (wrapper != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(wrapper);
+                }
+
+                if (assetCreated)
+                {
+                    AssetDatabase.DeleteAsset(assetPath);
+                }
+
+                throw;
+            }
+        }
+
+        private static void ResetCrossParentInstanceRoot(Transform root)
+        {
+            root.localPosition = Vector3.zero;
+            root.localRotation = Quaternion.identity;
+            root.localScale = Vector3.one;
+            if (root is RectTransform rect)
+            {
+                rect.anchorMin = new Vector2(0.5f, 0.5f);
+                rect.anchorMax = new Vector2(0.5f, 0.5f);
+                rect.pivot = new Vector2(0.5f, 0.5f);
+                rect.anchoredPosition3D = Vector3.zero;
+                rect.sizeDelta = Vector2.zero;
+            }
+        }
+
+        private static void CopyCrossParentSourceState(Transform componentRoot, Transform source, Transform destination)
+        {
+            destination.position = source.position;
+            destination.rotation = source.rotation;
+            destination.localScale = source.localScale;
+            if (source is RectTransform sourceRect && destination is RectTransform destinationRect)
+            {
+                destinationRect.anchorMin = new Vector2(0.5f, 0.5f);
+                destinationRect.anchorMax = new Vector2(0.5f, 0.5f);
+                destinationRect.pivot = sourceRect.pivot;
+                destinationRect.sizeDelta = sourceRect.rect.size;
+            }
+
+            foreach (Component sourceComponent in source.GetComponents<Component>())
+            {
+                if (sourceComponent == null || sourceComponent is Transform || !IsSupportedCrossParentOverride(sourceComponent))
+                {
+                    continue;
+                }
+
+                Component destinationComponent = destination.GetComponent(sourceComponent.GetType());
+                if (destinationComponent == null)
+                {
+                    throw new InvalidOperationException("Cross-parent local Prefab component mismatch: " + sourceComponent.GetType().FullName + ".");
+                }
+
+                EditorUtility.CopySerialized(sourceComponent, destinationComponent);
+            }
+        }
+
+        private static bool IsSupportedCrossParentOverride(Component component)
+        {
+            string typeName = component.GetType().FullName;
+            return string.Equals(typeName, "UnityEngine.UI.Image", StringComparison.Ordinal) ||
+                   string.Equals(typeName, "TMPro.TextMeshProUGUI", StringComparison.Ordinal);
+        }
+
+        private static void ApplySelectedPrefabExtractions(
+            GameObject root,
+            JArray extractions,
+            bool createAssets)
+        {
+            for (int extractionIndex = 0; extractionIndex < extractions.Count; extractionIndex++)
+            {
+                JObject extraction = ReadObject(
+                    extractions[extractionIndex],
+                    "selectedPrefabExtractions[" + extractionIndex + "]");
+                string label = "selectedPrefabExtractions[" + extractionIndex + "]";
+                string componentName = ReadString(extraction, "name", label);
+                string assetPath = ReadString(extraction, "assetPath", label);
+                string parentPath = ReadString(extraction, "parent", label);
+                JArray sources = ReadArray(extraction, "sources");
+                if (sources.Count < 2)
+                {
+                    throw new InvalidOperationException(label + " requires at least two selected direct children.");
+                }
+
+                if (!IsPascalCaseIdentifier(componentName))
+                {
+                    throw new InvalidOperationException(label + ".name must be a PascalCase identifier.");
+                }
+
+                ValidateNewPrefabAssetPath(assetPath, componentName, label);
+                Transform parent = FindByPath(root, parentPath).transform;
+                var sourceTransforms = new List<Transform>();
+                var seenSources = new HashSet<Transform>();
+                foreach (JToken source in sources)
+                {
+                    if (source.Type != JTokenType.String || string.IsNullOrWhiteSpace(source.Value<string>()))
+                    {
+                        throw new InvalidOperationException(label + ".sources must contain non-empty paths.");
+                    }
+
+                    Transform sourceTransform = FindByPath(root, source.Value<string>()).transform;
+                    if (sourceTransform.parent != parent)
+                    {
+                        throw new InvalidOperationException(label + ".sources must be direct children of " + parentPath + ".");
+                    }
+
+                    if (!seenSources.Add(sourceTransform))
+                    {
+                        throw new InvalidOperationException(label + ".sources contains a duplicate node.");
+                    }
+
+                    if (!(sourceTransform is RectTransform))
+                    {
+                        throw new InvalidOperationException(label + ".sources must all use RectTransform.");
+                    }
+
+                    sourceTransforms.Add(sourceTransform);
+                }
+
+                if (!(parent is RectTransform))
+                {
+                    throw new InvalidOperationException(label + ".parent must use RectTransform.");
+                }
+
+                AssertNoExternalReferences(root.transform, sourceTransforms, componentName);
+                if (!createAssets)
+                {
+                    continue;
+                }
+
+                CreateSelectedPrefabAsset(parent, sourceTransforms, componentName, assetPath);
+            }
+        }
+
+        private static void CreateSelectedPrefabAsset(
+            Transform parent,
+            IReadOnlyList<Transform> sources,
+            string componentName,
+            string assetPath)
+        {
+            int siblingIndex = sources.Min(source => source.GetSiblingIndex());
+            List<Transform> orderedSources = sources.OrderBy(source => source.GetSiblingIndex()).ToList();
+            EnsureAssetFolder(assetPath);
+            var wrapper = CreateWrapper(parent, componentName, siblingIndex);
+            bool assetCreated = false;
+            try
+            {
+                foreach (Transform source in orderedSources)
+                {
+                    source.SetParent(wrapper.transform, true);
+                }
+
+                TightenToChildren(wrapper.GetComponent<RectTransform>(), "@selected_prefab_extraction");
+                GameObject componentAsset = PrefabUtility.SaveAsPrefabAsset(wrapper, assetPath);
+                if (componentAsset == null)
+                {
+                    throw new InvalidOperationException("Failed to save selected Nested Prefab: " + assetPath);
+                }
+
+                assetCreated = true;
+                GameObject instance = PrefabUtility.InstantiatePrefab(componentAsset) as GameObject;
+                if (instance == null)
+                {
+                    throw new InvalidOperationException("Failed to instantiate selected Nested Prefab: " + assetPath);
+                }
+
+                Transform destination = instance.transform;
+                destination.SetParent(parent, false);
+                CopyTransformData(wrapper.transform, destination);
+                destination.SetSiblingIndex(siblingIndex);
+                UnityEngine.Object.DestroyImmediate(wrapper);
+            }
+            catch
+            {
+                if (wrapper != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(wrapper);
+                }
+
+                if (assetCreated)
+                {
+                    AssetDatabase.DeleteAsset(assetPath);
+                }
+
+                throw;
+            }
+        }
+
+        private static void ValidateNewPrefabAssetPath(string assetPath, string componentName, string label)
+        {
+            if (string.IsNullOrWhiteSpace(assetPath) ||
+                !assetPath.StartsWith("Assets/", StringComparison.Ordinal) ||
+                !assetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Path.GetFileNameWithoutExtension(assetPath), componentName, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(label + ".assetPath must be a new Assets/.../" + componentName + ".prefab path.");
+            }
+
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) != null)
+            {
+                throw new InvalidOperationException(label + ".assetPath already exists: " + assetPath);
+            }
+        }
+
+        private static void EnsureAssetFolder(string assetPath)
+        {
+            string directory = Path.GetDirectoryName(assetPath)?.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(directory) || !directory.StartsWith("Assets/", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Selected Nested Prefab has an invalid asset directory: " + assetPath);
+            }
+
+            string[] segments = directory.Split('/');
+            string current = segments[0];
+            for (int index = 1; index < segments.Length; index++)
+            {
+                string next = current + "/" + segments[index];
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    AssetDatabase.CreateFolder(current, segments[index]);
+                }
+
+                current = next;
+            }
+        }
+
+        private static bool IsPascalCaseIdentifier(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) &&
+                   char.IsUpper(value[0]) &&
+                   value.All(char.IsLetterOrDigit);
+        }
+
+        private static void CopyTransformData(Transform source, Transform destination)
+        {
+            destination.localPosition = source.localPosition;
+            destination.localRotation = source.localRotation;
+            destination.localScale = source.localScale;
+            if (source is RectTransform sourceRect && destination is RectTransform destinationRect)
+            {
+                destinationRect.anchorMin = sourceRect.anchorMin;
+                destinationRect.anchorMax = sourceRect.anchorMax;
+                destinationRect.pivot = sourceRect.pivot;
+                destinationRect.anchoredPosition3D = sourceRect.anchoredPosition3D;
+                destinationRect.sizeDelta = sourceRect.sizeDelta;
+            }
         }
 
         private static string VerifyPersistedPrefab(string prefabPath, string planJson)
@@ -448,15 +978,31 @@ namespace PsdLayoutTool2
 
         private static void AssertNoExternalReferences(Transform prefabRoot, Transform source)
         {
+            AssertNoExternalReferences(prefabRoot, new[] { source }, source == null ? string.Empty : source.name);
+        }
+
+        private static void AssertNoExternalReferences(
+            Transform prefabRoot,
+            IEnumerable<Transform> sources,
+            string sourceDescription)
+        {
             var forbidden = new HashSet<UnityEngine.Object>();
-            foreach (Transform node in source.GetComponentsInChildren<Transform>(true))
+            foreach (Transform source in sources ?? Array.Empty<Transform>())
             {
-                forbidden.Add(node.gameObject);
-                foreach (Component component in node.GetComponents<Component>())
+                if (source == null)
                 {
-                    if (component != null)
+                    continue;
+                }
+
+                foreach (Transform node in source.GetComponentsInChildren<Transform>(true))
+                {
+                    forbidden.Add(node.gameObject);
+                    foreach (Component component in node.GetComponents<Component>())
                     {
-                        forbidden.Add(component);
+                        if (component != null)
+                        {
+                            forbidden.Add(component);
+                        }
                     }
                 }
             }
@@ -477,7 +1023,7 @@ namespace PsdLayoutTool2
                         forbidden.Contains(property.objectReferenceValue))
                     {
                         throw new InvalidOperationException(
-                            "Cannot remove a container referenced outside its hierarchy: " + source.name +
+                            "Cannot extract or remove a hierarchy referenced outside its boundary: " + sourceDescription +
                             " by " + owner.GetType().FullName + "." + property.propertyPath);
                     }
                 }
@@ -878,6 +1424,28 @@ namespace PsdLayoutTool2
 
             internal readonly RectTransform target;
             internal readonly string targetReference;
+        }
+
+        /// <summary>
+        /// 获取 Transform 的完整层级路径
+        /// </summary>
+        private static string GetFullPath(Transform transform)
+        {
+            if (transform == null)
+            {
+                return string.Empty;
+            }
+
+            var pathSegments = new System.Collections.Generic.List<string>();
+            Transform current = transform;
+            while (current != null)
+            {
+                pathSegments.Add(current.name);
+                current = current.parent;
+            }
+
+            pathSegments.Reverse();
+            return string.Join("/", pathSegments.ToArray());
         }
     }
 }

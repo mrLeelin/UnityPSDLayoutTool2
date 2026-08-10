@@ -19,6 +19,8 @@ namespace PsdLayoutTool2
         [SerializeField] private string sourcePsdGuid = string.Empty;
         [SerializeField] private string targetPrefabGuid = string.Empty;
         [SerializeField] private string targetPrefabPath = string.Empty;
+        [SerializeField] private bool requiresRebind;
+        [SerializeField, TextArea(2, 4)] private string rebindReason = string.Empty;
         // Kept for schema-1 assets. It is migrated into runnerPlanStages on the
         // next successful append/save.
         [SerializeField, TextArea(4, 20)] private string runnerPlanJson = string.Empty;
@@ -41,6 +43,8 @@ namespace PsdLayoutTool2
             if (string.IsNullOrEmpty(targetPrefabGuid))
                 throw new InvalidOperationException("Target Prefab GUID could not be resolved.");
             runnerPlanJson = string.Empty;
+            requiresRebind = false;
+            rebindReason = string.Empty;
             runnerPlanStages = new List<string>
             {
                 plan.ToString(Newtonsoft.Json.Formatting.None),
@@ -52,6 +56,8 @@ namespace PsdLayoutTool2
             string normalizedTarget = NormalizeAssetPath(prefabPath);
             bool migratesSchemaOne = schemaVersion == 1;
             ValidateBinding(sourceGuid, normalizedTarget);
+            if (requiresRebind)
+                throw new InvalidDataException(BuildRebindRequiredMessage());
             JObject plan = ParseAndValidatePlan(validatedRunnerPlanJson, normalizedTarget);
 
             List<string> stages = ReadStoredStages(normalizedTarget);
@@ -119,6 +125,11 @@ namespace PsdLayoutTool2
             if (schemaVersion == CurrentSchemaVersion && string.IsNullOrEmpty(targetPrefabGuid))
             {
                 error = "Cleanup replay Profile target Prefab GUID is missing.";
+                return false;
+            }
+            if (requiresRebind)
+            {
+                error = BuildRebindRequiredMessage();
                 return false;
             }
             if (!string.Equals(sourcePsdGuid, (sourceGuid ?? string.Empty).Trim(), StringComparison.Ordinal))
@@ -331,6 +342,101 @@ namespace PsdLayoutTool2
             }
         }
 
+        internal static bool RequiresRebind(
+            string sourcePsdAssetPath,
+            string prefabPath,
+            out string reason)
+        {
+            string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(sourcePsdAssetPath));
+            return RequiresRebindByGuid(sourceGuid, prefabPath, out reason);
+        }
+
+        internal static bool RequiresRebindByGuid(
+            string sourceGuid,
+            string prefabPath,
+            out string reason)
+        {
+            reason = string.Empty;
+            if (string.IsNullOrWhiteSpace(sourceGuid)) return false;
+
+            PsdHierarchyCleanupReplayProfile profile = Load(prefabPath, sourceGuid.Trim());
+            if (profile == null || !profile.requiresRebind) return false;
+
+            reason = profile.rebindReason;
+            return true;
+        }
+
+        internal static bool TryMarkRequiresRebindByGuid(
+            string sourceGuid,
+            string prefabPath,
+            string reason)
+        {
+            if (string.IsNullOrWhiteSpace(sourceGuid)) return false;
+
+            PsdHierarchyCleanupReplayProfile profile = Load(prefabPath, sourceGuid.Trim());
+            if (profile == null) return false;
+
+            profile.requiresRebind = true;
+            profile.rebindReason = (reason ?? string.Empty).Trim();
+            EditorUtility.SetDirty(profile);
+            AssetDatabase.SaveAssetIfDirty(profile);
+            return true;
+        }
+
+        internal static PsdHierarchyCleanupReplayProfile EnsureRequiresRebind(
+            string sourcePsdAssetPath,
+            string prefabPath,
+            string reason)
+        {
+            string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(sourcePsdAssetPath));
+            if (string.IsNullOrWhiteSpace(sourceGuid))
+                throw new InvalidOperationException("Source PSD asset GUID could not be resolved.");
+
+            string normalizedTarget = NormalizeAssetPath(prefabPath);
+            string profilePath = GetProfilePath(normalizedTarget, sourceGuid);
+            EnsureAssetFolder(ProfileFolder);
+            PsdHierarchyCleanupReplayProfile profile =
+                AssetDatabase.LoadAssetAtPath<PsdHierarchyCleanupReplayProfile>(profilePath);
+            if (profile == null)
+            {
+                profile = CreateInstance<PsdHierarchyCleanupReplayProfile>();
+                profile.InitializeRebindMarker(sourceGuid, normalizedTarget, reason);
+                AssetDatabase.CreateAsset(profile, profilePath);
+            }
+            else
+            {
+                profile.ValidateBinding(sourceGuid, normalizedTarget);
+                profile.requiresRebind = true;
+                profile.rebindReason = (reason ?? string.Empty).Trim();
+                EditorUtility.SetDirty(profile);
+            }
+
+            AssetDatabase.SaveAssetIfDirty(profile);
+            return profile;
+        }
+
+        private void InitializeRebindMarker(string sourceGuid, string prefabPath, string reason)
+        {
+            string normalizedTarget = NormalizeAssetPath(prefabPath);
+            if (string.IsNullOrWhiteSpace(sourceGuid))
+                throw new ArgumentException("Source PSD GUID is required.", nameof(sourceGuid));
+            if (!IsAssetPath(normalizedTarget) || !normalizedTarget.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Target Prefab must be an Assets path.", nameof(prefabPath));
+
+            string targetGuid = AssetDatabase.AssetPathToGUID(normalizedTarget);
+            if (string.IsNullOrEmpty(targetGuid))
+                throw new InvalidOperationException("Target Prefab GUID could not be resolved.");
+
+            schemaVersion = CurrentSchemaVersion;
+            sourcePsdGuid = sourceGuid.Trim();
+            targetPrefabPath = normalizedTarget;
+            targetPrefabGuid = targetGuid;
+            runnerPlanJson = string.Empty;
+            runnerPlanStages = new List<string>();
+            requiresRebind = true;
+            rebindReason = (reason ?? string.Empty).Trim();
+        }
+
         /// <summary>
         /// Finds the active replay Profile for a moved Prefab by its persistent
         /// GUID, then migrates both the Profile asset location and stored plan
@@ -477,6 +583,14 @@ namespace PsdLayoutTool2
             schemaVersion = CurrentSchemaVersion;
             targetPrefabGuid = currentTargetGuid;
             targetPrefabPath = normalizedTarget;
+        }
+
+        private string BuildRebindRequiredMessage()
+        {
+            return string.IsNullOrWhiteSpace(rebindReason)
+                ? "Cleanup replay Profile requires a fresh confirmed plan before it can replay again."
+                : "Cleanup replay Profile requires a fresh confirmed plan before it can replay again: " +
+                  rebindReason;
         }
 
         private void MigrateTargetPath(string newTargetPath)

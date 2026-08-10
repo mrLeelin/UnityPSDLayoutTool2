@@ -4,6 +4,8 @@ namespace PsdLayoutTool2.Tests
     using Newtonsoft.Json.Linq;
     using NUnit.Framework;
     using UnityEditor;
+    using UnityEngine;
+    using UnityEngine.UI;
 
     public sealed class PsdHierarchyChatCleanupExecutionTests
     {
@@ -109,6 +111,35 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void BareJsonPlanCanBeRecoveredWhenProviderOmitsMarkdownFence()
+        {
+            const string target = "Assets/UI/Prefab/ExampleView.prefab";
+            bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                CreatePlan(target, true),
+                target,
+                out string plan,
+                out string error);
+
+            Assert.That(extracted, Is.True, error);
+            Assert.That(plan, Does.Contain("ExampleView.prefab"));
+        }
+
+        [Test]
+        public void JsonFenceAllowsWhitespaceUppercaseAndBom()
+        {
+            const string target = "Assets/UI/Prefab/ExampleView.prefab";
+            string reply = "\uFEFF``` JSON\r\n" + CreatePlan(target, true) + "\r\n```";
+            bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                reply,
+                target,
+                out string plan,
+                out string error);
+
+            Assert.That(extracted, Is.True, error);
+            Assert.That(plan, Does.Contain("ExampleView.prefab"));
+        }
+
+        [Test]
         public void RunnerPlanCapturesCurrentUnityGuidInsteadOfTrustingAiAssetRenameGuid()
         {
             const string assetPath =
@@ -173,6 +204,71 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prepared, Is.False);
             Assert.That(error, Does.Contain("textureRenames[0].from"));
             Assert.That(error, Does.Contain(missingAssetPath));
+        }
+
+        [Test]
+        public void RunnerPlanRejectsAnAssetRenameSourceOutsideTheCurrentPrefabDependencies()
+        {
+            const string allowedAssetPath =
+                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
+            const string unreferencedAssetPath =
+                "Assets/PSDLayoutTool2/TestData/7日签到拆分/Texture/Currency_Power_2_385.png";
+            PsdHierarchyChatContext context = CreateAssetRenameContext(new[] { allowedAssetPath });
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = unreferencedAssetPath,
+                    ["toName"] = "ExampleView_Icon",
+                    ["expectedGuid"] = string.Empty,
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("is not referenced by the current target Prefab"));
+            Assert.That(error, Does.Contain(unreferencedAssetPath));
+        }
+
+        [Test]
+        public void RunnerPlanRejectsEveryAssetRenameWhenTheCurrentPrefabHasNoRenameableDependencies()
+        {
+            const string assetPath =
+                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
+            PsdHierarchyChatContext context = CreateAssetRenameContext(System.Array.Empty<string>());
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = assetPath,
+                    ["toName"] = "ExampleView_Icon",
+                    ["expectedGuid"] = string.Empty,
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("is not referenced by the current target Prefab"));
         }
 
         [Test]
@@ -824,6 +920,41 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanUsesExecutableFallbackForNonEnglishComponentCandidateName()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["containmentResolutions"] = new JArray();
+            plan["flatSiblingResolutions"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "Exercise deterministic repair for an existing snapshot.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext("component", "组 16"),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(
+                runnerPlan["componentFamilyDecisions"][0].Value<string>("extractionId"),
+                Is.EqualTo("reusable_item"));
+            Assert.That(
+                runnerPlan["componentExtractions"][0].Value<string>("assetPath"),
+                Does.EndWith("/Common/ReusableItem.prefab"));
+        }
+
+        [Test]
         public void VersionTwoPlanDeterministicallyRepairsSkipForMandatoryVariantFamily()
         {
             var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
@@ -859,6 +990,154 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void VersionTwoPlanRejectsVariantSourcesSplitByAMoveBeforeRunnerPreflight()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000004", "node:n000001", "snapshot-123"));
+            plan["containmentResolutions"] = new JArray();
+            plan["flatSiblingResolutions"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "Exercise the deterministic required-variant fallback.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateDistinctVariantCandidateContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(error, Does.Contain("variant sources must remain direct siblings after planned moves"));
+            Assert.That(error, Does.Contain("[TaskItem_2]"));
+        }
+
+        [Test]
+        public void VersionTwoPlanCompletesVariantFamilyMovesWhenTemplateAlreadyMovesToOneWrapper()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "@day_card_markers", "snapshot-123"));
+            plan["wrappers"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "day_card_markers",
+                    ["parent"] = "node:n000002",
+                    ["name"] = "[DayCardMarkers]",
+                    ["siblingIndex"] = 0,
+                },
+            };
+            plan["moves"] = new JArray
+            {
+                new JObject
+                {
+                    ["source"] = "node:n000003",
+                    ["destination"] = "@day_card_markers",
+                    ["siblingIndex"] = 0,
+                },
+                new JObject
+                {
+                    ["source"] = "node:n000004",
+                    ["destination"] = "@day_card_markers",
+                    ["siblingIndex"] = 1,
+                },
+            };
+            plan["tightBounds"] = new JArray
+            {
+                new JObject { ["target"] = "@day_card_markers" },
+            };
+            plan["containmentResolutions"] = new JArray();
+            plan["flatSiblingResolutions"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "Exercise deterministic completion of a partial family move.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateDistinctVariantCandidateContext(),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            JObject[] familyMoves = runnerPlan["moves"]
+                .OfType<JObject>()
+                .Where(move => move.Value<string>("destination") == "@day_card_markers")
+                .ToArray();
+            Assert.That(familyMoves, Has.Length.EqualTo(3));
+            Assert.That(
+                familyMoves.Select(move => move.Value<string>("source")),
+                Is.EqualTo(new[]
+                {
+                    "Root/TaskList/[TaskItem_1]",
+                    "Root/TaskList/[TaskItem_2]",
+                    "Root/TaskList/[TaskItem_3]",
+                }));
+            Assert.That(
+                familyMoves.Select(move => move.Value<int>("siblingIndex")),
+                Is.EqualTo(new[] { 0, 1, 2 }));
+        }
+
+        [Test]
+        public void VersionTwoPlanRejectsOverlappingMultipleComponentPrefabExtractions()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "component",
+                    ["extractionId"] = "task_item_a",
+                },
+            };
+            plan["componentExtractions"] = new JArray
+            {
+                new JObject
+                {
+                    ["id"] = "task_item_a",
+                    ["template"] = "node:n000003",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                    ["instances"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                },
+                new JObject
+                {
+                    ["id"] = "task_item_b",
+                    ["template"] = "node:n000003",
+                    ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                    ["instances"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateRequiredCandidateContext("component"),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(error, Does.Contain("overlap"));
+        }
+
+        [Test]
         public void VersionTwoPlanUsesVariantFallbackForSkippedMandatoryStatefulFamily()
         {
             var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
@@ -887,6 +1166,41 @@ namespace PsdLayoutTool2.Tests
             Assert.That(decision.Value<string>("mode"), Is.EqualTo("variant"));
             Assert.That(decision.Value<string>("extractionId"), Is.EqualTo("task_item_variant"));
             Assert.That(((JArray)runnerPlan["variantComponentExtractions"]).Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void VersionTwoPlanUsesExecutableFallbackForNonEnglishVariantCandidateName()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000003", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["containmentResolutions"] = new JArray();
+            plan["flatSiblingResolutions"] = new JArray();
+            plan["componentFamilyDecisions"] = new JArray
+            {
+                new JObject
+                {
+                    ["candidateId"] = "family_001",
+                    ["parent"] = "node:n000002",
+                    ["sources"] = new JArray("node:n000003", "node:n000004", "node:n000005"),
+                    ["mode"] = "skip",
+                    ["reason"] = "Exercise the deterministic fallback for an existing snapshot.",
+                },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                CreateDistinctVariantCandidateContext("variant", "组 16"),
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            var runnerPlan = JObject.Parse(runnerPlanJson);
+            Assert.That(
+                runnerPlan["componentFamilyDecisions"][0].Value<string>("extractionId"),
+                Is.EqualTo("reusable_item_variant"));
+            Assert.That(
+                runnerPlan["variantComponentExtractions"][0].Value<string>("assetPath"),
+                Does.EndWith("/Common/ReusableItemVariant.prefab"));
         }
 
         [Test]
@@ -1848,7 +2162,30 @@ namespace PsdLayoutTool2.Tests
                 "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
         }
 
-        private static PsdHierarchyChatContext CreateRequiredCandidateContext(string recommendedMode = null)
+        private static PsdHierarchyChatContext CreateAssetRenameContext(string[] assetRenameSourcePaths)
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000001\",\"path\":\"Root/Group\"}," +
+                "{\"id\":\"n000002\",\"path\":\"Root/Group/15K\"}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json",
+                assetRenameSourcePaths);
+        }
+
+        private static PsdHierarchyChatContext CreateRequiredCandidateContext(
+            string recommendedMode = null,
+            string suggestedAssetName = "TaskItem")
         {
             string recommendedModeJson = string.IsNullOrWhiteSpace(recommendedMode)
                 ? string.Empty
@@ -1862,7 +2199,7 @@ namespace PsdLayoutTool2.Tests
                 "{\"id\":\"n000004\",\"path\":\"Root/TaskList/[TaskItem_2]\"}," +
                 "{\"id\":\"n000005\",\"path\":\"Root/TaskList/[TaskItem_3]\"}]," +
                 "\"componentFamilyCandidates\":[{" +
-                "\"id\":\"family_001\",\"suggestedAssetName\":\"TaskItem\"," +
+                "\"id\":\"family_001\",\"suggestedAssetName\":\"" + suggestedAssetName + "\"," +
                 recommendedModeJson +
                 "\"parent\":\"node:n000002\",\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\"]," +
                 "\"requiresExtraction\":true}]}";
@@ -1880,7 +2217,8 @@ namespace PsdLayoutTool2.Tests
         }
 
         private static PsdHierarchyChatContext CreateDistinctVariantCandidateContext(
-            string recommendedMode = "variant")
+            string recommendedMode = "variant",
+            string suggestedAssetName = "TaskItem")
         {
             string snapshot =
                 "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
@@ -1894,7 +2232,7 @@ namespace PsdLayoutTool2.Tests
                 "{\"id\":\"n000007\",\"path\":\"Root/TaskList/[TaskItem_2]/Content\",\"name\":\"Content\",\"parentId\":\"n000004\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Text\"]}," +
                 "{\"id\":\"n000008\",\"path\":\"Root/TaskList/[TaskItem_3]/LockIcon\",\"name\":\"LockIcon\",\"parentId\":\"n000005\",\"siblingIndex\":0,\"components\":[\"RectTransform\",\"Image\"]}," +
                 "{\"id\":\"n000009\",\"path\":\"Root/TaskList/[TaskItem_3]/LockIcon/Overlay\",\"name\":\"Overlay\",\"parentId\":\"n000008\",\"siblingIndex\":0,\"components\":[\"RectTransform\"]}]," +
-                "\"componentFamilyCandidates\":[{\"id\":\"family_001\",\"suggestedAssetName\":\"TaskItem\"," +
+                "\"componentFamilyCandidates\":[{\"id\":\"family_001\",\"suggestedAssetName\":\"" + suggestedAssetName + "\"," +
                 "\"recommendedMode\":\"" + recommendedMode + "\",\"parent\":\"node:n000002\"," +
                 "\"sources\":[\"node:n000003\",\"node:n000004\",\"node:n000005\"],\"requiresExtraction\":true}]}";
             return new PsdHierarchyChatContext(
@@ -1973,6 +2311,170 @@ namespace PsdLayoutTool2.Tests
                 "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
         }
 
+        [Test]
+        public void NativeSelectedPrefabExtractionPreflightsWithoutWritesAndCreatesANestedPrefabAfterConfirmation()
+        {
+            const string folder = "Assets/__PsdHierarchySelectedPrefabExtractionTests";
+            const string targetPath = folder + "/ExampleView.prefab";
+            const string componentPath = folder + "/Common/DaySignCard.prefab";
+            AssetDatabase.DeleteAsset(folder);
+            AssetDatabase.CreateFolder("Assets", "__PsdHierarchySelectedPrefabExtractionTests");
+
+            GameObject root = new GameObject("ExampleView", typeof(RectTransform));
+            GameObject loaded = null;
+            try
+            {
+                foreach (string name in new[] { "GiftBox4", "DateText4", "DateMarker5" })
+                {
+                    var child = new GameObject(name, typeof(RectTransform));
+                    child.transform.SetParent(root.transform, false);
+                }
+
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, targetPath), Is.Not.Null);
+                string plan = CreateSelectedPrefabExtractionPlan(targetPath, componentPath);
+
+                PsdHierarchyChatCleanupExecutionResult preflight =
+                    PsdHierarchyNativeCleanupExecutor.Validate(plan);
+                Assert.That(preflight.success, Is.True, preflight.message);
+                Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(componentPath), Is.Null);
+
+                PsdHierarchyChatCleanupExecutionResult applied =
+                    PsdHierarchyNativeCleanupExecutor.Apply(plan);
+                Assert.That(applied.success, Is.True, applied.message);
+                GameObject component = AssetDatabase.LoadAssetAtPath<GameObject>(componentPath);
+                Assert.That(component, Is.Not.Null);
+                Assert.That(component.transform.Cast<Transform>().Select(child => child.name),
+                    Is.EqualTo(new[] { "GiftBox4", "DateText4", "DateMarker5" }));
+
+                loaded = PrefabUtility.LoadPrefabContents(targetPath);
+                Assert.That(loaded.transform.childCount, Is.EqualTo(1));
+                Transform nestedInstance = loaded.transform.GetChild(0);
+                Assert.That(nestedInstance.name, Is.EqualTo("DaySignCard"));
+                Assert.That(
+                    PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(nestedInstance.gameObject),
+                    Is.EqualTo(componentPath));
+            }
+            finally
+            {
+                if (loaded != null)
+                {
+                    PrefabUtility.UnloadPrefabContents(loaded);
+                }
+
+                UnityEngine.Object.DestroyImmediate(root);
+                AssetDatabase.DeleteAsset(folder);
+            }
+        }
+
+        [Test]
+        public void NativeCrossParentPrefabExtractionReusesOnePrefabAndKeepsUiOverrides()
+        {
+            const string folder = "Assets/__PsdHierarchyCrossParentExtractionTests";
+            const string targetPath = folder + "/ExampleView.prefab";
+            const string componentPath = folder + "/Common/DaySignRewardItem.prefab";
+            AssetDatabase.DeleteAsset(folder);
+            AssetDatabase.CreateFolder("Assets", "__PsdHierarchyCrossParentExtractionTests");
+
+            GameObject root = new GameObject("ExampleView", typeof(RectTransform));
+            GameObject loaded = null;
+            try
+            {
+                Transform screen = CreateRectTransform("Screen", root.transform, Vector2.zero);
+                Transform reward = CreateRectTransform("Reward", screen, Vector2.zero);
+                Transform progress = CreateRectTransform("Progress", screen, Vector2.zero);
+                for (int index = 1; index <= 4; index++)
+                {
+                    CreateImageRectTransform("GiftBox" + index, reward, new Vector2(index * 100f, -42f), index);
+                    CreateImageRectTransform("DateText" + index, progress, new Vector2(index * 100f, 2f), index + 10);
+                }
+
+                for (int index = 1; index <= 5; index++)
+                {
+                    CreateImageRectTransform("DateMarker" + index, progress, new Vector2((index - 1) * 100f, 0f), index + 20);
+                }
+
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, targetPath), Is.Not.Null);
+                string plan = CreateCrossParentPrefabExtractionPlan(targetPath, componentPath);
+
+                PsdHierarchyChatCleanupExecutionResult preflight = PsdHierarchyNativeCleanupExecutor.Validate(plan);
+                Assert.That(preflight.success, Is.True, preflight.message);
+                Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(componentPath), Is.Null);
+
+                PsdHierarchyChatCleanupExecutionResult applied = PsdHierarchyNativeCleanupExecutor.Apply(plan);
+                Assert.That(applied.success, Is.True, applied.message);
+                Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(componentPath), Is.Not.Null);
+
+                loaded = PrefabUtility.LoadPrefabContents(targetPath);
+                Transform loadedScreen = loaded.transform.Find("Screen");
+                Assert.That(loadedScreen.Find("Progress/DateMarker1"), Is.Not.Null);
+                Transform[] instances = loadedScreen.Cast<Transform>()
+                    .Where(node => PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(node.gameObject) == componentPath)
+                    .ToArray();
+                Assert.That(instances, Has.Length.EqualTo(4));
+                for (int index = 0; index < instances.Length; index++)
+                {
+                    Transform instance = instances[index];
+                    Assert.That(instance.childCount, Is.EqualTo(3));
+                    Assert.That(instance.GetChild(0).GetComponent<Image>().color,
+                        Is.EqualTo(ColorFor(index + 22)));
+                    Assert.That(((RectTransform)instance.GetChild(2)).anchoredPosition.x,
+                        Is.EqualTo((index + 1) * 100f).Within(0.01f));
+                }
+            }
+            finally
+            {
+                if (loaded != null)
+                {
+                    PrefabUtility.UnloadPrefabContents(loaded);
+                }
+
+                UnityEngine.Object.DestroyImmediate(root);
+                AssetDatabase.DeleteAsset(folder);
+            }
+        }
+
+        private static Transform CreateRectTransform(string name, Transform parent, Vector2 position)
+        {
+            var node = new GameObject(name, typeof(RectTransform));
+            node.transform.SetParent(parent, false);
+            ((RectTransform)node.transform).anchoredPosition = position;
+            return node.transform;
+        }
+
+        private static Transform CreateImageRectTransform(string name, Transform parent, Vector2 position, int colorSeed)
+        {
+            var node = new GameObject(name, typeof(RectTransform), typeof(Image));
+            node.transform.SetParent(parent, false);
+            ((RectTransform)node.transform).anchoredPosition = position;
+            node.GetComponent<Image>().color = ColorFor(colorSeed);
+            return node.transform;
+        }
+
+        private static Color ColorFor(int seed)
+        {
+            return new Color((seed % 5) / 4f, (seed % 7) / 6f, (seed % 11) / 10f, 1f);
+        }
+
+        private static string CreateCrossParentPrefabExtractionPlan(string targetPath, string componentPath)
+        {
+            return "{\"version\":1," +
+                   "\"prefabAssetPath\":\"" + targetPath + "\"," +
+                   "\"output\":{\"mode\":\"in_place\",\"assetPath\":\"" + targetPath + "\"}," +
+                   "\"prefabName\":\"ExampleView\",\"wrappers\":[],\"moves\":[],\"renames\":[]," +
+                   "\"emptyContainerRemovals\":[],\"tightBounds\":[],\"textureRenames\":[]," +
+                   "\"spriteAtlasRenames\":[],\"componentFamilyDecisions\":[],\"componentExtractions\":[]," +
+                   "\"stateComponentExtractions\":[],\"variantComponentExtractions\":[]," +
+                   "\"statefulComponentExtractions\":[],\"crossParentPrefabExtractions\":[{" +
+                   "\"id\":\"day_sign_reward_item\",\"name\":\"DaySignRewardItem\",\"assetPath\":\"" + componentPath + "\"," +
+                   "\"root\":\"ExampleView/Screen\",\"templateSources\":[\"ExampleView/Screen/Progress/DateMarker5\",\"ExampleView/Screen/Progress/DateText4\",\"ExampleView/Screen/Reward/GiftBox4\"]," +
+                   "\"instances\":[" +
+                   "{\"sequence\":1,\"sources\":[\"ExampleView/Screen/Progress/DateMarker2\",\"ExampleView/Screen/Progress/DateText1\",\"ExampleView/Screen/Reward/GiftBox1\"]}," +
+                   "{\"sequence\":2,\"sources\":[\"ExampleView/Screen/Progress/DateMarker3\",\"ExampleView/Screen/Progress/DateText2\",\"ExampleView/Screen/Reward/GiftBox2\"]}," +
+                   "{\"sequence\":3,\"sources\":[\"ExampleView/Screen/Progress/DateMarker4\",\"ExampleView/Screen/Progress/DateText3\",\"ExampleView/Screen/Reward/GiftBox3\"]}," +
+                   "{\"sequence\":4,\"sources\":[\"ExampleView/Screen/Progress/DateMarker5\",\"ExampleView/Screen/Progress/DateText4\",\"ExampleView/Screen/Reward/GiftBox4\"]}]," +
+                   "\"unmatched\":[\"ExampleView/Screen/Progress/DateMarker1\"]}],\"verify\":{}}";
+        }
+
         private static string CreateNodeReferencePlan(string source, string destination, string fingerprint)
         {
             return "{\"version\":2," +
@@ -1986,6 +2488,21 @@ namespace PsdLayoutTool2.Tests
                    "\"componentFamilyDecisions\":[],\"componentExtractions\":[]," +
                    "\"stateComponentExtractions\":[],\"variantComponentExtractions\":[]," +
                    "\"statefulComponentExtractions\":[],\"verify\":{}}";
+        }
+
+        private static string CreateSelectedPrefabExtractionPlan(string targetPath, string componentPath)
+        {
+            return "{\"version\":1," +
+                   "\"prefabAssetPath\":\"" + targetPath + "\"," +
+                   "\"output\":{\"mode\":\"in_place\",\"assetPath\":\"" + targetPath + "\"}," +
+                   "\"prefabName\":\"ExampleView\",\"wrappers\":[],\"moves\":[],\"renames\":[]," +
+                   "\"emptyContainerRemovals\":[],\"tightBounds\":[],\"textureRenames\":[]," +
+                   "\"spriteAtlasRenames\":[],\"componentFamilyDecisions\":[],\"componentExtractions\":[]," +
+                   "\"stateComponentExtractions\":[],\"variantComponentExtractions\":[]," +
+                   "\"statefulComponentExtractions\":[],\"selectedPrefabExtractions\":[{" +
+                   "\"id\":\"day_sign_card\",\"name\":\"DaySignCard\",\"assetPath\":\"" + componentPath + "\"," +
+                   "\"parent\":\"ExampleView\",\"sources\":[\"ExampleView/GiftBox4\",\"ExampleView/DateText4\",\"ExampleView/DateMarker5\"]}]," +
+                   "\"verify\":{}}";
         }
 
         private static string CreatePlan(string target, bool includeVersion)
