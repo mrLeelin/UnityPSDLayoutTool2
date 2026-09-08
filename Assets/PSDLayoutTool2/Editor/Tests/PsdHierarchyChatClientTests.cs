@@ -138,6 +138,22 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void FlatSiblingFindingsIgnoreLeavesInsideExplicitStructuralGroup()
+        {
+            var nodes = new JArray
+            {
+                CreateFlatSiblingNode("n000001", string.Empty, "Screen", 0, 1, -540f, -1170f, 540f, 1170f),
+                CreateFlatSiblingNode("n000002", "n000001", "[TimedRewardPanel]", 0, 4, -280f, 666f, 280f, 879f),
+                CreateFlatSiblingNode("n000003", "n000002", "PanelBackground", 0, 0, -280f, 666f, 280f, 879f),
+                CreateFlatSiblingNode("n000004", "n000002", "TimerIcon", 1, 0, -82f, 690f, -32f, 739f),
+                CreateFlatSiblingNode("n000005", "n000002", "TimerText", 2, 0, -18f, 702f, 70f, 727f),
+                CreateFlatSiblingNode("n000006", "n000002", "PanelForeground", 3, 0, -204f, 749f, 205f, 818f),
+            };
+
+            Assert.That(PsdHierarchyChatContextBuilder.BuildFlatSiblingFindings(nodes), Is.Empty);
+        }
+
+        [Test]
         public void GeneratedFlatSiblingWrappersUnderPluralParentAreSemanticComponentCandidates()
         {
             var nodes = new JArray
@@ -400,17 +416,92 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void PortablePromptRequiresOneTableBasedConfirmationThenAutomaticCompletion()
+        {
+            string fullSnapshot = new JObject
+            {
+                ["fingerprint"] = "snapshot-123",
+                ["nodes"] = new JArray(new JObject
+                {
+                    ["id"] = "n000001",
+                    ["path"] = "Root",
+                    ["name"] = "Root",
+                    ["components"] = new JArray("UnityEngine.RectTransform"),
+                    ["spriteAssetPath"] = "FULL ASSET PATH MUST NOT BE COPIED",
+                }),
+                ["componentFamilyCandidates"] = new JArray(),
+                ["containmentFindings"] = new JArray(),
+                ["flatSiblingFindings"] = new JArray(),
+            }.ToString(Newtonsoft.Json.Formatting.None);
+            var context = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "FULL SKILL BODY MUST NOT BE COPIED",
+                "Prefab Body",
+                "FULL PLAN FORMAT MUST NOT BE COPIED",
+                fullSnapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json",
+                null,
+                "FULL PSD INFO MUST NOT BE COPIED");
+
+            string prompt = PsdHierarchyChatClient.BuildPortablePrompt(context);
+
+            Assert.That(prompt, Does.Contain("Use skill prefab-hierarchy-cleanup"));
+            Assert.That(prompt, Does.Contain("全部使用中文输出。"));
+            Assert.That(prompt, Does.Contain("E:/Project/Demo/monsterhunter/Skill.md"));
+            Assert.That(prompt, Does.Contain("plan-format.md"));
+            Assert.That(prompt, Does.Contain("snapshot-123.json"));
+            Assert.That(prompt, Does.Contain("ExampleView.prefab"));
+            Assert.That(prompt, Does.Contain("complete hierarchy").And.Contain("component types"));
+            Assert.That(prompt, Does.Contain("nested Prefab boundaries").And.Contain("repeated structures"));
+            Assert.That(prompt, Does.Contain("componentFamilyCandidates").And.Contain("flatSiblingFindings"));
+            Assert.That(prompt, Does.Contain("Distinguish observed facts, inferences, and unknowns"));
+            Assert.That(prompt, Does.Contain("ask focused questions").And.Contain("Never guess"));
+            Assert.That(prompt, Does.Contain("exactly one user confirmation"));
+            Assert.That(prompt, Does.Contain("Markdown tables"));
+            Assert.That(prompt, Does.Contain("Grouping and naming table"));
+            Assert.That(prompt, Does.Contain("Child Prefab extraction table"));
+            Assert.That(prompt, Does.Contain("postGroupingExtractionIntents"));
+            Assert.That(prompt, Does.Contain("wrapper name").And.Contain("ordered members"));
+            Assert.That(prompt, Does.Contain("output asset path").And.Contain("Common members"));
+            Assert.That(prompt, Does.Contain("state ID/name/member list"));
+            Assert.That(prompt, Does.Contain("After confirmation, execute the complete workflow automatically"));
+            Assert.That(prompt, Does.Contain("refresh the authoritative hierarchy snapshot"));
+            Assert.That(prompt, Does.Contain("create the reviewed child Prefabs"));
+            Assert.That(prompt, Does.Contain("Do not ask for another confirmation"));
+            Assert.That(prompt, Does.Contain("final verification report"));
+            Assert.That(prompt, Does.Contain("node:<id>").And.Contain("in_place"));
+            Assert.That(prompt, Does.Not.Contain("Phase 1 - grouping confirmation"));
+            Assert.That(prompt, Does.Not.Contain("Phase 2 - final plan"));
+            Assert.That(prompt, Does.Not.Contain("Analyze only"));
+            Assert.That(prompt, Does.Not.Contain(context.hierarchySnapshotJson));
+            Assert.That(prompt, Does.Not.Contain("===== BEGIN TARGET PREFAB NODE SNAPSHOT ====="));
+            Assert.That(prompt, Does.Not.Contain("FULL ASSET PATH MUST NOT BE COPIED"));
+            Assert.That(prompt, Does.Not.Contain("FULL SKILL BODY MUST NOT BE COPIED"));
+            Assert.That(prompt, Does.Not.Contain("FULL PLAN FORMAT MUST NOT BE COPIED"));
+            Assert.That(prompt, Does.Not.Contain("FULL PSD INFO MUST NOT BE COPIED"));
+            Assert.That(prompt.Length, Is.GreaterThanOrEqualTo(1400));
+            Assert.That(prompt.Length, Is.LessThanOrEqualTo(4000));
+        }
+
+        [Test]
         public void DefaultPromptRequestsAReviewablePlan()
         {
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("完整、可确认的层级整理方案"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("完整层级、节点几何、组件、同级顺序和重复结构"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("完整的原地整理后树形结构"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("应用前必须验证"));
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("可审查的分析摘要"));
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("分组依据"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("Markdown 表格"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("分组与命名表"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("子 Prefab 抽取表"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("状态的 ID/名称/成员列表"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("不要输出原始内部推理"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("```json 计划代码块"));
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("Unity 窗口会直接更新 Prefab"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("用户只确认一次"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("自动完成全部已审阅阶段"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("不要声称已经修改本地文件"));
         }
 
@@ -430,12 +521,13 @@ namespace PsdLayoutTool2.Tests
             Assert.That(instructions, Does.Contain("Never move a finding into an existing unrelated container"));
             Assert.That(instructions, Does.Contain("one observed state for every distinct recursive structure"));
             Assert.That(instructions, Does.Contain("must not be skipped"));
-            Assert.That(instructions, Does.Contain("Return an auditable analysis summary"));
-            Assert.That(instructions, Does.Contain("风险与保留项"));
+            Assert.That(instructions, Does.Contain("Return an auditable review"));
+            Assert.That(instructions, Does.Contain("Markdown tables"));
+            Assert.That(instructions, Does.Contain("exactly one confirmation"));
         }
 
         [Test]
-        public void ChatContextUsesAReviewedJsonPlanForTheSecondTurnExecution()
+        public void ChatContextUsesAReviewedJsonPlanForSingleConfirmationExecution()
         {
             string instructions = CreateSmallContext().BuildInstructions();
 

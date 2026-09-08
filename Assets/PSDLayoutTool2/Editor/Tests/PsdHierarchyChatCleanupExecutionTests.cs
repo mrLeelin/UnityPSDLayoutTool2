@@ -9,6 +9,15 @@ namespace PsdLayoutTool2.Tests
 
     public sealed class PsdHierarchyChatCleanupExecutionTests
     {
+        [TestCase("确认")]
+        [TestCase("满意")]
+        [TestCase("满意了")]
+        [TestCase("满意！")]
+        public void ExplicitConfirmationAcceptsTheDocumentedSingleApprovalWords(string input)
+        {
+            Assert.That(PsdHierarchyChatCleanupExecution.IsExplicitConfirmation(input), Is.True);
+        }
+
         [Test]
         public void ReviewedJsonPlanForTheCurrentPrefabCanBeConfirmed()
         {
@@ -172,6 +181,168 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 JObject.Parse(runnerPlanJson)["textureRenames"]?[0]?["expectedGuid"]?.Value<string>(),
                 Is.EqualTo(expectedGuid));
+        }
+
+        [Test]
+        public void RunnerPlanStripsPostGroupingExtractionIntentsBeforeExecution()
+        {
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["postGroupingExtractionIntents"] = new JArray(new JObject
+            {
+                ["id"] = "task_item",
+                ["mode"] = "component",
+                ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                ["templatePath"] = "Root/Child",
+                ["commonMembers"] = new JArray(),
+                ["instances"] = new JArray(new JObject
+                {
+                    ["path"] = "Root/Child",
+                    ["state"] = string.Empty,
+                    ["commonSourceNames"] = new JArray(),
+                    ["stateSourceNames"] = new JArray(),
+                }),
+                ["states"] = new JArray(),
+                ["defaultState"] = string.Empty,
+            });
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out string runnerPlanJson,
+                out string error);
+
+            Assert.That(prepared, Is.True, error);
+            Assert.That(JObject.Parse(runnerPlanJson)["postGroupingExtractionIntents"], Is.Null);
+        }
+
+        [Test]
+        public void RunnerPlanRejectsIncompletePostGroupingExtractionIntentBeforeFirstStageExecution()
+        {
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["postGroupingExtractionIntents"] = new JArray(new JObject
+            {
+                ["id"] = "task_item",
+                ["mode"] = "state",
+                ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                ["templatePath"] = "Root/Child",
+                ["commonMembers"] = new JArray("Background"),
+                ["instances"] = new JArray(new JObject
+                {
+                    ["path"] = "Root/Child",
+                    ["commonSourceNames"] = new JArray(),
+                    ["stateSourceNames"] = new JArray(),
+                }),
+                ["states"] = new JArray(new JObject
+                {
+                    ["id"] = "available",
+                    ["name"] = "Available",
+                    ["sourcePath"] = "Root/Child",
+                    ["members"] = new JArray("Icon"),
+                }),
+                ["defaultState"] = "available",
+            });
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("instances[0].state"));
+        }
+
+        [Test]
+        public void RunnerPlanRejectsPostGroupingInstanceStateThatIsNotDeclared()
+        {
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["postGroupingExtractionIntents"] = CreateStatefulIntent("missing_state");
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("missing_state").And.Contain("state id"));
+        }
+
+        [Test]
+        public void RunnerPlanRejectsComponentIntentWithInstanceState()
+        {
+            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan(
+                "node:n000001",
+                "node:n000002",
+                "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["postGroupingExtractionIntents"] = new JArray(new JObject
+            {
+                ["id"] = "task_item",
+                ["mode"] = "component",
+                ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                ["templatePath"] = "Root/Child",
+                ["commonMembers"] = new JArray(),
+                ["instances"] = new JArray(new JObject
+                {
+                    ["path"] = "Root/Child",
+                    ["state"] = "unexpected",
+                }),
+                ["states"] = new JArray(),
+                ["defaultState"] = string.Empty,
+            });
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                context,
+                plan.ToString(),
+                out _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("component").And.Contain("state"));
+        }
+
+        private static JArray CreateStatefulIntent(string instanceState)
+        {
+            return new JArray(new JObject
+            {
+                ["id"] = "task_item",
+                ["mode"] = "stateful",
+                ["assetPath"] = "Assets/UI/Prefab/Common/TaskItem.prefab",
+                ["templatePath"] = "Root/Child",
+                ["commonMembers"] = new JArray("Label"),
+                ["instances"] = new JArray(new JObject
+                {
+                    ["path"] = "Root/Child",
+                    ["state"] = instanceState,
+                    ["commonSourceNames"] = new JArray("Label"),
+                    ["stateSourceNames"] = new JArray("Background"),
+                }),
+                ["states"] = new JArray(new JObject
+                {
+                    ["id"] = "available",
+                    ["name"] = "[State_Available]",
+                    ["sourcePath"] = "Root/Child",
+                    ["members"] = new JArray("Background"),
+                }),
+                ["defaultState"] = "available",
+            });
         }
 
         [Test]

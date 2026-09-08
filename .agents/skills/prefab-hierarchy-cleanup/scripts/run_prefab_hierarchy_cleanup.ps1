@@ -16,6 +16,8 @@ param(
 
     [switch]$Reapply,
 
+    [switch]$AllowUloopFallback,
+
     [string]$PythonPath = "python"
 )
 
@@ -57,16 +59,7 @@ function Invoke-UloopCli {
         return
     }
 
-    # Unity inherits the system Node.js path, but a global uloop-cli install is optional.
-    # Use the package-matched CLI through npx when the global command is unavailable.
-    $npxCommand = Get-Command -Name "npx.cmd", "npx" -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -eq $npxCommand) {
-        throw "Neither uloop nor npx is available. Install Node.js or the uloop-cli package."
-    }
-
-    & $npxCommand.Source --yes "uloop-cli@2.2.0" @Arguments
-    $script:UloopExitCode = $LASTEXITCODE
+    throw "The explicit uloop fallback was requested, but uloop is not installed. This script never downloads execution tools."
 }
 
 $selectedModes = 0
@@ -77,6 +70,9 @@ if ($Preflight) { $selectedModes++ }
 if ($Reapply) { $selectedModes++ }
 if ($selectedModes -ne 1) {
     throw "Choose exactly one mode: -ApplyConfirmed, -VerifyOnly, -CompileOnly, -Preflight, or -Reapply."
+}
+if (-not $AllowUloopFallback) {
+    throw "This script is the explicit uloop fallback only. NativeUnity is selected by the PSD Layout Tool UI; use that workflow, or pass -AllowUloopFallback intentionally."
 }
 
 $ProjectPath = [System.IO.Path]::GetFullPath($ProjectPath)

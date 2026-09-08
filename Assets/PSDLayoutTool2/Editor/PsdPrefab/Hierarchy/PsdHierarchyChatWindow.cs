@@ -4,9 +4,17 @@ namespace PsdLayoutTool2
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using Newtonsoft.Json.Linq;
     using UnityEditor;
     using UnityEngine;
     using UnityEngine.UIElements;
+
+    internal enum PsdHierarchyValidatedPlanDisposition
+    {
+        PendingConfirmation,
+        AutoApply,
+        Reject,
+    }
 
     internal sealed class PsdHierarchyChatWindow : EditorWindow
     {
@@ -26,9 +34,6 @@ namespace PsdLayoutTool2
 
         private const string StyleSheetGuid = "18f53073502d4d7e89345f900b727c7e";
         private const int MaxAutomaticPlanRepairAttempts = 1;
-        private const string ComponentExtractionFollowUpPrompt =
-            "第一阶段层级整理已经应用。请基于当前最新快照继续完成第二阶段：为所有 requiresExtraction:true 的重复组件候选生成完整的 Prefab 抽取计划。不要重新组织已完成的层级；只处理这些组件候选并返回完整 JSON 计划。";
-
         private PsdHierarchyChatContext context;
         private readonly List<PsdHierarchyChatMessage> conversation = new List<PsdHierarchyChatMessage>();
 
@@ -512,7 +517,9 @@ namespace PsdLayoutTool2
         private async void SendMessage(
             string prompt,
             bool isInitialRequest,
-            bool showUserMessage = true)
+            bool showUserMessage = true,
+            bool autoApplyComponentFollowUp = false,
+            string confirmedIntentsJson = "")
         {
             if (context == null || isSending)
             {
@@ -552,7 +559,8 @@ namespace PsdLayoutTool2
                 string initialReviewText = string.Empty;
                 PsdHierarchyPlanIssueCategory lastFailureCategory =
                     PsdHierarchyPlanIssueCategory.PlanExtraction;
-                for (int repairAttempt = 0; repairAttempt <= MaxAutomaticPlanRepairAttempts; repairAttempt++)
+                int maxRepairAttempts = autoApplyComponentFollowUp ? 0 : MaxAutomaticPlanRepairAttempts;
+                for (int repairAttempt = 0; repairAttempt <= maxRepairAttempts; repairAttempt++)
                 {
                     PsdHierarchyChatSendResult result = await PsdHierarchyChatClient.SendWithCliSessionAsync(
                         context,
@@ -597,7 +605,21 @@ namespace PsdLayoutTool2
                         PsdHierarchyChatCleanupExecutionResult validation =
                             await PsdHierarchyChatCleanupExecution.ValidatePlanAsync(context, planJson);
                         HideThinkingIndicator();
-                        if (validation.success)
+                        string authorizationError = string.Empty;
+                        PsdHierarchyValidatedPlanDisposition disposition = validation.success
+                            ? ResolveValidatedPlanDisposition(
+                                autoApplyComponentFollowUp,
+                                confirmedIntentsJson,
+                                context,
+                                planJson,
+                                out authorizationError)
+                            : PsdHierarchyValidatedPlanDisposition.Reject;
+                        if (validation.success && disposition == PsdHierarchyValidatedPlanDisposition.Reject)
+                        {
+                            lastPlanError = authorizationError;
+                            lastFailureCategory = PsdHierarchyPlanIssueCategory.PlanPreparation;
+                        }
+                        else if (validation.success)
                         {
                             string reviewableReply = PsdHierarchyChatCleanupExecution.ComposeReviewableReply(
                                 initialReviewText,
@@ -608,6 +630,17 @@ namespace PsdLayoutTool2
                                 initialReviewText,
                                 result.message,
                                 planJson));
+                            if (disposition == PsdHierarchyValidatedPlanDisposition.AutoApply)
+                            {
+                                AppendMessage(
+                                    "system",
+                                    "第二阶段计划已通过预检并与首次确认的子 Prefab 清单完全一致，正在自动执行；无需再次确认。");
+                                SetSending(false, "正在自动抽取子 Prefab...");
+                                rootVisualElement.schedule.Execute(() =>
+                                    ApplyPendingPlan("首次确认已授权自动抽取", false)).ExecuteLater(1);
+                                return;
+                            }
+
                             AppendMessage("system", "方案已就绪。点击“确认并更新”或回复“确认”即可直接更新当前 Prefab；确认不会再发送给 AI。 ");
                             SetSending(false, "方案待确认");
                             return;
@@ -615,6 +648,10 @@ namespace PsdLayoutTool2
 
                         lastPlanError = validation.message;
                         lastFailureCategory = PsdHierarchyPlanIssueCategory.RunnerPreflight;
+                        if (IsNonRepairableValidationFailure(validation.message))
+                        {
+                            break;
+                        }
                     }
                     else
                     {
@@ -624,7 +661,7 @@ namespace PsdLayoutTool2
                             : PsdHierarchyPlanIssueCategory.PlanExtraction;
                     }
 
-                    if (repairAttempt >= MaxAutomaticPlanRepairAttempts)
+                    if (repairAttempt >= maxRepairAttempts)
                     {
                         break;
                     }
@@ -640,10 +677,10 @@ namespace PsdLayoutTool2
                     }
                     ShowThinkingIndicator(
                         "AI 返回的计划未通过校验，正在同一会话自动补全（" + nextAttempt + "/" +
-                        MaxAutomaticPlanRepairAttempts + "）...");
+                        maxRepairAttempts + "）...");
                     SetSending(
                         true,
-                        "正在自动补全计划（" + nextAttempt + "/" + MaxAutomaticPlanRepairAttempts + "）...");
+                        "正在自动补全计划（" + nextAttempt + "/" + maxRepairAttempts + "）...");
                 }
 
                 HideThinkingIndicator();
@@ -669,7 +706,7 @@ namespace PsdLayoutTool2
             }
         }
 
-        private async void ApplyPendingPlan(string confirmation)
+        private async void ApplyPendingPlan(string confirmation, bool appendUserConfirmation = true)
         {
             if (context == null || isSending || string.IsNullOrWhiteSpace(pendingPlanJson))
             {
@@ -677,9 +714,14 @@ namespace PsdLayoutTool2
             }
 
             string planToApply = pendingPlanJson;
+            string confirmedReviewText = currentWorkspace?.reviewText ?? string.Empty;
+            string confirmedIntentsJson = ExtractPostGroupingExtractionIntents(planToApply);
             SetPendingPlan(string.Empty);
             isSending = true;
-            AppendMessage("user", confirmation.Trim());
+            if (appendUserConfirmation)
+            {
+                AppendMessage("user", confirmation.Trim());
+            }
             if (draftField != null)
             {
                 draftField.value = string.Empty;
@@ -699,16 +741,22 @@ namespace PsdLayoutTool2
                             requiresReplayProfileReplacement));
                 HideThinkingIndicator();
                 AppendMessage("system", result.message);
-                if (result.success)
+                bool verificationWarning = result.success &&
+                    result.message.IndexOf("VERIFY_WARN", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (result.success && !verificationWarning)
                 {
                     hasAppliedCleanupStage = true;
                     requiresReplayProfileReplacement = false;
                     pendingRecoveryFailure = string.Empty;
                     SetPlanWorkspace(null);
                 }
-                queueComponentExtractionFollowUp = result.success &&
-                                                   IsHierarchyOnlyPlan(planToApply);
-                if (!result.success)
+                queueComponentExtractionFollowUp =
+                    ShouldQueueComponentExtractionFollowUp(result, confirmedIntentsJson);
+                if (verificationWarning)
+                {
+                    HandleApplyFailure(planToApply, result.message, infrastructureFailure: false);
+                }
+                else if (!result.success)
                 {
                     bool requiresProfileReplacement =
                         PsdHierarchyCleanupReplayCoordinator.IsPermanentReplayFailure(result.message);
@@ -740,7 +788,7 @@ namespace PsdLayoutTool2
                         result.message,
                         infrastructureFailure: false);
                 }
-                if (result.success)
+                if (result.success && !verificationWarning)
                 {
                     SetSending(false, "更新完成");
                 }
@@ -761,7 +809,7 @@ namespace PsdLayoutTool2
 
             if (queueComponentExtractionFollowUp)
             {
-                QueueComponentExtractionFollowUp();
+                QueueComponentExtractionFollowUp(confirmedReviewText, confirmedIntentsJson);
             }
         }
 
@@ -849,13 +897,9 @@ namespace PsdLayoutTool2
             PsdHierarchyAiConnectionMode connectionMode,
             ref string cliSessionId)
         {
-            if (connectionMode != PsdHierarchyAiConnectionMode.LocalCli)
-            {
-                return false;
-            }
-
-            cliSessionId = string.Empty;
-            return true;
+            // JSON-only repair stays in the same provider session so the skill,
+            // plan format, and snapshot are not read again from scratch.
+            return false;
         }
 
         private void RequestRecoveryPlan()
@@ -881,7 +925,9 @@ namespace PsdLayoutTool2
                 false);
         }
 
-        private void QueueComponentExtractionFollowUp()
+        private void QueueComponentExtractionFollowUp(
+            string confirmedReviewText,
+            string confirmedIntentsJson)
         {
             if (!PsdHierarchyChatContextBuilder.TryCreate(
                     context.sourcePsdAssetPath,
@@ -895,14 +941,333 @@ namespace PsdLayoutTool2
 
             context = refreshedContext;
             ResetFailedPlanConversation();
-            if (context.componentFamilyCandidates == null ||
-                !context.componentFamilyCandidates.Any(candidate => candidate.requiresExtraction))
+            if (!CanGenerateConfirmedComponentFollowUp(
+                    confirmedIntentsJson,
+                    context,
+                    out string followUpError))
+            {
+                AppendMessage(
+                    "system",
+                    "第一阶段已经保存，但自动子 Prefab 阶段已阻止：" + followUpError +
+                    " 未请求第二次确认，也未继续调用 AI。请基于当前已保存 Prefab 重新生成完整方案。");
+                SetSending(false, "已阻止不匹配的子 Prefab 阶段");
+                return;
+            }
+
+            AppendMessage("system", "第一阶段已完成。正在刷新权威快照，并按首次确认的清单自动生成和执行子 Prefab 抽取方案。");
+            string followUpPrompt = BuildComponentExtractionFollowUpPrompt(
+                confirmedReviewText,
+                confirmedIntentsJson);
+            rootVisualElement.schedule.Execute(() =>
+                SendMessage(followUpPrompt, false, false, true, confirmedIntentsJson)).ExecuteLater(1);
+        }
+
+        internal static string BuildComponentExtractionFollowUpPrompt(
+            string confirmedReviewText,
+            string confirmedIntentsJson)
+        {
+            return "第一阶段层级整理已经应用，首次确认已授权继续完成子 Prefab 抽取。" +
+                   "请基于当前最新权威快照，为所有 requiresExtraction:true 的候选生成完整版本 2 JSON 计划。" +
+                   "本阶段只允许组件抽取：wrappers、moves、renames、emptyContainerRemovals、tightBounds、" +
+                   "textureRenames、spriteAtlasRenames、containmentResolutions 和 flatSiblingResolutions 必须为空。" +
+                   "每个抽取的 id、mode、assetPath、实例名称与状态、状态 ID/名称和默认状态必须与下方清单完全一致。" +
+                   "不得请求第二次确认，不得新增、删除、改名或扩大抽取范围；无法匹配时返回可校验失败，不要猜测。\n" +
+                   "===== BEGIN USER-CONFIRMED REVIEW =====\n" +
+                   (confirmedReviewText ?? string.Empty) + "\n" +
+                   "===== END USER-CONFIRMED REVIEW =====\n" +
+                   "===== BEGIN CONFIRMED POST-GROUPING EXTRACTION INTENTS =====\n" +
+                   (confirmedIntentsJson ?? "[]") + "\n" +
+                   "===== END CONFIRMED POST-GROUPING EXTRACTION INTENTS =====";
+        }
+
+        internal static bool ShouldAutoApplyComponentFollowUp(
+            bool authorizedByInitialConfirmation,
+            string confirmedIntentsJson,
+            PsdHierarchyChatContext refreshedContext,
+            string planJson,
+            out string error)
+        {
+            error = string.Empty;
+            if (!authorizedByInitialConfirmation)
+            {
+                error = "当前组件计划没有首次确认授权。";
+                return false;
+            }
+
+            try
+            {
+                var plan = JObject.Parse(planJson ?? string.Empty);
+                string[] forbiddenArrays =
+                {
+                    "wrappers", "moves", "renames", "emptyContainerRemovals", "tightBounds",
+                    "textureRenames", "spriteAtlasRenames", "containmentResolutions",
+                    "flatSiblingResolutions", "postGroupingExtractionIntents",
+                };
+                string forbidden = forbiddenArrays.FirstOrDefault(name =>
+                    plan[name] is JArray operations && operations.Count > 0);
+                if (forbidden != null)
+                {
+                    error = "自动第二阶段包含未授权的层级变更或其他操作：" + forbidden + "。";
+                    return false;
+                }
+
+                JArray expected = JArray.Parse(confirmedIntentsJson ?? "[]");
+                if (expected.Count == 0)
+                {
+                    error = "首次确认的 postGroupingExtractionIntents 为空。";
+                    return false;
+                }
+
+                JArray actual = BuildActualExtractionIntents(plan, refreshedContext);
+                if (actual.Count == 0)
+                {
+                    error = "自动第二阶段没有生成任何组件抽取。";
+                    return false;
+                }
+
+                if (!JToken.DeepEquals(expected, actual))
+                {
+                    error = "自动第二阶段与首次确认的 postGroupingExtractionIntents 不一致。" +
+                            " expected=" + expected.ToString(Newtonsoft.Json.Formatting.None) +
+                            " actual=" + actual.ToString(Newtonsoft.Json.Formatting.None);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is Newtonsoft.Json.JsonException ||
+                exception is InvalidDataException)
+            {
+                error = "无法校验自动第二阶段授权：" + exception.Message;
+                return false;
+            }
+        }
+
+        internal static bool ShouldQueueComponentExtractionFollowUp(
+            PsdHierarchyChatCleanupExecutionResult result,
+            string confirmedIntentsJson)
+        {
+            return result.success &&
+                   result.message.IndexOf("VERIFY_WARN", StringComparison.OrdinalIgnoreCase) < 0 &&
+                   HasConfirmedPostGroupingExtractionIntents(confirmedIntentsJson);
+        }
+
+        internal static bool CanGenerateConfirmedComponentFollowUp(
+            string confirmedIntentsJson,
+            PsdHierarchyChatContext refreshedContext,
+            out string error)
+        {
+            if (!HasConfirmedPostGroupingExtractionIntents(confirmedIntentsJson))
+            {
+                error = "首次确认的计划没有 postGroupingExtractionIntents。";
+                return false;
+            }
+
+            if (refreshedContext?.componentFamilyCandidates == null)
+            {
+                error = "刷新后的权威快照没有与已确认清单对应的 requiresExtraction 候选。";
+                return false;
+            }
+
+            try
+            {
+                var expectedPaths = new HashSet<string>(
+                    JArray.Parse(confirmedIntentsJson)
+                        .OfType<JObject>()
+                        .SelectMany(intent => (intent["instances"] as JArray ?? new JArray()).OfType<JObject>())
+                        .Select(instance => instance.Value<string>("path"))
+                        .Where(path => !string.IsNullOrWhiteSpace(path)),
+                    StringComparer.Ordinal);
+                var refreshedPaths = new HashSet<string>(
+                    refreshedContext.componentFamilyCandidates
+                        .Where(candidate => candidate.requiresExtraction)
+                        .SelectMany(candidate => candidate.sources)
+                        .Select(source => ResolveNodePath(refreshedContext, source))
+                        .Where(path => !string.IsNullOrWhiteSpace(path)),
+                    StringComparer.Ordinal);
+                if (expectedPaths.Count == 0 || !expectedPaths.SetEquals(refreshedPaths))
+                {
+                    error = "刷新后的 requiresExtraction 候选实例与已确认清单不一致。" +
+                            " expected=" + new JArray(expectedPaths.OrderBy(path => path, StringComparer.Ordinal)) +
+                            " actual=" + new JArray(refreshedPaths.OrderBy(path => path, StringComparer.Ordinal));
+                    return false;
+                }
+            }
+            catch (Newtonsoft.Json.JsonException exception)
+            {
+                error = "无法读取首次确认的抽取清单：" + exception.Message;
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
+        internal static bool IsNonRepairableValidationFailure(string message)
+        {
+            string value = message ?? string.Empty;
+            return value.IndexOf("超时", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   value.IndexOf("timed out", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   value.IndexOf("exceeded", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   value.IndexOf("VERIFY_WARN", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal static PsdHierarchyValidatedPlanDisposition ResolveValidatedPlanDisposition(
+            bool autoApplyComponentFollowUp,
+            string confirmedIntentsJson,
+            PsdHierarchyChatContext refreshedContext,
+            string planJson,
+            out string error)
+        {
+            if (!autoApplyComponentFollowUp)
+            {
+                error = string.Empty;
+                return PsdHierarchyValidatedPlanDisposition.PendingConfirmation;
+            }
+
+            return ShouldAutoApplyComponentFollowUp(
+                    true,
+                    confirmedIntentsJson,
+                    refreshedContext,
+                    planJson,
+                    out error)
+                ? PsdHierarchyValidatedPlanDisposition.AutoApply
+                : PsdHierarchyValidatedPlanDisposition.Reject;
+        }
+
+        private static JArray BuildActualExtractionIntents(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            var intents = new JArray();
+            AppendActualExtractionIntents(intents, plan, context, "componentExtractions", "component");
+            AppendActualExtractionIntents(intents, plan, context, "stateComponentExtractions", "state");
+            AppendActualExtractionIntents(intents, plan, context, "variantComponentExtractions", "variant");
+            AppendActualExtractionIntents(intents, plan, context, "statefulComponentExtractions", "stateful");
+            return intents;
+        }
+
+        private static void AppendActualExtractionIntents(
+            JArray target,
+            JObject plan,
+            PsdHierarchyChatContext context,
+            string propertyName,
+            string mode)
+        {
+            if (!(plan[propertyName] is JArray extractions))
             {
                 return;
             }
 
-            AppendMessage("system", "第一阶段已完成。正在基于最新层级自动生成重复组件的第二阶段抽取方案；该方案生成后仍需确认才会写入 Prefab。");
-            rootVisualElement.schedule.Execute(() => SendMessage(ComponentExtractionFollowUpPrompt, false)).ExecuteLater(1);
+            foreach (JObject extraction in extractions.OfType<JObject>())
+            {
+                string templateReference = extraction.Value<string>("template");
+                var instances = new JArray();
+                JArray sourceInstances = mode == "state"
+                    ? extraction["states"] as JArray
+                    : extraction["instances"] as JArray;
+                foreach (JToken token in sourceInstances ?? new JArray())
+                {
+                    string source = token.Type == JTokenType.String
+                        ? token.Value<string>()
+                        : token.Value<string>("source");
+                    string state = token.Type == JTokenType.Object
+                        ? token.Value<string>("state") ?? token.Value<string>("id") ?? string.Empty
+                        : string.Empty;
+                    instances.Add(new JObject
+                    {
+                        ["path"] = ResolveNodePath(context, source),
+                        ["state"] = state,
+                        ["commonSourceNames"] = token.Type == JTokenType.Object
+                            ? token["commonSourceNames"]?.DeepClone() ?? new JArray()
+                            : new JArray(),
+                        ["stateSourceNames"] = token.Type == JTokenType.Object
+                            ? token["stateSourceNames"]?.DeepClone() ?? new JArray()
+                            : new JArray(),
+                    });
+                }
+
+                var states = new JArray();
+                foreach (JObject state in (extraction["states"] as JArray ?? new JArray()).OfType<JObject>())
+                {
+                    var members = new JArray();
+                    foreach (JObject member in (state["members"] as JArray ?? new JArray()).OfType<JObject>())
+                    {
+                        members.Add(member.Value<string>("name") ?? member.Value<string>("sourceName") ?? string.Empty);
+                    }
+                    states.Add(new JObject
+                    {
+                        ["id"] = state.Value<string>("id") ?? string.Empty,
+                        ["name"] = state.Value<string>("name") ?? string.Empty,
+                        ["sourcePath"] = ResolveNodePath(context, state.Value<string>("source")),
+                        ["members"] = members,
+                    });
+                }
+
+                var commonMembers = new JArray();
+                if (extraction["common"] is JObject common)
+                {
+                    foreach (JObject member in (common["members"] as JArray ?? new JArray()).OfType<JObject>())
+                    {
+                        commonMembers.Add(
+                            member.Value<string>("name") ?? member.Value<string>("sourceName") ?? string.Empty);
+                    }
+                }
+
+                target.Add(new JObject
+                {
+                    ["id"] = extraction.Value<string>("id") ?? string.Empty,
+                    ["mode"] = mode,
+                    ["assetPath"] = (extraction.Value<string>("assetPath") ?? string.Empty).Replace('\\', '/'),
+                    ["templatePath"] = ResolveNodePath(context, templateReference),
+                    ["instances"] = instances,
+                    ["commonMembers"] = commonMembers,
+                    ["states"] = states,
+                    ["defaultState"] = extraction.Value<string>("defaultState") ?? string.Empty,
+                });
+            }
+        }
+
+        private static string ResolveNodePath(PsdHierarchyChatContext context, string sourceReference)
+        {
+            const string prefix = "node:";
+            string nodeId = sourceReference != null && sourceReference.StartsWith(prefix, StringComparison.Ordinal)
+                ? sourceReference.Substring(prefix.Length)
+                : sourceReference;
+            if (context == null || string.IsNullOrWhiteSpace(nodeId) ||
+                !context.TryGetNodePath(nodeId, out string path))
+            {
+                throw new InvalidDataException("抽取源不在刷新后的权威快照中：" + (sourceReference ?? "<empty>") + "。");
+            }
+
+            return path.Replace('\\', '/');
+        }
+
+        private static string ExtractPostGroupingExtractionIntents(string planJson)
+        {
+            try
+            {
+                var plan = JObject.Parse(planJson ?? string.Empty);
+                return (plan["postGroupingExtractionIntents"] as JArray ?? new JArray())
+                    .ToString(Newtonsoft.Json.Formatting.None);
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return "[]";
+            }
+        }
+
+        private static bool HasConfirmedPostGroupingExtractionIntents(string intentsJson)
+        {
+            try
+            {
+                return JArray.Parse(intentsJson ?? "[]").Count > 0;
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return false;
+            }
         }
 
         private static bool IsHierarchyOnlyPlan(string planJson)

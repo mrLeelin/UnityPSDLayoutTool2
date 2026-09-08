@@ -63,6 +63,21 @@
         /// </summary>
         private const string ShowNativeInspectorPrefKey = "PsdLayoutTool2.ShowNativeTextureImporterInspector";
 
+        /// <summary>
+        /// Below this width, paired actions stack so localized labels remain readable.
+        /// </summary>
+        private const float ActionRowStackThreshold = 420f;
+
+        /// <summary>
+        /// Keeps every action row visually stable while labels and disabled states change.
+        /// </summary>
+        private const float ActionButtonHeight = 24f;
+
+        /// <summary>
+        /// Horizontal and vertical spacing between related actions.
+        /// </summary>
+        private const float ActionRowSpacing = 4f;
+
 #if UNITY_2021_3_OR_NEWER && !UNITY_2022_1_OR_NEWER
         /// <summary>
         /// Unity 2021.3 can hang inside TextureImporterInspector.OnInspectorGUI when it is nested by reflection.
@@ -89,6 +104,18 @@
         /// Language options displayed in dropdown.
         /// </summary>
         private static readonly string[] LanguageOptions = { "中文", "English" };
+
+        private readonly struct ActionPairResult
+        {
+            internal ActionPairResult(bool firstClicked, bool secondClicked)
+            {
+                this.firstClicked = firstClicked;
+                this.secondClicked = secondClicked;
+            }
+
+            internal readonly bool firstClicked;
+            internal readonly bool secondClicked;
+        }
 
         /// <summary>
         /// The native Unity editor used to render the <see cref="TextureImporter"/>'s Inspector.
@@ -271,102 +298,117 @@
                         out hierarchyTargetPath,
                         out hierarchyUnavailableReason);
 
-                    EditorGUILayout.BeginHorizontal();
-                    if (GUILayout.Button(Localize("打开日志目录", "Open Log Folder")))
-                    {
-                        PsdLogger.RevealLogFolder();
-                    }
-
-                    if (GUILayout.Button(Localize("定位最新日志", "Reveal Latest Log")))
-                    {
-                        PsdLogger.RevealLatestLog();
-                    }
-
-                    EditorGUILayout.EndHorizontal();
-
-                    if (GUILayout.Button(Localize("打开九宫图工具", "Open 9-Slice Tool")))
-                    {
-                        PsdNineSliceWindow.Open(AssetDatabase.GetAssetPath(Selection.activeObject));
-                    }
-
-                    if (GUILayout.Button(Localize("全量生成预制体", "Full Generate Prefab")))
+                    DrawActionSectionLabel(Localize("生成与更新", "Generate And Update"));
+                    if (DrawPrimaryActionButton(new GUIContent(
+                            Localize("全量生成预制体", "Full Generate Prefab"))))
                     {
                         GeneratePrefabWithMissingProfileRecovery(assetPath);
                     }
 
                     bool fullCleanupReplayAvailable =
                         PsdImporter.IsFullGenerationCleanupReplayAvailable(assetPath);
-                    using (new EditorGUI.DisabledScope(!fullCleanupReplayAvailable))
-                    {
-                        if (GUILayout.Button(new GUIContent(
-                                Localize("重新生成并重放整理", "Regenerate With Confirmed Cleanup"),
-                                Localize(
-                                    "重新生成 PSD 原始候选，并重放已经确认的整理阶段；不会再次请求 AI 重新规划。",
-                                    "Regenerate the raw PSD candidate and replay confirmed cleanup stages without asking AI to plan again."))))
-                        {
-                            PsdImporter.GeneratePrefabWithCleanupReplay(assetPath);
-                        }
-                    }
-
                     bool incrementalUpdateAvailable =
                         PsdImporter.IsIncrementalPrefabUpdateAvailable(assetPath);
                     if (ShouldShowIncrementalUpdateButton(incrementalUpdateAvailable))
                     {
-                        using (new EditorGUI.DisabledScope(!incrementalUpdateAvailable))
+                        ActionPairResult generationActions = DrawActionPair(
+                            new GUIContent(
+                                Localize("重新生成并重放整理", "Regenerate With Confirmed Cleanup"),
+                                Localize(
+                                    "重新生成 PSD 原始候选，并重放已经确认的整理阶段；不会再次请求 AI 重新规划。",
+                                    "Regenerate the raw PSD candidate and replay confirmed cleanup stages without asking AI to plan again.")),
+                            fullCleanupReplayAvailable,
+                            new GUIContent(
+                                Localize("增量更新（保留整理）", "Incremental Update (Preserve Organization)"),
+                                Localize(
+                                    "需要先对当前关联的 Prefab 完成 AI 整理，才能保留整理结果进行增量更新。",
+                                    "Organize the currently associated Prefab with AI before running an incremental update.")),
+                            incrementalUpdateAvailable);
+                        if (generationActions.firstClicked)
                         {
-                            if (GUILayout.Button(new GUIContent(
-                                    Localize("增量更新（保留整理）", "Incremental Update (Preserve Organization)"),
-                                    Localize(
-                                        "需要先对当前关联的 Prefab 完成 AI 整理，才能保留整理结果进行增量更新。",
-                                        "Organize the currently associated Prefab with AI before running an incremental update."))))
+                            PsdImporter.GeneratePrefabWithCleanupReplay(assetPath);
+                        }
+
+                        if (generationActions.secondClicked)
+                        {
+                            PsdImporter.UpdatePrefabIncrementally(assetPath);
+                        }
+                    }
+
+                    if (hierarchyOrganizerAvailable)
+                    {
+                        DrawActionSectionLabel(Localize("层级整理", "Hierarchy Organization"));
+                        ActionPairResult hierarchyActions = DrawActionPair(
+                            new GUIContent(
+                                PsdHierarchyOrganizerEntry.AiButtonLabel,
+                                "在 Unity 编辑器中打开 AI 对话窗口，并把整理技能与当前目标 Prefab 发送给 AI。"),
+                            true,
+                            new GUIContent(
+                                Localize("复制AI提示词", "Copy AI Prompt"),
+                                Localize(
+                                    "复制轻量版 prefab-hierarchy-cleanup 地址交接提示词，包含技能、计划格式、Prefab 和层级快照的本地文件地址。",
+                                    "Copy a lightweight prefab-hierarchy-cleanup handoff with local paths to the skill, plan format, Prefab, and hierarchy snapshot.")),
+                            true);
+                        if (hierarchyActions.firstClicked)
+                        {
+                            string chatError;
+                            if (!PsdHierarchyOrganizerEntry.TryOpenChat(assetPath, out chatError))
                             {
-                                PsdImporter.UpdatePrefabIncrementally(assetPath);
+                                EditorUtility.DisplayDialog("PSDLayoutTool2", chatError, "确定");
+                            }
+                        }
+
+                        if (hierarchyActions.secondClicked)
+                        {
+                            string copyError;
+                            if (PsdHierarchyOrganizerEntry.TryCopyAiPrompt(assetPath, out copyError))
+                            {
+                                EditorUtility.DisplayDialog("PSDLayoutTool2",
+                                    Localize("AI 提示词已复制到剪贴板。", "AI prompt has been copied to clipboard."),
+                                    Localize("确定", "OK"));
+                            }
+                            else
+                            {
+                                EditorUtility.DisplayDialog("PSDLayoutTool2", copyError,
+                                    Localize("确定", "OK"));
                             }
                         }
                     }
 
-                    EditorGUILayout.BeginHorizontal();
-                    using (new EditorGUI.DisabledScope(!hierarchyOrganizerAvailable))
+                    DrawActionSectionLabel(Localize("辅助工具", "Utilities"));
+                    ActionPairResult assetTools = DrawActionPair(
+                        new GUIContent(
+                            Localize("定位 Prefab", "Ping Prefab"),
+                            Localize(
+                                "在 Project 窗口中高亮此 PSD 当前关联的 Prefab，保持当前 PSD Inspector 不变。",
+                                "Highlights this PSD's currently associated Prefab in the Project window without changing the current PSD Inspector.")),
+                        hierarchyOrganizerAvailable,
+                        new GUIContent(Localize("打开九宫图工具", "Open 9-Slice Tool")),
+                        true);
+                    if (assetTools.firstClicked)
                     {
-                        if (GUILayout.Button(
-                                new GUIContent(
-                                    Localize("定位 Prefab", "Ping Prefab"),
-                                    Localize(
-                                        "在 Project 窗口中高亮此 PSD 当前关联的 Prefab，保持当前 PSD Inspector 不变。",
-                                        "Highlights this PSD's currently associated Prefab in the Project window without changing the current PSD Inspector.")),
-                                GUILayout.Height(24)))
-                        {
-                            TryPingPrefab(hierarchyTargetPath);
-                        }
+                        TryPingPrefab(hierarchyTargetPath);
                     }
 
-                    if (hierarchyOrganizerAvailable && GUILayout.Button(
-                            new GUIContent(
-                                PsdHierarchyOrganizerEntry.AiButtonLabel,
-                                "在 Unity 编辑器中打开 AI 对话窗口，并把整理技能与当前目标 Prefab 发送给 AI。"),
-                            GUILayout.Height(24)))
+                    if (assetTools.secondClicked)
                     {
-                        string chatError;
-                        if (!PsdHierarchyOrganizerEntry.TryOpenChat(assetPath, out chatError))
-                        {
-                            EditorUtility.DisplayDialog("PSDLayoutTool2", chatError, "确定");
-                        }
+                        PsdNineSliceWindow.Open(AssetDatabase.GetAssetPath(Selection.activeObject));
                     }
 
-                    if (hierarchyOrganizerAvailable && GUILayout.Button(
-                            new GUIContent(
-                                Localize("局部整理", "Local Repair"),
-                                "打开独立的局部整理窗口，读取当前 Prefab Stage 中选中的节点。"),
-                            GUILayout.Height(24)))
+                    ActionPairResult logTools = DrawActionPair(
+                        new GUIContent(Localize("打开日志目录", "Open Log Folder")),
+                        true,
+                        new GUIContent(Localize("定位最新日志", "Reveal Latest Log")),
+                        true);
+                    if (logTools.firstClicked)
                     {
-                        string localRepairError;
-                        if (!PsdHierarchyOrganizerEntry.TryOpenLocalRepair(assetPath, out localRepairError))
-                        {
-                            EditorUtility.DisplayDialog("PSDLayoutTool2", localRepairError, "确定");
-                        }
+                        PsdLogger.RevealLogFolder();
                     }
 
-                    EditorGUILayout.EndHorizontal();
+                    if (logTools.secondClicked)
+                    {
+                        PsdLogger.RevealLatestLog();
+                    }
 
                     GUILayout.Space(3);
 
@@ -413,6 +455,80 @@
         internal static bool ShouldShowIncrementalUpdateButton(bool isIncrementalEligible)
         {
             return true;
+        }
+
+        internal static bool ShouldStackActionRows(float viewWidth)
+        {
+            return viewWidth < ActionRowStackThreshold;
+        }
+
+        private static void DrawActionSectionLabel(string label)
+        {
+            GUILayout.Space(8f);
+            GUILayout.Label(label, EditorStyles.miniBoldLabel);
+            GUILayout.Space(2f);
+        }
+
+        private static bool DrawPrimaryActionButton(GUIContent content)
+        {
+            Color previousBackgroundColor = GUI.backgroundColor;
+            bool clicked;
+            try
+            {
+                GUI.backgroundColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.48f, 0.68f, 0.88f)
+                    : new Color(0.58f, 0.76f, 0.94f);
+                clicked = GUILayout.Button(content, GUILayout.Height(ActionButtonHeight));
+            }
+            finally
+            {
+                GUI.backgroundColor = previousBackgroundColor;
+            }
+
+            GUILayout.Space(ActionRowSpacing);
+            return clicked;
+        }
+
+        private static ActionPairResult DrawActionPair(
+            GUIContent firstContent,
+            bool firstEnabled,
+            GUIContent secondContent,
+            bool secondEnabled)
+        {
+            Rect firstRect;
+            Rect secondRect;
+            if (ShouldStackActionRows(EditorGUIUtility.currentViewWidth))
+            {
+                firstRect = EditorGUILayout.GetControlRect(false, ActionButtonHeight);
+                GUILayout.Space(ActionRowSpacing);
+                secondRect = EditorGUILayout.GetControlRect(false, ActionButtonHeight);
+            }
+            else
+            {
+                Rect rowRect = EditorGUILayout.GetControlRect(false, ActionButtonHeight);
+                float buttonWidth = (rowRect.width - ActionRowSpacing) * 0.5f;
+                firstRect = new Rect(rowRect.x, rowRect.y, buttonWidth, rowRect.height);
+                secondRect = new Rect(
+                    firstRect.xMax + ActionRowSpacing,
+                    rowRect.y,
+                    buttonWidth,
+                    rowRect.height);
+            }
+
+            bool firstClicked;
+            using (new EditorGUI.DisabledScope(!firstEnabled))
+            {
+                firstClicked = GUI.Button(firstRect, firstContent);
+            }
+
+            bool secondClicked;
+            using (new EditorGUI.DisabledScope(!secondEnabled))
+            {
+                secondClicked = GUI.Button(secondRect, secondContent);
+            }
+
+            GUILayout.Space(ActionRowSpacing);
+            return new ActionPairResult(firstClicked, secondClicked);
         }
 
         /// <summary>

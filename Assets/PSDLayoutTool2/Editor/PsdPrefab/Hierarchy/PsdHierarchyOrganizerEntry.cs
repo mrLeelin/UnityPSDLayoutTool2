@@ -116,6 +116,50 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
+        /// 复制 AI 提示词到剪贴板，供外部 AI 使用。
+        /// </summary>
+        public static bool TryCopyAiPrompt(string sourcePsdAssetPath, out string error)
+        {
+            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
+            string targetPrefabPath;
+            string availabilityError;
+            if (!TryResolvePrefabAvailability(
+                    sourcePsdAssetPath,
+                    PsdImporter.OutputMode,
+                    PsdImporter.OutputFolderName,
+                    PsdImporter.PrefabMode,
+                    path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
+                    out targetPrefabPath,
+                    out availabilityError))
+            {
+                error = availabilityError;
+                return false;
+            }
+
+            try
+            {
+                if (!PsdHierarchyChatContextBuilder.TryCreate(
+                        sourcePsdAssetPath,
+                        targetPrefabPath,
+                        out PsdHierarchyChatContext context,
+                        out error))
+                {
+                    return false;
+                }
+
+                string prompt = PsdHierarchyChatClient.BuildPortablePrompt(context);
+                EditorGUIUtility.systemCopyBuffer = prompt;
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = "复制提示词失败：" + exception.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Supports an already-organized legacy Prefab whose semantic file name differs from
         /// the PSD file name. Only one direct Prefab under the generated Prefab folder is
         /// accepted; nested Common/Component Prefabs and ambiguous roots are rejected.

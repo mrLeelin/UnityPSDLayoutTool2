@@ -34,6 +34,7 @@ The Unity AI hierarchy chat window accepts only version 2 plans. The window supp
   "stateComponentExtractions": [],
   "variantComponentExtractions": [],
   "statefulComponentExtractions": [],
+  "postGroupingExtractionIntents": [],
   "verify": {}
 }
 ```
@@ -54,7 +55,87 @@ Asset paths, output verification paths, new semantic names, state/member names, 
 
 Every plan-owned ID, including `wrappers[].id`, extraction `id`, and state `id`, must be lower snake_case matching `^[a-z][a-z0-9_]*$`. Use `screen_root`, `day_markers`, or `task_in_progress`; do not use PascalCase, kebab-case, spaces, brackets, or an `@` prefix. The `@` prefix is reserved only for a reference to an earlier wrapper, for example `@screen_root`.
 
+For `output.mode: "in_place"`, the Prefab root is asset identity, not a semantic naming target. A chat plan must not rename the snapshot root to a name different from `Path.GetFileNameWithoutExtension(prefabAssetPath)`, and every post-apply verification path must begin with that same asset-compatible root name. `prefabName` does not override this rule.
+
 Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, writes the forced snapshot candidates into `requiredComponentFamilies`, the measured geometry into `containmentFindings`, and measured flat visual clusters into `flatSiblingFindings`, then writes a temporary internal version 1 runner plan. The AI must never emit those internal finding arrays itself. It does emit `containmentResolutions` and `flatSiblingResolutions`.
+
+### Post-Grouping Extraction Intent
+
+`postGroupingExtractionIntents` is a Unity AI chat review field. Use it when the
+confirmed hierarchy operations create repeated-unit roots that cannot be valid
+extraction sources in the current snapshot. It freezes the child-Prefab work shown
+in the first review so the refreshed second-stage plan can be applied without a
+second user confirmation.
+
+```json
+{
+  "postGroupingExtractionIntents": [
+    {
+      "id": "task_item",
+      "mode": "stateful",
+      "assetPath": "Assets/UI/Prefab/Common/TaskItem.prefab",
+      "templatePath": "TaskView/[TaskList]/[TaskItem_1]",
+      "commonMembers": ["TaskLabel", "TaskValue"],
+      "instances": [
+        {
+          "path": "TaskView/[TaskList]/[TaskItem_1]",
+          "state": "in_progress",
+          "commonSourceNames": ["TaskLabel", "TaskValue"],
+          "stateSourceNames": ["ProgressBackground"]
+        },
+        {
+          "path": "TaskView/[TaskList]/[TaskItem_2]",
+          "state": "claimable",
+          "commonSourceNames": ["TaskLabel", "TaskValue"],
+          "stateSourceNames": ["ClaimButton"]
+        }
+      ],
+      "states": [
+        {
+          "id": "in_progress",
+          "name": "[State_InProgress]",
+          "sourcePath": "TaskView/[TaskList]/[TaskItem_1]",
+          "members": ["ProgressBackground"]
+        },
+        {
+          "id": "claimable",
+          "name": "[State_Claimable]",
+          "sourcePath": "TaskView/[TaskList]/[TaskItem_2]",
+          "members": ["ClaimButton"]
+        }
+      ],
+      "defaultState": "in_progress"
+    }
+  ]
+}
+```
+
+`mode` is exactly `component`, `state`, `variant`, or `stateful`. `templatePath`
+and every `instances[].path`/`states[].sourcePath` are complete normalized paths
+in the expected post-grouping hierarchy; leaf names are insufficient. `instances`
+preserves reviewed source-path order; use an empty `state` for `component`, and
+record the selected state for the other modes. `states` preserves the reviewed
+state ID/name/member order and is empty for `component`. `commonMembers` records
+the ordered reviewed Common member names and is empty when the mode has no Common
+contract. Every instance includes ordered `commonSourceNames` and
+`stateSourceNames`, using empty arrays when the mode has no such mapping.
+`defaultState` is empty for `component` and otherwise matches the reviewed
+extraction contract. Every instance state must reference a declared state ID.
+
+An empty `postGroupingExtractionIntents` array is valid only after an unsaved
+simulation of the complete hierarchy stage has been resnapshotted. The
+simulation must show no required component family and no reviewed reusable
+family. If it creates a candidate that requires extraction, that extraction's
+complete intent must be present here before the user can confirm; it cannot be
+discovered and added after confirmation.
+
+After the first apply, Unity resolves every second-stage `node:<id>` against the
+refreshed authoritative snapshot and reconstructs the same canonical fields. The
+second stage is eligible for automatic apply only when the complete array matches
+exactly and all hierarchy, rename, containment, flat-sibling, and asset-rename
+arrays are empty. Missing, additional, reordered, renamed, or path-changed work is
+blocking. The field is stripped before either version 1 runner plan is written;
+direct version 1 plans never include it.
 
 ## Internal Runner Plan (Version 1)
 
@@ -239,7 +320,7 @@ Every finding member needs one `containmentResolutions` entry, which the AI does
 
 ### Flat Sibling Visual Clusters
 
-`flatSiblingFindings` is another Unity-written internal field. It is emitted only when direct leaf siblings have consecutive source order and the first layer fully contains at least two following layers at a small area ratio. This is a conservative signal that a background, counter, timer, or button layers were left flat by the PSD source hierarchy. Do not author `flatSiblingFindings` in a chat plan.
+`flatSiblingFindings` is another Unity-written internal field. It is emitted only when direct leaf siblings have consecutive source order and the first layer fully contains at least two following layers at a small area ratio. An explicit structural parent named `[... ]` is already a resolved boundary and is excluded, so an existing `[DayItem_1]` or `[TimedRewardPanel]` never requires a second wrapper around its leaves. This is a conservative signal that a background, counter, timer, or button layers were left flat by the PSD source hierarchy. Do not author `flatSiblingFindings` in a chat plan.
 
 ```json
 {
@@ -274,6 +355,8 @@ Every finding needs exactly one `flatSiblingResolutions` entry in the chat plan.
 ```
 
 `mode` must be `"group"`, and `wrapperId` must equal `<findingId>_group`. Before execution Unity removes any AI-authored wrapper, move, or tight-bounds operation that touches the finding, then derives the one wrapper whose `parent` equals the finding `parent`, the observed background `siblingIndex`, one ordered move for every listed member, and one `tightBounds` entry. It cannot use an existing semantic container such as `[BottomBar]` as a shortcut. Missing, duplicate, or unknown finding IDs are rejected.
+
+The derived members are a minimum set, not proof of complete visual membership. Before the plan is confirmable, audit the complete sibling sequence around each finding for same-slot labels, counters, locks, status icons, and status values. Every proven additional member must be included through an explicit move into the same wrapper and in `verify.directChildren`; otherwise the review must report the ambiguity and not claim a complete grouped unit.
 
 ## Optional Component Extraction
 
@@ -506,6 +589,6 @@ Use counts captured during the read-only snapshot. `hierarchy` paths are post-ap
 
 The runner reports missing Sprite references found inside unchanged nested Prefab instances in `ignoredNestedMissingSpritePaths`; they do not fail outer-Prefab hierarchy validation. Missing Sprites owned by the target Prefab are reported as target-owned verification issues unless explicitly listed in `allowedMissingImagePathPrefixes`; they must not be silently treated as inherited nested-Prefab issues.
 
-Post-save verification is diagnostic and non-blocking. A contract mismatch returns `VERIFY_WARN issue=...` so the caller can display and carry the issue into the next cleanup step without treating the Unity command as failed. The target cannot load, an operation precondition fails, a hierarchy mutation fails, or saving the target fails remain hard failures; those conditions have no trustworthy output to continue from. `VERIFY_WARN` is not completion proof and must be included in the next status message or plan.
+Post-save verification distinguishes a saved asset from a completed workflow. A contract mismatch returns `VERIFY_WARN issue=...`; the caller must display it and stop before any automatic next stage. The target cannot load, an operation precondition fails, a hierarchy mutation fails, or saving fails remain hard failures. `VERIFY_WARN` is not completion proof.
 
 Run `-VerifyOnly` after an uncertain or timed-out apply. It does not mutate assets; it checks the saved Prefab, final hierarchy, asset GUIDs, Texture paths, and SpriteAtlas paths against this contract. It cannot reconstruct a pre-apply world-corner baseline, so the apply pass is responsible for the `0.01` world-corner invariant.

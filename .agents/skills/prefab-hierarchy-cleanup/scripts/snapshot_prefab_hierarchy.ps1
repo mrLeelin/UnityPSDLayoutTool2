@@ -24,17 +24,32 @@ $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "prefab-hierarchy-c
 [System.IO.Directory]::CreateDirectory($temporaryRoot) | Out-Null
 $payloadPath = Join-Path $temporaryRoot ("snapshot." + [guid]::NewGuid().ToString("N") + ".cs")
 
+$unityCommand = Get-Command -Name "unity.exe", "unity" -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if ($null -eq $unityCommand) {
+    throw "The Unity Pipeline CLI command is unavailable. Install or expose the project's unity CLI before taking a NativeUnity snapshot."
+}
+
 try {
     & $PythonPath $renderer --mode snapshot --prefab-path $PrefabAssetPath --output $payloadPath
     if ($LASTEXITCODE -ne 0) {
         throw "Snapshot payload rendering failed with exit code $LASTEXITCODE."
     }
 
-    $unityResult = & uloop execute-dynamic-code --project-path $ProjectPath --code-file $payloadPath 2>&1 | Out-String
+    $unityResult = & $unityCommand.Source `
+        --json `
+        --non-interactive `
+        command `
+        --project-path $ProjectPath `
+        --timeout 40 `
+        eval_file `
+        -- `
+        --file $payloadPath `
+        --timeout 30000 2>&1 | Out-String
     $unityExitCode = $LASTEXITCODE
     Write-Output $unityResult
-    if ($unityExitCode -ne 0 -or $unityResult -notmatch '"Success"\s*:\s*true') {
-        throw "Unity snapshot did not return a successful result."
+    if ($unityExitCode -ne 0 -or $unityResult -notmatch '"success"\s*:\s*true') {
+        throw "NativeUnity snapshot failed: $($unityResult.Trim())"
     }
 }
 finally {

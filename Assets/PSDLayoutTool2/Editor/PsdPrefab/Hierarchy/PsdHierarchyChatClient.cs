@@ -155,7 +155,8 @@ namespace PsdLayoutTool2
             string hierarchySnapshotJson = "",
             string hierarchySnapshotFingerprint = "",
             string hierarchySnapshotFullPath = "",
-            IReadOnlyList<string> assetRenameSourcePaths = null)
+            IReadOnlyList<string> assetRenameSourcePaths = null,
+            string sourcePsdInfo = "")
         {
             this.projectRoot = projectRoot ?? string.Empty;
             this.sourcePsdAssetPath = sourcePsdAssetPath ?? string.Empty;
@@ -167,6 +168,7 @@ namespace PsdLayoutTool2
             this.hierarchySnapshotJson = hierarchySnapshotJson ?? string.Empty;
             this.hierarchySnapshotFingerprint = hierarchySnapshotFingerprint ?? string.Empty;
             this.hierarchySnapshotFullPath = hierarchySnapshotFullPath ?? string.Empty;
+            this.sourcePsdInfo = sourcePsdInfo ?? string.Empty;
             hasAuthoritativeAssetRenameSourcePaths = assetRenameSourcePaths != null;
             this.assetRenameSourcePaths = (assetRenameSourcePaths ?? Array.Empty<string>())
                 .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -198,6 +200,7 @@ namespace PsdLayoutTool2
         internal readonly string hierarchySnapshotJson;
         internal readonly string hierarchySnapshotFingerprint;
         internal readonly string hierarchySnapshotFullPath;
+        internal readonly string sourcePsdInfo;
         internal readonly bool hasAuthoritativeAssetRenameSourcePaths;
         internal readonly IReadOnlyList<string> assetRenameSourcePaths;
         internal readonly IReadOnlyList<PsdHierarchyComponentFamilyCandidate> componentFamilyCandidates;
@@ -220,6 +223,40 @@ namespace PsdLayoutTool2
         internal bool TryGetNodeId(string path, out string nodeId)
         {
             return nodeIdsByPath.TryGetValue(path ?? string.Empty, out nodeId);
+        }
+
+        internal IReadOnlyList<string> GetNodeIdsWithinSubtrees(IEnumerable<string> sourceReferences)
+        {
+            var rootNodeIds = new HashSet<string>(StringComparer.Ordinal);
+            var rootPaths = new List<string>();
+            foreach (string sourceReference in sourceReferences ?? Array.Empty<string>())
+            {
+                string nodeId = sourceReference != null &&
+                                sourceReference.StartsWith("node:", StringComparison.Ordinal)
+                    ? sourceReference.Substring("node:".Length)
+                    : sourceReference;
+                if (string.IsNullOrWhiteSpace(nodeId) || !rootNodeIds.Add(nodeId))
+                {
+                    continue;
+                }
+
+                if (nodePathsById.TryGetValue(nodeId, out string path))
+                {
+                    rootPaths.Add(path);
+                }
+            }
+
+            foreach (KeyValuePair<string, string> node in nodePathsById)
+            {
+                if (rootPaths.Any(rootPath =>
+                        string.Equals(node.Value, rootPath, StringComparison.Ordinal) ||
+                        node.Value.StartsWith(rootPath + "/", StringComparison.Ordinal)))
+                {
+                    rootNodeIds.Add(node.Key);
+                }
+            }
+
+            return rootNodeIds.OrderBy(nodeId => nodeId, StringComparer.Ordinal).ToArray();
         }
 
         internal bool TryGetDirectChildren(
@@ -262,13 +299,21 @@ namespace PsdLayoutTool2
             if (localRepairScope == null)
             {
                 builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Each componentFamilyDecision for a supplied candidate must copy its candidateId, parent, and complete sources exactly. Candidates marked requiresExtraction:true must use component, state, variant, or stateful mode; skip is forbidden for them. Candidates marked requiresExtraction:false are advisory and may use skip with concrete structural evidence; do not force a variant solely because sibling names repeat. Do not silently omit a repeated component family.");
+                builder.AppendLine("The first confirmable response must use Markdown tables for grouping and naming, child Prefab extraction, preserved or ambiguous content, and verification. The child Prefab table must disclose every output path, mode, ordered instance name, ordered Common member, every state ID/name/member list, and default or per-instance state. Record every extraction that can only become addressable after the planned grouping in postGroupingExtractionIntents. The user's one confirmation authorizes the reviewed hierarchy stage and an automatic resnapshot plus exact manifest-matching extraction stage; never request a second confirmation.");
                 builder.AppendLine("When the snapshot includes flatSiblingFindings, set every finding's flatSiblingResolutions mode to group. Unity deterministically derives the wrapper id as <findingId>_group, the exact finding parent, the observed background siblingIndex, every listed member move in listed order, and tightBounds; do not invent alternate wrapper ids or destinations. These fields are normalized from the authoritative snapshot before execution.");
             }
             builder.AppendLine("For a mandatory variant family, create one observed state for every distinct recursive structure and map every source to an exact matching state. Even when every source has a distinct structure, the mandatory family must not be skipped or reduced to hierarchy-only cleanup.");
             builder.AppendLine("Every extracted assetPath must be a new PascalCase .prefab directly under the target Prefab's sibling Common directory. Multiple non-overlapping component families and hierarchy cleanup operations are intentionally supported in one reviewed plan.");
-            builder.AppendLine("Return an auditable analysis summary, not private chain-of-thought. In Simplified Chinese, use exactly these sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence.");
+            builder.AppendLine("Return an auditable review, not private chain-of-thought. In Simplified Chinese, use Markdown tables for target, grouping and naming, child Prefab extraction, preservation, and verification. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence. Ask for exactly one confirmation of the complete reviewed workflow.");
             builder.AppendLine("Source PSD: " + sourcePsdAssetPath);
             builder.AppendLine("Target Prefab: " + targetPrefabAssetPath);
+            if (!string.IsNullOrWhiteSpace(sourcePsdInfo))
+            {
+                builder.AppendLine();
+                builder.AppendLine("===== BEGIN SOURCE PSD INFO =====");
+                builder.AppendLine(sourcePsdInfo);
+                builder.AppendLine("===== END SOURCE PSD INFO =====");
+            }
             if (hasAuthoritativeAssetRenameSourcePaths)
             {
                 builder.AppendLine("For textureRenames[].from and spriteAtlasRenames[].from, use only an exact path from the authoritative list below. If a needed path is absent, omit that rename; never guess a filename or numeric suffix.");
@@ -580,6 +625,8 @@ namespace PsdLayoutTool2
             IReadOnlyList<string> assetRenameSourcePaths =
                 CollectAssetRenameSourcePaths(prefabAssetPath);
 
+            string sourcePsdInfo = BuildSourcePsdInfo(projectRoot, sourcePsdAssetPath);
+
             context = new PsdHierarchyChatContext(
                 projectRoot,
                 NormalizeAssetPath(sourcePsdAssetPath),
@@ -591,7 +638,8 @@ namespace PsdLayoutTool2
                 hierarchySnapshotJson,
                 snapshotFingerprint,
                 hierarchySnapshotFullPath,
-                assetRenameSourcePaths);
+                assetRenameSourcePaths,
+                sourcePsdInfo);
             error = string.Empty;
             return true;
         }
@@ -1108,6 +1156,10 @@ namespace PsdLayoutTool2
         {
             var findings = new JArray();
             var claimedNodeIds = new HashSet<string>(StringComparer.Ordinal);
+            var nodesById = nodes
+                .OfType<JObject>()
+                .Where(node => !string.IsNullOrWhiteSpace(node.Value<string>("id")))
+                .ToDictionary(node => node.Value<string>("id"), StringComparer.Ordinal);
             IEnumerable<IGrouping<string, JObject>> siblingGroups = nodes
                 .OfType<JObject>()
                 .Where(node =>
@@ -1119,6 +1171,12 @@ namespace PsdLayoutTool2
 
             foreach (IGrouping<string, JObject> group in siblingGroups)
             {
+                if (nodesById.TryGetValue(group.Key, out JObject parent) &&
+                    IsExplicitStructuralGroup(parent))
+                {
+                    continue;
+                }
+
                 List<JObject> siblings = group
                     .OrderBy(node => node.Value<int?>("siblingIndex") ?? int.MaxValue)
                     .ThenBy(node => node.Value<string>("id"), StringComparer.Ordinal)
@@ -1176,6 +1234,15 @@ namespace PsdLayoutTool2
             }
 
             return findings;
+        }
+
+        // A bracketed container is already an explicit semantic boundary.
+        // Re-grouping its direct leaves would create an unbounded wrapper chain.
+        private static bool IsExplicitStructuralGroup(JObject node)
+        {
+            string name = node?.Value<string>("name")?.Trim();
+            return !string.IsNullOrEmpty(name) && name.Length > 2 &&
+                   name[0] == '[' && name[name.Length - 1] == ']';
         }
 
         private static List<JObject> ResolveFamilyNodes(
@@ -1735,6 +1802,55 @@ namespace PsdLayoutTool2
         {
             return (path ?? string.Empty).Replace('\\', '/');
         }
+
+        /// <summary>
+        /// 构建源 PSD 文件的基本信息描述。
+        /// </summary>
+        private static string BuildSourcePsdInfo(string projectRoot, string sourcePsdAssetPath)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePsdAssetPath))
+            {
+                return string.Empty;
+            }
+
+            string psdFullPath = ToFullPath(projectRoot, NormalizeAssetPath(sourcePsdAssetPath));
+            if (!File.Exists(psdFullPath))
+            {
+                return string.Empty;
+            }
+
+            var info = new FileInfo(psdFullPath);
+            return "PSD path: " + sourcePsdAssetPath + "\n" +
+                   "PSD bytes: " + info.Length + "\n" +
+                   "PSD layer parsing is deferred; the Unity hierarchy snapshot is authoritative.";
+        }
+
+        /// <summary>
+        /// 递归追加图层树结构。
+        /// </summary>
+        private static void AppendLayerTree(
+            IReadOnlyList<PhotoshopFile.Layer> layers,
+            StringBuilder builder,
+            int indent)
+        {
+            if (layers == null || layers.Count == 0)
+            {
+                return;
+            }
+
+            string indentStr = new string(' ', indent * 2);
+            foreach (var layer in layers)
+            {
+                string kind = layer.IsGroupStart ? "[组]" : (layer.IsTextLayer ? "[文字]" : "[图层]");
+                string visible = layer.Visible ? "" : " (隐藏)";
+                builder.AppendLine(indentStr + kind + " " + layer.Name + visible);
+
+                if (layer.Children != null && layer.Children.Count > 0)
+                {
+                    AppendLayerTree(layer.Children, builder, indent + 1);
+                }
+            }
+        }
     }
 
     internal sealed class PsdHierarchyChatHttpRequest
@@ -1829,6 +1945,7 @@ namespace PsdLayoutTool2
 
     internal static class PsdHierarchyChatClient
     {
+        private const int AiRequestTimeoutSeconds = 120;
         internal const string OpenAiEndpoint = "https://api.openai.com/v1/responses";
         internal const string AnthropicEndpoint = "https://api.anthropic.com/v1/messages";
         private const int MaxClaudePromptCharacters = 6000;
@@ -1836,7 +1953,7 @@ namespace PsdLayoutTool2
             "\"version\", \"snapshotFingerprint\", \"prefabAssetPath\", \"output\", \"prefabName\", \"wrappers\", \"moves\", \"renames\", " +
             "\"emptyContainerRemovals\", \"tightBounds\", \"textureRenames\", \"spriteAtlasRenames\", \"containmentResolutions\", \"flatSiblingResolutions\", " +
             "\"componentFamilyDecisions\", \"componentExtractions\", \"stateComponentExtractions\", " +
-            "\"variantComponentExtractions\", \"statefulComponentExtractions\", \"verify\"";
+            "\"variantComponentExtractions\", \"statefulComponentExtractions\", \"postGroupingExtractionIntents\", \"verify\"";
         internal const string PlanIdentifierContract =
             "Every wrappers[].id must use lower snake_case matching [a-z][a-z0-9_]*; examples: screen, screen_root, day_markers. Do not use uppercase, hyphens, spaces, brackets, or @ in an id. The @ prefix is only for a later reference such as @screen_root. Apply the same lower snake_case rule to all extraction IDs and state IDs.";
         internal const string DefaultUserPrompt =
@@ -1846,16 +1963,16 @@ namespace PsdLayoutTool2
             "3. 对重复视觉单元按整体分组，不要把背景、文本、图标、锁等平铺到按类型命名的大容器中。\n" +
             "4. 标出无法安全推断、存在序列化引用风险或嵌套 Prefab 边界的节点，并说明保持不动的原因。\n" +
             "5. 列出应用前必须验证的布局、组件、引用、激活状态和资源命名不变量。\n" +
-            "请严格按以下 5 个章节输出可审查的分析摘要，不要输出原始内部推理：\n" +
-            "一、分析摘要：说明观察到的结构与主要问题。\n" +
-            "二、分组依据：逐项说明几何、组件、同级顺序或重复结构证据。\n" +
-            "三、风险与保留项：说明不移动或不改名节点的具体原因。\n" +
-            "四、原地整理方案：给出完整目标树与每项调整。\n" +
-            "五、验证清单：列出应用前后必须检查的不变量。\n" +
-            "在上述五个章节后，必须额外附上一个完整的 ```json 计划代码块，严格遵循随附计划格式。\n" +
+            "第一次可确认回复必须使用 Markdown 表格，不要只写段落，也不要输出原始内部推理：\n" +
+            "1. 目标表：目标 Prefab、原地输出路径、快照 fingerprint。\n" +
+            "2. 分组与命名表：Wrapper/名称、父节点 node:<id>、有序成员、Sibling 顺序、观察证据、推断或未知、风险。\n" +
+            "3. 子 Prefab 抽取表：ID、输出路径、模式、有序实例、有序 Common 成员、每个状态的 ID/名称/成员列表、默认或逐实例状态、证据、风险。\n" +
+            "4. 保留项表：保持不动的节点、嵌套 Prefab/绑定风险和原因。\n" +
+            "5. 验证表：布局、组件、引用、激活状态、Sibling 顺序、嵌套边界和生成资源。\n" +
+            "表格后附上一个完整的 ```json 计划代码块，严格遵循随附计划格式，并询问用户是否满意并执行。用户只确认一次；确认后自动完成分组、刷新快照、生成子 Prefab 和验证，不得再次确认。\n" +
             "CRITICAL: 层级快照中所有 requiresExtraction=true 的 componentFamilyCandidates 都必须在计划中处理。对于每个强制候选，必须在 componentFamilyDecisions 中添加一个决策条目，并在对应的抽取数组（componentExtractions/stateComponentExtractions/variantComponentExtractions/statefulComponentExtractions）中添加完整的抽取合约。如果候选的 recommendedMode 是 stateful，必须仔细分析每个实例的子节点，明确区分哪些是公共部分（Common），哪些是状态变化部分（States），并为每个实例提供完整的 commonSourceNames 和 stateSourceNames 映射。绝不能跳过或忽略 requiresExtraction=true 的候选。\n" +
             "本次主界面只原地更新当前目标 Prefab，不创建、复制或另存新的屏幕 Prefab；仅当证据充分时，才可在计划中声明经确认的 Prefab/Common 复用组件。\n" +
-            "不要声称已经修改本地文件。用户确认该计划后，Unity 窗口会直接更新 Prefab。";
+            "不要声称已经修改本地文件。用户确认完整表格和计划后，Unity 窗口会自动完成全部已审阅阶段。";
 
         internal static string BuildJsonOnlyPlanRepairPrompt(string validationError)
         {
@@ -2050,9 +2167,9 @@ namespace PsdLayoutTool2
             builder.AppendLine("2. Executable plan format: " + PsdHierarchyChatContextBuilder.PlanFormatFullPath(context.projectRoot));
             builder.AppendLine("3. Authoritative Prefab node snapshot: " + context.hierarchySnapshotFullPath);
             builder.AppendLine("Do not use any other tool. Do not edit, create, rename, or delete any file.");
-            builder.AppendLine("Return a concise, reviewable hierarchy-cleanup plan in Simplified Chinese with exactly these five sections: 分析摘要, 分组依据, 风险与保留项, 原地整理方案, 验证清单.");
-            builder.AppendLine("After those five sections, return exactly one complete UTF-8 JSON plan in a fenced ```json code block. The JSON is an executable contract, not illustrative pseudo-JSON.");
-            builder.AppendLine("Keep the five-section review concise (one or two short sentences per section); the complete JSON plan has priority and must not be truncated.");
+            builder.AppendLine("Return a concise, reviewable hierarchy-cleanup plan in Simplified Chinese using Markdown tables for target, grouping and naming, child Prefab extraction, preservation, and verification. Do not return prose-only sections.");
+            builder.AppendLine("After those tables, return exactly one complete UTF-8 JSON plan in a fenced ```json code block. The JSON is an executable contract, not illustrative pseudo-JSON.");
+            builder.AppendLine("Keep the tables compact but complete; include parent and member node IDs, sibling order, evidence, risks, every child-Prefab path/mode/instance/Common/State mapping, and verification invariants. The complete JSON plan has priority and must not be truncated.");
             builder.AppendLine("Use exactly these required root fields: " + RequiredPlanRootFields + ". Use [] for every unused operation array.");
             builder.AppendLine("Do not use legacy field names such as wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. The main Prefab output must be in_place at the exact target path.");
             builder.AppendLine("Use version 2 and copy snapshotFingerprint exactly from the authoritative snapshot.");
@@ -2067,6 +2184,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Every variant instance must have the same recursive component/child signature and RectTransform count as its selected states[].source. If no observed state representative matches exactly, skip the advisory family instead of generating an unsafe extraction.");
             builder.AppendLine("For every stateful instance, commonSourceNames plus stateSourceNames must cover every direct child exactly once. Map commonSourceNames in common.members order and stateSourceNames in the selected states[].members order. If one side is complete, derive the other from the authoritative ordered direct-child complement; do not omit repeated members.");
             builder.AppendLine("The executable plan-format file is authoritative. Follow its field names and object shapes exactly.");
+            builder.AppendLine("Ask for exactly one confirmation of the complete tables and plan. After that confirmation, the Unity window automatically applies hierarchy cleanup, refreshes the snapshot, applies the exact postGroupingExtractionIntents component stage, and verifies; never ask for a second confirmation.");
             builder.AppendLine("Do not claim that a local asset was changed.");
             builder.AppendLine("User request:");
             builder.Append(userPrompt);
@@ -2408,6 +2526,47 @@ namespace PsdLayoutTool2
             return string.IsNullOrWhiteSpace(prompt) ? DefaultUserPrompt : prompt.Trim();
         }
 
+        internal static string BuildPortablePrompt(PsdHierarchyChatContext context)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+
+            string targetPrefabFullPath = context.projectRoot.TrimEnd('/', '\\') + "/" +
+                                          context.targetPrefabAssetPath.TrimStart('/', '\\');
+            string normalizedSkillPath = context.skillFullPath.Replace('\\', '/');
+            int skillSeparatorIndex = normalizedSkillPath.LastIndexOf('/');
+            string planFormatFullPath = skillSeparatorIndex >= 0
+                ? normalizedSkillPath.Substring(0, skillSeparatorIndex + 1) + "references/plan-format.md"
+                : "references/plan-format.md";
+            var builder = new StringBuilder();
+            builder.AppendLine("Use skill prefab-hierarchy-cleanup. Read these local files:");
+            builder.AppendLine("全部使用中文输出。");
+            builder.AppendLine("Skill: " + context.skillFullPath);
+            builder.AppendLine("Plan format: " + planFormatFullPath);
+            builder.AppendLine("Prefab: " + targetPrefabFullPath);
+            builder.AppendLine("Hierarchy snapshot: " + context.hierarchySnapshotFullPath);
+            builder.AppendLine("Accuracy rules:");
+            builder.AppendLine("- Inspect the complete hierarchy, geometry, component types, active states, sibling order, nested Prefab boundaries, and repeated structures; names alone are insufficient.");
+            builder.AppendLine("- Treat the hierarchy snapshot as authoritative. Read only targeted Prefab sections when the snapshot lacks evidence or conflicts with serialized data; do not repeatedly read the complete Prefab and snapshot.");
+            builder.AppendLine("- Distinguish observed facts, inferences, and unknowns. Cross-check Prefab and snapshot; cite exact node:<id> references for important conclusions.");
+            builder.AppendLine("- If evidence conflicts or intent is ambiguous before the review, ask focused questions. Never guess.");
+            builder.AppendLine("- Preserve layout, components, bindings, generated assets, and unrelated content. Review all componentFamilyCandidates and flatSiblingFindings.");
+            builder.AppendLine("Single-confirmation workflow:");
+            builder.AppendLine("- Require exactly one user confirmation for the complete reviewed workflow. Revisions before that confirmation do not count as extra confirmations.");
+            builder.AppendLine("- In the first confirmable response, use Markdown tables, not prose-only sections.");
+            builder.AppendLine("- Grouping and naming table columns: wrapper name, parent node, ordered members, sibling order, observed evidence, inference or unknown, and risk.");
+            builder.AppendLine("- Child Prefab extraction table columns: component ID, output asset path, mode, ordered instances, ordered Common members, every state ID/name/member list, default or per-instance state, evidence, and risk.");
+            builder.AppendLine("- Also include preservation and verification tables covering unchanged nodes, nested Prefab or binding risks, layout, components, references, active states, sibling order, and generated assets.");
+            builder.AppendLine("- Cite exact node:<id> references in the tables and disclose every child Prefab intended after grouping. Encode post-grouping work in postGroupingExtractionIntents so the later extraction cannot expand beyond the reviewed IDs, paths, modes, instances, or states.");
+            builder.AppendLine("- Ask whether the user is satisfied with this complete grouping, naming, and child-Prefab scheme. Do not modify files before the answer.");
+            builder.AppendLine("- After confirmation, execute the complete workflow automatically: create and validate the version 2 in_place plan, apply the reviewed hierarchy stage, refresh the authoritative hierarchy snapshot, generate and validate the exact manifest-matching component stage, create the reviewed child Prefabs, save the target Prefab, and run final verification.");
+            builder.AppendLine("- Do not ask for another confirmation after execution starts. Automatic JSON repair, resnapshot, component extraction, save, and verification are covered by the first confirmation.");
+            builder.AppendLine("- If refreshed evidence conflicts with the reviewed manifest, stop without guessing or broadening scope and report the exact failure and current saved state.");
+            builder.AppendLine("- Time budget: at most one JSON repair before confirmation, one Apply per stage, and one read-only verification after an indeterminate Apply. The automatic second stage gets no repair retry. Never reinstall tools, rerun a failed plan, restore, or reimport automatically.");
+            builder.AppendLine("- Finish with a final verification report; do not claim that local assets changed unless the apply and verification commands prove it.");
+            builder.AppendLine("If these paths are inaccessible, ask the user to upload the Prefab and snapshot; never guess their contents.");
+            return builder.ToString();
+        }
+
         internal static PsdHierarchyChatSendResult ParseResponse(
             PsdHierarchyAiProvider provider,
             PsdHierarchyChatHttpResponse response)
@@ -2707,6 +2866,7 @@ namespace PsdLayoutTool2
                 {
                     webRequest.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(request.body));
                     webRequest.downloadHandler = new DownloadHandlerBuffer();
+                    webRequest.timeout = AiRequestTimeoutSeconds;
                     foreach (KeyValuePair<string, string> header in request.Headers)
                     {
                         webRequest.SetRequestHeader(header.Key, header.Value);
@@ -2780,7 +2940,12 @@ namespace PsdLayoutTool2
                     process.StandardInput.Close();
                     Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
                     Task<string> errorTask = process.StandardError.ReadToEndAsync();
-                    await WaitForExitAsync(process);
+                    if (!await WaitForExitAsync(process, AiRequestTimeoutSeconds))
+                    {
+                        return new PsdHierarchyChatSendResult(
+                            false,
+                            "AI CLI 超过 " + AiRequestTimeoutSeconds + " 秒未完成，已停止本次请求。不会自动重试或启动新的会话。");
+                    }
 
                     string output = await outputTask;
                     string error = await errorTask;
@@ -2902,12 +3067,33 @@ namespace PsdLayoutTool2
                 return new PsdHierarchyChatSendResult(true, message.ToString().Trim(), sessionId);
             }
 
-            private static async Task WaitForExitAsync(Process process)
+            private static async Task<bool> WaitForExitAsync(Process process, int timeoutSeconds)
             {
+                DateTime deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
                 while (!process.HasExited)
                 {
+                    if (DateTime.UtcNow >= deadline)
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // The process exited between the timeout check and Kill.
+                        }
+                        catch (System.ComponentModel.Win32Exception)
+                        {
+                            // Report the timeout even when the OS refuses termination.
+                        }
+
+                        return false;
+                    }
+
                     await Task.Delay(50);
                 }
+
+                return true;
             }
 
             private static string BuildCliPrompt(

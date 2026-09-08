@@ -7,6 +7,7 @@ namespace PsdLayoutTool2
     using System.Linq;
     using System.Reflection;
     using System.Text;
+    using System.Threading;
     using System.Threading.Tasks;
     using UnityEditor;
     using UnityEditor.Compilation;
@@ -18,6 +19,8 @@ namespace PsdLayoutTool2
     /// </summary>
     internal static class PsdHierarchyNativePayloadExecutor
     {
+        private const int RendererTimeoutMilliseconds = 60000;
+        private const int CompilationTimeoutMilliseconds = 120000;
         internal const string NativePayloadNamespace = "PsdLayoutTool2";
         internal const string NativePayloadTypeName = "NativeCleanupPayload";
         internal const string NativePayloadMethodName = "Execute";
@@ -167,7 +170,13 @@ namespace PsdLayoutTool2
                 if (process == null) return PsdHierarchyNativePayloadResult.Failure("Could not start the Prefab cleanup payload renderer.");
                 Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
                 Task<string> errorTask = process.StandardError.ReadToEndAsync();
-                await Task.Run(() => process.WaitForExit());
+                bool exited = await Task.Run(() => process.WaitForExit(RendererTimeoutMilliseconds));
+                if (!exited)
+                {
+                    TryTerminateProcess(process);
+                    return PsdHierarchyNativePayloadResult.Failure(
+                        "Native payload rendering exceeded 60 seconds and was stopped.");
+                }
                 string output = (await outputTask).Trim();
                 string error = (await errorTask).Trim();
                 if (process.ExitCode != 0 || !File.Exists(renderedPath))
@@ -179,12 +188,13 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static Task<PsdHierarchyNativePayloadResult> CompileAndInvokeAsync(
+        private static async Task<PsdHierarchyNativePayloadResult> CompileAndInvokeAsync(
             string sourcePath,
             string assemblyPath,
             bool invokePayload)
         {
             var completion = new TaskCompletionSource<PsdHierarchyNativePayloadResult>();
+            int invocationGate = 0;
             var builder = new AssemblyBuilder(assemblyPath, new[] { sourcePath })
             {
                 flags = AssemblyBuilderFlags.EditorAssembly,
@@ -206,6 +216,11 @@ namespace PsdLayoutTool2
                     return;
                 }
 
+                if (Interlocked.CompareExchange(ref invocationGate, 1, 0) != 0)
+                {
+                    return;
+                }
+
                 try
                 {
                     System.Reflection.Assembly assembly = System.Reflection.Assembly.Load(File.ReadAllBytes(assemblyPath));
@@ -224,8 +239,47 @@ namespace PsdLayoutTool2
                 }
             };
 
-            if (!builder.Build()) completion.TrySetResult(PsdHierarchyNativePayloadResult.Failure("Native payload compilation could not be started."));
-            return completion.Task;
+            if (!builder.Build())
+            {
+                completion.TrySetResult(PsdHierarchyNativePayloadResult.Failure("Native payload compilation could not be started."));
+            }
+
+            Task completed = await Task.WhenAny(
+                completion.Task,
+                Task.Delay(CompilationTimeoutMilliseconds));
+            if (completed == completion.Task)
+            {
+                return await completion.Task;
+            }
+
+            int gateAtTimeout = Interlocked.CompareExchange(ref invocationGate, 2, 0);
+            if (gateAtTimeout == 1)
+            {
+                return await completion.Task;
+            }
+
+            return PsdHierarchyNativePayloadResult.Failure(
+                "Native payload compilation exceeded 120 seconds. Any late compiler callback will be ignored before apply.");
+        }
+
+        private static void TryTerminateProcess(Process process)
+        {
+            try
+            {
+                if (process != null && !process.HasExited)
+                {
+                    process.Kill();
+                    process.WaitForExit(5000);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process already exited.
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // The timeout result remains authoritative when termination is denied.
+            }
         }
 
         private static string ResolveRendererPath(string projectRoot, string skillFullPath)

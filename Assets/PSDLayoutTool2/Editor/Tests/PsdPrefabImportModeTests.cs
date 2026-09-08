@@ -69,6 +69,14 @@ namespace PsdLayoutTool2.Tests
             Assert.That(PsdInspector.ShouldShowIncrementalUpdateButton(false), Is.True);
         }
 
+        [TestCase(419f, true)]
+        [TestCase(420f, false)]
+        [TestCase(700f, false)]
+        public void InspectorActionRowsStackOnlyAtNarrowWidths(float viewWidth, bool expected)
+        {
+            Assert.That(PsdInspector.ShouldStackActionRows(viewWidth), Is.EqualTo(expected));
+        }
+
         [Test]
         public void PingPrefabDoesNotChangeTheActiveInspectorSelection()
         {

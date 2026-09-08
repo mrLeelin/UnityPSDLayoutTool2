@@ -54,6 +54,8 @@ namespace PsdLayoutTool2
     /// </summary>
     internal static class PsdHierarchyChatCleanupExecution
     {
+        private const int RunnerTimeoutMilliseconds = 180000;
+        private const int PreflightTimeoutMilliseconds = 120000;
         internal const string CleanupRunnerRelativePath =
             ".agents/skills/prefab-hierarchy-cleanup/scripts/run_prefab_hierarchy_cleanup.ps1";
         private const string ReusableItemFallbackName = "ReusableItem";
@@ -188,6 +190,7 @@ namespace PsdLayoutTool2
                     "flatSiblingResolutions",
                     "selectedPrefabExtractions",
                     "crossParentPrefabExtractions",
+                    "postGroupingExtractionIntents",
                 }),
                 StringComparer.Ordinal);
 
@@ -205,7 +208,9 @@ namespace PsdLayoutTool2
                    normalized == "可以" ||
                    normalized == "可以执行" ||
                    normalized == "好的" ||
-                   normalized == "同意";
+                   normalized == "同意" ||
+                   normalized == "满意" ||
+                   normalized == "满意了";
         }
 
         internal static bool IsApplyIntent(string input)
@@ -522,6 +527,7 @@ namespace PsdLayoutTool2
             {
                 var plan = JObject.Parse(planJson);
                 ValidateAndNormalizeVersionTwoPlan(plan, context);
+                ValidatePostGroupingExtractionIntents(plan);
                 planJson = plan.ToString(Newtonsoft.Json.Formatting.None);
 
                 // 诊断：检查是否遗漏了必需的组件候选
@@ -561,6 +567,7 @@ namespace PsdLayoutTool2
             {
                 var plan = JObject.Parse(planJson ?? string.Empty);
                 ValidateAndNormalizeVersionTwoPlan(plan, context);
+                ValidatePostGroupingExtractionIntents(plan);
                 bool isLocalRepair = context.localRepairScope != null;
                 bool hasLocalPrefabExtractions = HasLocalPrefabExtractions(plan);
                 if (hasLocalPrefabExtractions && !isLocalRepair)
@@ -599,6 +606,7 @@ namespace PsdLayoutTool2
                     WriteFlatSiblingFindings(plan, context);
                 }
                 RemoveCandidateDecisionMetadata(plan);
+                plan.Remove("postGroupingExtractionIntents");
                 plan["version"] = 1;
                 plan.Remove("snapshotFingerprint");
                 runnerPlanJson = plan.ToString(Newtonsoft.Json.Formatting.None);
@@ -819,7 +827,13 @@ namespace PsdLayoutTool2
 
                 Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
                 Task<string> errorTask = process.StandardError.ReadToEndAsync();
-                process.WaitForExit();
+                if (!process.WaitForExit(RunnerTimeoutMilliseconds))
+                {
+                    TryTerminateProcess(process);
+                    return new PsdHierarchyChatCleanupExecutionResult(
+                        false,
+                        "Prefab 更新超过 180 秒，已停止等待。不会自动重跑该计划；请先核验当前 Prefab 保存状态。");
+                }
                 Task.WaitAll(outputTask, errorTask);
 
                 string output = outputTask.Result.Trim();
@@ -904,7 +918,13 @@ namespace PsdLayoutTool2
 
                 Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
                 Task<string> errorTask = process.StandardError.ReadToEndAsync();
-                process.WaitForExit();
+                if (!process.WaitForExit(RunnerTimeoutMilliseconds))
+                {
+                    TryTerminateProcess(process);
+                    return new PsdHierarchyChatCleanupExecutionResult(
+                        false,
+                        "Prefab 重放超过 180 秒，已停止等待。不会自动再次重放。");
+                }
                 Task.WaitAll(outputTask, errorTask);
 
                 string output = outputTask.Result.Trim();
@@ -950,7 +970,13 @@ namespace PsdLayoutTool2
 
                 Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
                 Task<string> errorTask = process.StandardError.ReadToEndAsync();
-                process.WaitForExit();
+                if (!process.WaitForExit(PreflightTimeoutMilliseconds))
+                {
+                    TryTerminateProcess(process);
+                    return new PsdHierarchyChatCleanupExecutionResult(
+                        false,
+                        "Prefab 计划预检超过 120 秒，已停止。不会继续 Apply 或再次调用 AI。");
+                }
                 Task.WaitAll(outputTask, errorTask);
 
                 if (process.ExitCode == 0)
@@ -1466,6 +1492,220 @@ namespace PsdLayoutTool2
                 }
 
                 variants.Add(extraction);
+            }
+        }
+
+        private static void TryTerminateProcess(Process process)
+        {
+            try
+            {
+                if (process != null && !process.HasExited)
+                {
+                    process.Kill();
+                    process.WaitForExit(5000);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process already exited.
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // The timeout remains the user-facing failure when termination is denied.
+            }
+        }
+
+        private static void ValidatePostGroupingExtractionIntents(JObject plan)
+        {
+            if (plan["postGroupingExtractionIntents"] == null)
+            {
+                return;
+            }
+
+            if (!(plan["postGroupingExtractionIntents"] is JArray intents))
+            {
+                throw new InvalidDataException("postGroupingExtractionIntents 必须为数组。");
+            }
+
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JObject intent in intents.OfType<JObject>())
+            {
+                string id = ReadRequiredString(intent, "id");
+                if (!ids.Add(id))
+                {
+                    throw new InvalidDataException("postGroupingExtractionIntents 包含重复 id：" + id + "。");
+                }
+
+                string mode = ReadRequiredString(intent, "mode");
+                if (!new[] { "component", "state", "variant", "stateful" }.Contains(mode))
+                {
+                    throw new InvalidDataException("postGroupingExtractionIntents[" + id + "].mode 无效：" + mode + "。");
+                }
+
+                ReadRequiredString(intent, "assetPath");
+                ReadRequiredString(intent, "templatePath");
+                if (!(intent["instances"] is JArray instances) ||
+                    !(intent["states"] is JArray states) ||
+                    !(intent["commonMembers"] is JArray commonMembers))
+                {
+                    throw new InvalidDataException(
+                        "postGroupingExtractionIntents[" + id + "] 必须包含 instances、commonMembers 和 states 数组。");
+                }
+
+                if (instances.Count == 0)
+                {
+                    throw new InvalidDataException(
+                        "postGroupingExtractionIntents[" + id + "].instances 不能为空。");
+                }
+
+                if (intent["defaultState"] == null || intent["defaultState"].Type != JTokenType.String)
+                {
+                    throw new InvalidDataException(
+                        "postGroupingExtractionIntents[" + id + "].defaultState 必须为字符串。");
+                }
+
+                ValidatePostGroupingStringArray(id, "commonMembers", commonMembers);
+                HashSet<string> stateIds = ValidatePostGroupingStates(
+                    id,
+                    mode,
+                    states,
+                    intent["defaultState"].Value<string>());
+                ValidatePostGroupingInstances(id, mode, instances, stateIds);
+            }
+
+            if (intents.Count != intents.OfType<JObject>().Count())
+            {
+                throw new InvalidDataException("postGroupingExtractionIntents 的每一项都必须为对象。");
+            }
+        }
+
+        private static void ValidatePostGroupingInstances(
+            string intentId,
+            string mode,
+            JArray instances,
+            HashSet<string> stateIds)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < instances.Count; index++)
+            {
+                if (!(instances[index] is JObject instance))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].instances[{index}] 必须为对象。");
+                }
+
+                string path = ReadRequiredString(instance, "path");
+                if (!names.Add(path))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].instances 包含重复 path：{path}。");
+                }
+
+                JToken state = instance["state"];
+                if (state == null || state.Type != JTokenType.String ||
+                    (mode == "component" && !string.IsNullOrEmpty(state.Value<string>())) ||
+                    (mode != "component" && !stateIds.Contains(state.Value<string>())))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].instances[{index}].state 必须为字符串" +
+                        (mode == "component"
+                            ? "，且 component 模式必须使用空 state。"
+                            : "，且必须引用已声明的 state id：" + (state?.Value<string>() ?? "<empty>") + "。"));
+                }
+
+                if (!(instance["commonSourceNames"] is JArray commonSourceNames) ||
+                    !(instance["stateSourceNames"] is JArray stateSourceNames))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].instances[{index}] 必须包含 commonSourceNames 和 stateSourceNames 数组。");
+                }
+
+                ValidatePostGroupingStringArray(intentId, $"instances[{index}].commonSourceNames", commonSourceNames);
+                ValidatePostGroupingStringArray(intentId, $"instances[{index}].stateSourceNames", stateSourceNames);
+            }
+        }
+
+        private static HashSet<string> ValidatePostGroupingStates(
+            string intentId,
+            string mode,
+            JArray states,
+            string defaultState)
+        {
+            if (mode == "component")
+            {
+                if (states.Count != 0 || !string.IsNullOrEmpty(defaultState))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}] 的 component 模式必须使用空 states 和空 defaultState。");
+                }
+
+                return new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            if (states.Count == 0 || string.IsNullOrWhiteSpace(defaultState))
+            {
+                throw new InvalidDataException(
+                    $"postGroupingExtractionIntents[{intentId}] 必须声明 states 和 defaultState。");
+            }
+
+            var stateIds = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < states.Count; index++)
+            {
+                if (!(states[index] is JObject state))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].states[{index}] 必须为对象。");
+                }
+
+                string stateId = ReadRequiredString(state, "id");
+                ReadRequiredString(state, "name");
+                ReadRequiredString(state, "sourcePath");
+                if (!stateIds.Add(stateId))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].states 包含重复 id：{stateId}。");
+                }
+
+                if (!(state["members"] is JArray members))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].states[{index}].members 必须为数组。");
+                }
+
+                ValidatePostGroupingStringArray(intentId, $"states[{index}].members", members);
+            }
+
+            if (!stateIds.Contains(defaultState))
+            {
+                throw new InvalidDataException(
+                    $"postGroupingExtractionIntents[{intentId}].defaultState 必须引用已声明的 state id。");
+            }
+
+            return stateIds;
+        }
+
+        private static void ValidatePostGroupingStringArray(
+            string intentId,
+            string propertyPath,
+            JArray values)
+        {
+            var uniqueValues = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < values.Count; index++)
+            {
+                string value = values[index]?.Type == JTokenType.String
+                    ? values[index].Value<string>()
+                    : null;
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].{propertyPath}[{index}] 必须为非空字符串。");
+                }
+
+                if (!uniqueValues.Add(value))
+                {
+                    throw new InvalidDataException(
+                        $"postGroupingExtractionIntents[{intentId}].{propertyPath} 包含重复值：{value}。");
+                }
             }
         }
 

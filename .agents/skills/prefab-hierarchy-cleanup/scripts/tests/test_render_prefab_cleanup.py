@@ -13,19 +13,32 @@ from find_prefab_component_candidates import Node, numbered_component_candidates
 
 
 class RenderPrefabCleanupTests(unittest.TestCase):
-    def test_runner_falls_back_to_npx_when_global_uloop_is_unavailable(self):
+    def test_runner_requires_explicit_uloop_fallback_and_never_downloads_it(self):
         runner = (SCRIPT_DIRECTORY / "run_prefab_hierarchy_cleanup.ps1").read_text(
             encoding="utf-8"
         )
 
+        self.assertIn("[switch]$AllowUloopFallback", runner)
+        self.assertIn("if (-not $AllowUloopFallback)", runner)
         self.assertIn("function Invoke-UloopCli", runner)
         self.assertIn('Get-Command -Name "uloop.cmd", "uloop"', runner)
-        self.assertIn('Get-Command -Name "npx.cmd", "npx"', runner)
-        self.assertIn('"uloop-cli@2.2.0"', runner)
         self.assertIn("Invoke-UloopCli -Arguments $cliArguments", runner)
         self.assertIn("$script:UloopExitCode = $LASTEXITCODE", runner)
         self.assertIn("$unityExitCode = $script:UloopExitCode", runner)
+        self.assertNotIn('Get-Command -Name "npx.cmd", "npx"', runner)
+        self.assertNotIn('"uloop-cli@2.2.0"', runner)
         self.assertNotIn("& uloop execute-dynamic-code", runner)
+
+    def test_snapshot_uses_native_unity_command_without_uloop(self):
+        snapshot = (SCRIPT_DIRECTORY / "snapshot_prefab_hierarchy.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("eval_file", snapshot)
+        self.assertIn("eval_file `\n        -- `\n        --file", snapshot)
+        self.assertIn("--timeout 30000", snapshot)
+        self.assertNotIn("uloop", snapshot.lower())
+        self.assertIn("render_prefab_cleanup.py", snapshot)
 
     def load_plan(self, filename):
         return json.loads((SKILL_DIRECTORY / "plans" / filename).read_text(encoding="utf-8"))
