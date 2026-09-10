@@ -2,36 +2,41 @@
 // 规则：
 // 1. 尾部连续 .tag 按从右到左识别
 // 2. 同 family 后方优先
-// 3. 写回时统一规范化顺序：main -> textBackend -> imageType -> role
+// 3. 写回时统一规范化顺序：export -> main -> textBackend -> imageType -> role
 // 4. 保留 ref / refp 前缀
 
 #target photoshop
 
 var TAG_CONFIG = {
-    canonicalOrder: ["main", "textBackend", "imageType", "role"],
+    canonicalOrder: ["export", "main", "textBackend", "imageType", "role"],
     reuseMarkers: [
         { "id": "ref", "prefix": "ref ", "label": "ref 复用共享图片资源" },
         { "id": "refp", "prefix": "refp ", "label": "refp 复用共享预制体" }
     ],
     familyLabels: {
+        "export": "导出标签",
         "main": "结构标签",
         "textBackend": "文本后端",
         "imageType": "Image Type",
         "role": "角色标签"
     },
     families: {
+        "export": [
+            { "id": "img", "suffix": ".img", "label": "Image 图片" }
+        ],
         "main": [
-            { "id": "img", "suffix": ".img", "label": "Image 图片" },
-            { "id": "rimg", "suffix": ".rimg", "label": "RawImage 贴图" },
+            { "id": "rimg", "suffix": ".rimg", "label": "RawImage 原始贴图" },
             { "id": "txt", "suffix": ".txt", "label": "Text 文本" },
             { "id": "msk", "suffix": ".msk", "label": "Mask 遮罩" },
-            { "id": "col", "suffix": ".col", "label": "FillColor 纯色" },
+            { "id": "col", "suffix": ".col", "label": "FillColor 纯色矩形" },
             { "id": "bt", "suffix": ".bt", "label": "Button 按钮" },
             { "id": "dpd", "suffix": ".dpd", "label": "Dropdown 下拉框" },
             { "id": "ipt", "suffix": ".ipt", "label": "InputField 输入框" },
-            { "id": "tg", "suffix": ".tg", "label": "Toggle 勾选框" },
-            { "id": "sld", "suffix": ".sld", "label": "Slider 进度条" },
-            { "id": "sv", "suffix": ".sv", "label": "ScrollView 滚动列表" }
+            { "id": "tg", "suffix": ".tg", "label": "Toggle 勾选/单选框" },
+            { "id": "panel", "suffix": ".panel", "label": "Panel 普通容器" },
+            { "id": "tgg", "suffix": ".tgg", "label": "ToggleGroup 单选组容器" },
+            { "id": "sld", "suffix": ".sld", "label": "Slider 滑动条/进度条" },
+            { "id": "sv", "suffix": ".sv", "label": "ScrollView 滚动视图/列表" }
         ],
         "textBackend": [
             { "id": "tmp", "suffix": ".tmp", "label": "TMP文本后端" },
@@ -44,31 +49,33 @@ var TAG_CONFIG = {
             { "id": "filled", "suffix": ".filled", "label": "填充" }
         ],
         "role": [
-            { "id": "bg", "suffix": ".bg", "label": "Background 背景" },
-            { "id": "onover", "suffix": ".onover", "label": "Button_Highlight 按钮高亮" },
-            { "id": "press", "suffix": ".press", "label": "Button_Press 按钮按下" },
-            { "id": "select", "suffix": ".select", "label": "Button_Select 按钮选中" },
-            { "id": "disable", "suffix": ".disable", "label": "Button_Disable 按钮禁用" },
-            { "id": "bttxt", "suffix": ".bttxt", "label": "Button_Text 按钮文本" },
-            { "id": "dpdlb", "suffix": ".dpdlb", "label": "Dropdown_Label 下拉框文本" },
+            { "id": "bg", "suffix": ".bg", "label": "Background 控件背景" },
+            { "id": "onover", "suffix": ".onover", "label": "Button_Highlight 按钮高亮图" },
+            { "id": "press", "suffix": ".press", "label": "Button_Press 按钮按下图" },
+            { "id": "select", "suffix": ".select", "label": "Button_Select 按钮选中图" },
+            { "id": "disable", "suffix": ".disable", "label": "Button_Disable 按钮禁用图" },
+            { "id": "bttxt", "suffix": ".bttxt", "label": "Button_Text 按钮文字" },
+            { "id": "dpdlb", "suffix": ".dpdlb", "label": "Dropdown_Label 下拉框显示文字" },
             { "id": "dpdicon", "suffix": ".dpdicon", "label": "Dropdown_Arrow 下拉框箭头" },
-            { "id": "placeholder", "suffix": ".placeholder", "label": "InputField_Placeholder 输入框提示文本" },
+            { "id": "placeholder", "suffix": ".placeholder", "label": "InputField_Placeholder 输入框占位文本" },
             { "id": "ipttxt", "suffix": ".ipttxt", "label": "InputField_Text 输入框内容文本" },
-            { "id": "mark", "suffix": ".mark", "label": "Toggle_Checkmark 勾选框标记" },
-            { "id": "tglb", "suffix": ".tglb", "label": "Toggle_Label 勾选框文本" },
-            { "id": "fill", "suffix": ".fill", "label": "Slider_Fill 进度条填充图" },
-            { "id": "handle", "suffix": ".handle", "label": "Slider_Handle 进度条滑块" },
-            { "id": "vpt", "suffix": ".vpt", "label": "ScrollView_Viewport 滚动列表视口" },
-            { "id": "hbarbg", "suffix": ".hbarbg", "label": "ScrollView_HorizontalBarBG 滚动列表水平滑动条背景" },
-            { "id": "hbar", "suffix": ".hbar", "label": "ScrollView_HorizontalBar 滚动列表水平滑动条滑块" },
-            { "id": "vbarbg", "suffix": ".vbarbg", "label": "ScrollView_VerticalBarBG 滚动列表垂直滑动条背景" },
-            { "id": "vbar", "suffix": ".vbar", "label": "ScrollView_VerticalBar 滚动列表垂直滑动条滑块" }
+            { "id": "mark", "suffix": ".mark", "label": "Toggle_Checkmark 勾选标记" },
+            { "id": "tglb", "suffix": ".tglb", "label": "Toggle_Label 勾选框文字" },
+            { "id": "fill", "suffix": ".fill", "label": "Slider_Fill 滑动条填充" },
+            { "id": "handle", "suffix": ".handle", "label": "Slider_Handle 滑动条手柄" },
+            { "id": "vpt", "suffix": ".vpt", "label": "ScrollView_Viewport 滚动视图视口" },
+            { "id": "hbarbg", "suffix": ".hbarbg", "label": "ScrollView_HorizontalBarBG 水平滚动条背景" },
+            { "id": "hbar", "suffix": ".hbar", "label": "ScrollView_HorizontalBar 水平滚动条滑块" },
+            { "id": "vbarbg", "suffix": ".vbarbg", "label": "ScrollView_VerticalBarBG 垂直滚动条背景" },
+            { "id": "vbar", "suffix": ".vbar", "label": "ScrollView_VerticalBar 垂直滚动条滑块" }
         ]
     },
     rasterizeAsImage: {
         "main": {
-            "img": true,
             "rimg": true
+        },
+        "export": {
+            "img": true
         },
         "role": {
             "bg": true,
@@ -128,8 +135,8 @@ var TAG_CONFIG = {
         "hbarbg": {"role": "hbarbg" },
         "hbarpanel": {"role": "hbarbg" },
         "highlight": {"role": "onover" },
-        "image": {"main": "img" },
-        "img": {"main": "img" },
+        "image": {"export": "img" },
+        "img": {"export": "img" },
         "input": {"main": "ipt" },
         "inputbox": {"main": "ipt" },
         "inputfield": {"main": "ipt" },
@@ -154,9 +161,10 @@ var TAG_CONFIG = {
         "mask": {"main": "msk" },
         "msk": {"main": "msk" },
         "onover": {"role": "onover" },
-        "panel": {"role": "bg" },
+        "panel": {"main": "panel" },
         "placeholder": {"role": "placeholder" },
         "press": {"role": "press" },
+        "radiogroup": {"main": "tgg" },
         "rawimage": {"main": "rimg" },
         "rawimg": {"main": "rimg" },
         "rimg": {"main": "rimg" },
@@ -178,6 +186,7 @@ var TAG_CONFIG = {
         "tex": {"main": "rimg" },
         "text": {"main": "txt" },
         "tg": {"main": "tg" },
+        "tgg": {"main": "tgg" },
         "tglb": {"role": "tglb" },
         "tgmark": {"role": "mark" },
         "tgtxt": {"role": "tglb" },
@@ -200,6 +209,7 @@ var TAG_CONFIG = {
         "tmptoggle": {"main": "tg", "textBackend": "tmp" },
         "tmptxt": {"main": "txt", "textBackend": "tmp" },
         "toggle": {"main": "tg" },
+        "togglegroup": {"main": "tgg" },
         "togglelabel": {"role": "tglb" },
         "togglemark": {"role": "mark" },
         "toggletext": {"role": "tglb" },
