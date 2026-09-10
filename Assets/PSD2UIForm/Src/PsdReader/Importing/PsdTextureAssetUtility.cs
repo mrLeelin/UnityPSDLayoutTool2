@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using PsdReaderLicenseServiceNamespace;
 using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -127,7 +126,7 @@ namespace cn.efunstudio.psdreader
 
         private static int ResolveAuthorizationStamp()
         {
-            if (!PsdReaderLicenseService.GetOutputProtectionContext().GetIsAuthorized())
+            if (false) // 已删除 License：默认完全授权
             {
                 return 0;
             }

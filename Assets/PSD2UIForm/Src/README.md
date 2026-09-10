@@ -2,21 +2,22 @@
 
 本目录只保存 Unity 正式编译所需的源码、Unity 元数据和程序集定义。源码已经按职责整理，并完成混淆标识符的语义化重命名；本次整理不改变运行逻辑、程序集名称、Unity GUID 或资源引用。
 
-## 临时完整授权测试
+## 授权（已全部删除，默认完全授权）
 
-- `PsdReaderLicenseService.cs` 文件顶部当前启用了 `PSD2UIFORM_FORCE_AUTHORIZED_TEST`。
-- 开启时，授权状态固定为 `ResultCode = 1`、`StatusText = "Active"`、`Features = ["Main"]`，同时生成字段和状态哈希自洽的测试授权保护上下文。
-- `HasMainFeature()`、16-bit PSD 输出、导出授权标记和保护资源签章会统一按授权态工作；“试用版”与 `efunstudio.cn` 可见水印及其文字边缘不会生成。
-- 真实激活、签名验证和工程授权文件导出仍使用原校验流程，不会产生可分发的伪授权文件。
-- 关闭测试时，删除文件顶部的 `#define PSD2UIFORM_FORCE_AUTHORIZED_TEST` 即可恢复全部真实授权判断。
-- 切换后应清理旧预览和已导出的带水印图片并重新生成，避免复用旧缓存；此开关只能用于本地测试，不能随正式版本发布。
-- `ClockWatermarkCipher` 是授权缓存的防时间回拨密文，不是画面水印，本测试不会修改它。
+- 整个 `PsdReader/Licensing` 目录（License / 授权校验 / 输出水印保护 / 授权窗口）已删除。
+- 默认行为：完全授权、无水印、无激活流程、无联网更新检查。
+- 仅保留最小占位：
+  - `PsdReader/Authorization/AlwaysAuthorized.cs`：`IsAuthorized=true`、`HasMainFeature=true`、本地 SHA256 工具。
+  - `PsdReaderProductAccess`：对外状态始终为“完整版”，管理窗口/激活/导出授权均为无操作。
+- `PsdRenderedImage` 不再创建 `RenderProtectionSession`；渲染结果无水印叠加。
+- 菜单 `Tools/Psd2UIForm/Other/LicenseWindow`、`Clear License`、`Check Update` 已移除；仅保留 `Window/PSDReader/Force Reset`。
+- Inspector 中的授权/订单 UI 已改为“默认完全授权”文案。
 
 ## 目录结构
 
 - `PsdReader`
   - PSD 二进制读取、描述符、区段、图像资源、图层附加信息、链接图层和文本解析
-  - 导入、重建、序列化、授权、输出保护和更新检查
+  - 导入、重建、序列化（授权与输出保护已删除）
 - `Psd2UGUI`
   - AI 分析与补丁、PSD 转 UGUI、运行时数据、UI 组件和编辑器工具
 - `Internal`

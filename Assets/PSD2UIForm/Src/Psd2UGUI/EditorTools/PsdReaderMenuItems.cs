@@ -1,7 +1,6 @@
 using UnityEditor;
-using cn.efunstudio.psdreader;
 
-namespace UGF.EditorTools.Psd2UGUI
+namespace cn.efunstudio.psdreader
 {
     internal static class PsdReaderMenuItems
     {
@@ -9,24 +8,6 @@ namespace UGF.EditorTools.Psd2UGUI
         private static void ForceReset()
         {
             PsdReaderMenuActions.ForceReset();
-        }
-
-        [MenuItem("Tools/Psd2UIForm/Other/LicenseWindow", priority = 9999)]
-        private static void OpenLicenseWindow()
-        {
-            PsdReaderMenuActions.OpenLicenseWindow();
-        }
-
-        [MenuItem("Tools/Psd2UIForm/Other/Clear License", priority = 10000)]
-        private static void ClearLicense()
-        {
-            PsdReaderMenuActions.ClearLicense();
-        }
-
-        [MenuItem("Tools/Psd2UIForm/Check Update", priority = 10001)]
-        private static void CheckUpdate()
-        {
-            PsdReaderMenuActions.CheckUpdate();
         }
     }
 }

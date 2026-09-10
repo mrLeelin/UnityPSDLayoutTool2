@@ -1,53 +1,30 @@
 using System;
 using PsdBinaryUtilityNamespace;
-using RenderProtectionSessionNamespace;
 
 namespace cn.efunstudio.psdreader.PsdParser
 {
     public sealed class PsdRenderedImage
     {
         private readonly int left;
-
         private readonly int top;
-
         private readonly int width;
-
         private readonly int height;
-
         private readonly int bitDepth;
-
         private readonly byte[] m_Rgba32;
-
         private readonly ushort[] m_Rgba64;
-
-        private readonly RenderProtectionSession protectionSession;
-
-        private bool protectionApplied;
-
         private static PsdRenderedImage s_ObfuscationSentinel;
 
         public int Left => left;
-
         public int Top => top;
-
         public int Width => width;
-
         public int Height => height;
-
         public int Right => Left + Width;
-
         public int Bottom => Top + Height;
-
         public int BitDepth => bitDepth;
-
         public bool IsHighBitDepth => bitDepth == 16;
-
         public byte[] Rgba32 => GetExportRgba32();
-
         public ushort[] Rgba64 => GetExportRgba64();
-
         internal byte[] RawRgba32 => m_Rgba32;
-
         internal ushort[] RawRgba64 => m_Rgba64;
 
         public bool IsEmpty
@@ -83,12 +60,10 @@ namespace cn.efunstudio.psdreader.PsdParser
                 m_Rgba32 = new byte[this.width * this.height * 4];
                 m_Rgba64 = Array.Empty<ushort>();
             }
-            protectionSession = (enableProtection ? PsdReaderOutputProtection.CreateProtectionSession(this.left, this.top, this.width, this.height, securitySalt, layerPathKey, normalizedBounds, isPreviewRender) : null);
         }
 
         public byte[] CreateAlphaMask()
         {
-            EnsureProtectionApplied();
             byte[] alphaMask = new byte[Width * Height];
             for (int y = 0; y < Height; y++)
             {
@@ -104,7 +79,6 @@ namespace cn.efunstudio.psdreader.PsdParser
 
         internal ushort[] CreateAlphaMask16()
         {
-            EnsureProtectionApplied();
             ushort[] alphaMask = new ushort[Width * Height];
             for (int y = 0; y < Height; y++)
             {
@@ -147,12 +121,10 @@ namespace cn.efunstudio.psdreader.PsdParser
 
         internal void ApplyProtection()
         {
-            EnsureProtectionApplied();
         }
 
         internal byte[] GetExportRgba32()
         {
-            EnsureProtectionApplied();
             if (!IsHighBitDepth)
             {
                 return m_Rgba32;
@@ -167,7 +139,6 @@ namespace cn.efunstudio.psdreader.PsdParser
 
         internal ushort[] GetExportRgba64()
         {
-            EnsureProtectionApplied();
             if (IsHighBitDepth)
             {
                 return m_Rgba64;
@@ -178,42 +149,6 @@ namespace cn.efunstudio.psdreader.PsdParser
                 rgba64[sampleIndex] = PsdBinaryUtility.ConvertByteToUInt16(m_Rgba32[sampleIndex]);
             }
             return rgba64;
-        }
-
-        private void EnsureProtectionApplied()
-        {
-            if (protectionApplied || protectionSession == null || IsEmpty)
-            {
-                return;
-            }
-            if (!IsHighBitDepth)
-            {
-                protectionSession.ApplyProtectionToRgba32(m_Rgba32, width, height);
-            }
-            else
-            {
-                byte[] proxyRgba32 = CreateProxyRgba32FromRaw16();
-                protectionSession.ApplyProtectionToRgba32(proxyRgba32, width, height);
-                for (int sampleIndex = 0; sampleIndex < proxyRgba32.Length; sampleIndex++)
-                {
-                    byte protectedSample = proxyRgba32[sampleIndex];
-                    if (protectedSample != PsdBinaryUtility.ConvertUInt16ToByte(m_Rgba64[sampleIndex]))
-                    {
-                        m_Rgba64[sampleIndex] = PsdBinaryUtility.ConvertByteToUInt16(protectedSample);
-                    }
-                }
-            }
-            protectionApplied = true;
-        }
-
-        private byte[] CreateProxyRgba32FromRaw16()
-        {
-            byte[] proxyRgba32 = new byte[m_Rgba64.Length];
-            for (int sampleIndex = 0; sampleIndex < m_Rgba64.Length; sampleIndex++)
-            {
-                proxyRgba32[sampleIndex] = PsdBinaryUtility.ConvertUInt16ToByte(m_Rgba64[sampleIndex]);
-            }
-            return proxyRgba32;
         }
 
         internal int GetPixelOffset(int x, int yTopDown)
@@ -274,14 +209,10 @@ namespace cn.efunstudio.psdreader.PsdParser
                 float outputPremultipliedR = (float)(int)srcR / 255f * sourceAlpha + (float)(int)destinationR / 255f * destinationAlpha * (1f - sourceAlpha);
                 float outputPremultipliedG = (float)(int)srcG / 255f * sourceAlpha + (float)(int)destinationG / 255f * destinationAlpha * (1f - sourceAlpha);
                 float outputPremultipliedB = (float)(int)srcB / 255f * sourceAlpha + (float)(int)destinationB / 255f * destinationAlpha * (1f - sourceAlpha);
-                byte outputR = ClampToByte(outputPremultipliedR / outputAlpha);
-                byte outputG = ClampToByte(outputPremultipliedG / outputAlpha);
-                byte outputB = ClampToByte(outputPremultipliedB / outputAlpha);
-                byte outputA = ClampToByte(outputAlpha);
-                m_Rgba32[pixelOffset] = outputR;
-                m_Rgba32[pixelOffset + 1] = outputG;
-                m_Rgba32[pixelOffset + 2] = outputB;
-                m_Rgba32[pixelOffset + 3] = outputA;
+                m_Rgba32[pixelOffset] = ClampToByte(outputPremultipliedR / outputAlpha);
+                m_Rgba32[pixelOffset + 1] = ClampToByte(outputPremultipliedG / outputAlpha);
+                m_Rgba32[pixelOffset + 2] = ClampToByte(outputPremultipliedB / outputAlpha);
+                m_Rgba32[pixelOffset + 3] = ClampToByte(outputAlpha);
             }
         }
 

@@ -1,11 +1,5 @@
-using System.Runtime.CompilerServices;
-using PsdReaderUpdateServiceNamespace;
-using LicenseStatusPresenterNamespace;
-using PsdReaderLicenseServiceNamespace;
 using cn.efunstudio.psdreader;
 using cn.efunstudio.psdreader.PsdParser;
-using PsdReaderLicenseWindowNamespace;
-using LicenseAvailabilityStateNamespace;
 
 namespace PsdReaderProductAccessImplNamespace
 {
@@ -13,36 +7,34 @@ namespace PsdReaderProductAccessImplNamespace
     {
         private static PsdReaderProductAccessImpl s_ObfuscationSentinel;
 
-        [SpecialName]
         public static bool IsSupported()
         {
             return true;
         }
 
-        [SpecialName]
         public static bool IsAvailable()
         {
-            return LicenseStatusPresenter.GetAvailabilityState(PsdReaderLicenseService.GetLicenseStatus()) == (LicenseAvailabilityState)0;
+            return true;
         }
 
         public static string GetStatusLabel()
         {
-            return LicenseStatusPresenter.GetStatusLabel(PsdReaderLicenseService.GetLicenseStatus());
+            return "完整版";
         }
 
         public static string GetOverviewMessage()
         {
-            return LicenseStatusPresenter.GetActivationHelpText(PsdReaderLicenseService.GetLicenseStatus());
+            return "默认完全授权，无需激活。";
         }
 
         public static string GetUserFacingMessage()
         {
-            return LicenseStatusPresenter.GetStatusMessage(PsdReaderLicenseService.GetLicenseStatus());
+            return "默认完全授权，无需激活。";
         }
 
         public static bool PrimeBuildProtection()
         {
-            return PsdReaderLicenseService.HasMainFeature();
+            return true;
         }
 
         public static string GetPreviewProtectionFingerprint(object psdLayer)
@@ -56,77 +48,78 @@ namespace PsdReaderProductAccessImplNamespace
 
         public static bool ActivateWithOrder(object orderId, out string message)
         {
-            return PsdReaderLicenseService.ActivateWithOrder(orderId, out message);
+            message = "默认完全授权，无需激活。";
+            return true;
         }
 
         public static bool RefreshLicense(out string message)
         {
-            return PsdReaderLicenseService.RefreshLicense(out message);
+            message = "默认完全授权。";
+            return true;
         }
 
         public static bool HasProjectLicenseFile()
         {
-            return PsdReaderLicenseService.HasProjectLicenseFile();
+            return false;
         }
 
         public static string GetProjectLicenseHint()
         {
-            return PsdReaderLicenseService.GetProjectLicenseHint();
+            return string.Empty;
         }
 
         public static bool ActivateFromProjectLicenseFile(out string message)
         {
-            return PsdReaderLicenseService.ActivateFromProjectLicenseFile(out message);
+            message = "默认完全授权，无需授权文件。";
+            return true;
         }
 
         public static bool CanExportProjectLicense()
         {
-            return PsdReaderLicenseService.CanExportProjectLicense();
+            return false;
         }
 
         public static bool SaveProjectLicenseFile(int validityDays, out string message)
         {
-            return PsdReaderLicenseService.SaveProjectLicenseFile(validityDays, out message);
+            message = "默认完全授权，无需导出授权文件。";
+            return false;
         }
 
         public static void ClearLicenseData()
         {
-            PsdReaderLicenseService.ClearLicenseData();
         }
 
         public static void OpenManagementWindow()
         {
-            PsdReaderLicenseWindow.ShowWindow();
+            UnityEngine.Debug.Log("Psd2UIForm：默认完全授权，无授权窗口。");
         }
 
         public static PsdReaderProductUpdateInfo CheckForUpdates()
         {
-            return PsdReaderUpdateService.CheckForUpdates();
+            return null;
         }
 
         public static void CheckForUpdatesAndPrompt()
         {
-            PsdReaderUpdateService.CheckForUpdatesAndPrompt();
         }
 
         public static void EnsureDailyUpdateCheck()
         {
-            PsdReaderUpdateService.CheckForUpdatesDaily();
         }
 
         public static bool HasPendingUpdateTip()
         {
-            return PsdReaderUpdateService.HasCachedUpdate();
+            return false;
         }
 
         public static string GetPendingUpdateTipMessage()
         {
-            return PsdReaderUpdateService.GetCachedUpdateBadge();
+            return string.Empty;
         }
 
         public static bool TryOpenPendingUpdateDownloadUrl()
         {
-            return PsdReaderUpdateService.OpenCachedUpdateDownload();
+            return false;
         }
 
         internal static bool IsObfuscationSentinelNull()

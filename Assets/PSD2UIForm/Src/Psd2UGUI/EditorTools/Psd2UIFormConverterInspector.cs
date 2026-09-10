@@ -70,7 +70,6 @@ namespace UGF.EditorTools.Psd2UGUI
         public override void OnInspectorGUI()
         {
             bool flag = false;
-            PsdReaderProductAccess.EnsureDailyUpdateCheck();
             DrawPendingUpdateTip();
             if (targetLogic.IsDocumentLoaded())
             {
@@ -190,10 +189,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private static void DrawPendingUpdateTip()
         {
-            if (PsdReaderProductAccess.HasPendingUpdateTip() && Psd2UIFormEditorNoticeUtility.DrawVersionUpdateNotice(PsdReaderProductAccess.GetPendingUpdateTipMessage(), "下载") && PsdReaderProductAccess.TryOpenPendingUpdateDownloadUrl())
-            {
-                GUIUtility.ExitGUI();
-            }
+            // 已删除 License/更新检查
         }
 
         private static bool TryGetKeepExistingUITypeSelection(out bool keepExistingUIType)

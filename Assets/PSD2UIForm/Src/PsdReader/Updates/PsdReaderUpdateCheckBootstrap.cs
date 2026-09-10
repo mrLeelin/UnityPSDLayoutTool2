@@ -1,5 +1,4 @@
 using System;
-using PsdReaderUpdateServiceNamespace;
 using UnityEditor;
 
 namespace PsdReaderUpdateCheckBootstrapNamespace
@@ -11,13 +10,7 @@ namespace PsdReaderUpdateCheckBootstrapNamespace
 
         static PsdReaderUpdateCheckBootstrap()
         {
-            EditorApplication.delayCall = (EditorApplication.CallbackFunction)Delegate.Combine((Delegate)(object)EditorApplication.delayCall, (Delegate)new EditorApplication.CallbackFunction(RunDelayedUpdateCheck));
-        }
-
-        private static void RunDelayedUpdateCheck()
-        {
-            EditorApplication.delayCall = (EditorApplication.CallbackFunction)Delegate.Remove((Delegate)(object)EditorApplication.delayCall, (Delegate)new EditorApplication.CallbackFunction(RunDelayedUpdateCheck));
-            PsdReaderUpdateService.CheckForUpdatesDaily();
+            // 已删除 License/更新检查：启动时不再联网。
         }
 
         internal static bool IsObfuscationSentinelNull()

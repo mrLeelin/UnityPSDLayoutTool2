@@ -168,7 +168,6 @@ namespace UGF.EditorTools.Psd2UGUI
         public override void OnInspectorGUI()
         {
             ((Editor)this).serializedObject.Update();
-            PsdReaderProductAccess.EnsureDailyUpdateCheck();
             if (GUILayout.Button("使用教程", Array.Empty<GUILayoutOption>()))
             {
                 Application.OpenURL("https://efunstudio.cn");
@@ -205,38 +204,7 @@ namespace UGF.EditorTools.Psd2UGUI
             EditorGUILayout.LabelField("使用说明:", Array.Empty<GUILayoutOption>());
             readmeProperty.stringValue = EditorGUILayout.TextArea(readmeProperty.stringValue, (GUILayoutOption[])(object)new GUILayoutOption[1] { GUILayout.Height(100f) });
             EditorGUILayout.Space(4f);
-            EditorGUILayout.LabelField("插件授权:", Array.Empty<GUILayoutOption>());
-            EditorGUILayout.VerticalScope val2 = new EditorGUILayout.VerticalScope((GUIStyle)("box"), Array.Empty<GUILayoutOption>());
-            try
-            {
-                EditorGUILayout.LabelField("当前状态:", PsdReaderProductAccess.GetStatusLabel(), Array.Empty<GUILayoutOption>());
-                MessageType val3 = (MessageType)((!PsdReaderProductAccess.NeedsAttention) ? 1 : 2);
-                EditorGUILayout.HelpBox(PsdReaderProductAccess.GetOverviewMessage(), val3);
-                val = new EditorGUILayout.HorizontalScope(Array.Empty<GUILayoutOption>());
-                try
-                {
-                    if (GUILayout.Button("授权管理", Array.Empty<GUILayoutOption>()))
-                    {
-                        PsdReaderProductAccess.OpenManagementWindow();
-                    }
-                    if (GUILayout.Button("获取订单号", Array.Empty<GUILayoutOption>()))
-                    {
-                        Application.OpenURL("https://shop106471535.taobao.com");
-                    }
-                }
-                finally
-                {
-                    ((IDisposable)val)?.Dispose();
-                }
-                if (PsdReaderProductAccess.HasPendingUpdateTip() && Psd2UIFormEditorNoticeUtility.DrawVersionUpdateNotice(PsdReaderProductAccess.GetPendingUpdateTipMessage(), "下载") && PsdReaderProductAccess.TryOpenPendingUpdateDownloadUrl())
-                {
-                    GUIUtility.ExitGUI();
-                }
-            }
-            finally
-            {
-                ((IDisposable)val2)?.Dispose();
-            }
+            EditorGUILayout.LabelField("授权状态: 默认完全授权", Array.Empty<GUILayoutOption>());
             val = new EditorGUILayout.HorizontalScope(Array.Empty<GUILayoutOption>());
             try
             {

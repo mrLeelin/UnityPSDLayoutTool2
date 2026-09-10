@@ -2,11 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using PsdReaderLicenseServiceNamespace;
 using UnityEngine;
+using cn.efunstudio.psdreader.Authorization;
 using PsdBinaryUtilityNamespace;
-using EditorLicenseUsageScopeManagerNamespace;
-using LicenseCryptoUtilityNamespace;
 
 namespace cn.efunstudio.psdreader.PsdParser
 {
@@ -57,7 +55,8 @@ public static PsdRenderedImage RenderPreview(this PsdDocument document, bool inc
             {
                 return string.Empty;
             }
-            return PsdReaderOutputProtection.ComputeProtectionFingerprint(layer.Left, layer.Top, layer.Width, layer.Height, ComputeLayerWatermarkSalt(layer), BuildLayerPathKey(layer), BuildLayerNormalizedBounds(layer));
+            // 已删除 License/输出保护：仅保留稳定指纹，便于缓存键。
+            return AlwaysAuthorized.Sha256Hex(BuildLayerPathKey(layer) + "|" + BuildLayerNormalizedBounds(layer) + "|" + ComputeLayerWatermarkSalt(layer));
         }
 
         public static byte MultiplyAlpha(byte alpha, float opacity)
@@ -95,11 +94,6 @@ public static PsdRenderedImage RenderPreview(this PsdDocument document, bool inc
                 int renderBitDepth = ResolveRenderBitDepth(document.Depth, isPreviewRender);
                 PsdRenderedImage renderedImage = new PsdRenderedImage(0, 0, renderWidth, renderHeight, BuildDocumentPathKey(document), BuildNormalizedBounds(0, 0, renderWidth, renderHeight, renderWidth, renderHeight), ComputeDocumentWatermarkSalt(document), enableProtection: true, isPreviewRender, renderBitDepth);
                 ComposeLayers(renderedImage, document.Childs.OfType<PsdLayer>().ToArray(), includeHiddenLayers, applyClippingMasks, isPreviewRender, previewScale, renderBitDepth);
-                renderedImage.ApplyProtection();
-                if (!isPreviewRender)
-                {
-                    PsdReaderOutputProtection.FinalizeProtectedRender(renderedImage, ComputeDocumentWatermarkSalt(document));
-                }
                 return renderedImage;
             }
         }
@@ -114,11 +108,6 @@ public static PsdRenderedImage RenderPreview(this PsdDocument document, bool inc
             {
                 int renderBitDepth = ResolveRenderBitDepth(layer.Depth, isPreviewRender);
                 PsdRenderedImage renderedImage = RenderInternal(layer, includeHiddenLayers, applyClippingMasks, isRootCall: true, isPreviewRender, previewScale, renderBitDepth);
-                renderedImage?.ApplyProtection();
-                if (!isPreviewRender)
-                {
-                    PsdReaderOutputProtection.FinalizeProtectedRender(renderedImage, ComputeLayerWatermarkSalt(layer));
-                }
                 return renderedImage;
             }
         }
@@ -140,11 +129,6 @@ public static PsdRenderedImage RenderPreview(this PsdDocument document, bool inc
                 int watermarkSalt = ComputeMergedLayersWatermarkSalt(layers);
                 PsdRenderedImage renderedImage = new PsdRenderedImage(renderLeft, renderTop, renderWidth, renderHeight, BuildMergedLayersPathKey(layers), BuildNormalizedBounds(renderLeft, renderTop, renderWidth, renderHeight, renderWidth, renderHeight), watermarkSalt, enableProtection: true, isPreviewRender, renderBitDepth);
                 ComposeLayers(renderedImage, layers, includeHiddenLayers, applyClippingMasks, isPreviewRender, previewScale, renderBitDepth);
-                renderedImage.ApplyProtection();
-                if (!isPreviewRender)
-                {
-                    PsdReaderOutputProtection.FinalizeProtectedRender(renderedImage, watermarkSalt);
-                }
                 return renderedImage;
             }
             return null;
@@ -152,8 +136,7 @@ public static PsdRenderedImage RenderPreview(this PsdDocument document, bool inc
 
         private static IDisposable EnterRenderBuildScope()
         {
-            PsdReaderLicenseService.GetLicenseStatus();
-            return EditorLicenseUsageScopeManager.Acquire();
+            return AlwaysAuthorized.CreateNoopScope();
         }
 
         private static PsdRenderedImage RenderGroup(PsdLayer layer, bool includeHiddenLayers, bool applyClippingMasks, bool enableProtection, bool isPreviewRender, float previewScale, int renderBitDepth)
@@ -518,7 +501,7 @@ public static PsdRenderedImage RenderPreview(this PsdDocument document, bool inc
             {
                 return normalizedName.ToString();
             }
-            string fallbackHash = LicenseCryptoUtility.ComputeStringSha256Hex(trimmedName);
+            string fallbackHash = AlwaysAuthorized.Sha256Hex(trimmedName);
             if (string.IsNullOrEmpty(fallbackHash))
             {
                 return "layer";
@@ -602,10 +585,7 @@ public static PsdRenderedImage RenderPreview(this PsdDocument document, bool inc
             {
                 return 8;
             }
-            if (!PsdReaderLicenseService.GetOutputProtectionContext().GetIsAuthorized())
-            {
-                return 8;
-            }
+            // 已删除 License：默认完全授权，16-bit 始终可用。
             return 16;
         }
 

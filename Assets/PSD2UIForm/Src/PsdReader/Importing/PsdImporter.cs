@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using PsdReaderLicenseServiceNamespace;
 using UnityEditor;
 using UnityEngine;
 using cn.efunstudio.psdreader.PsdParser;
@@ -482,7 +481,7 @@ namespace cn.efunstudio.psdreader
         {
             if (layer != null && layer.Document != null && layer.Document.Depth == 16)
             {
-                return PsdReaderLicenseService.GetOutputProtectionContext().GetIsAuthorized();
+                return true; // 已删除 License：默认完全授权
             }
             return false;
         }
