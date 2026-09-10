@@ -9,12 +9,12 @@ MonoBehaviour:
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: -231125866, guid: a984a9e37b0d91c49a8313a36d5ef28d, type: 3}
+  m_Script: {fileID: 11500000, guid: 4e9ad7835bbb45f59a8d0cd5b4fd3cd3, type: 3}
   m_Name: Psd2UIFormConfig
   m_EditorClassIdentifier: 
   defaultTextType: 3
   defaultImageType: 1
-  forceUseTMP: 0
+  forceUseTMP: 1
   uiFormTemplate: {fileID: 3548335019738977768, guid: 6d8c85c377edc7240ace111136f916b1, type: 3}
   rules:
   - UIType: 0
@@ -392,5 +392,5 @@ MonoBehaviour:
   sharedAssetsOutput: Assets\Examples\Common
   sharedPrefabOutput: Assets\Examples\CommonPrefab
   aiProviderConfig:
-    provider: 2
+    provider: 1
     showCliWindow: 1

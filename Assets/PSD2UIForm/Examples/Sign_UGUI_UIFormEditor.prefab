@@ -1,0 +1,2713 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &53432082477753313
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2355745549312714081}
+  - component: {fileID: 7606489509199623699}
+  - component: {fileID: 8493602476805681988}
+  m_Layer: 0
+  m_Name: PlayerName
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &2355745549312714081
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 53432082477753313}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6088258241246692611}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &7606489509199623699
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 53432082477753313}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 20
+  mLayerType: 22
+  sourceLayerName: PlayerName.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &8493602476805681988
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 53432082477753313}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 7606489509199623699}
+--- !u!1 &144786208935917747
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6516246245761959870}
+  - component: {fileID: 728587760358658789}
+  - component: {fileID: 1980883264242226867}
+  m_Layer: 0
+  m_Name: ZodiacHero
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &6516246245761959870
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 144786208935917747}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &728587760358658789
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 144786208935917747}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 2
+  mLayerType: 1
+  sourceLayerName: ZodiacHero.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &1980883264242226867
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 144786208935917747}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 728587760358658789}
+--- !u!1 &215591935234149780
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2840806855695648563}
+  - component: {fileID: 6401433706819796521}
+  - component: {fileID: 544265632034898728}
+  m_Layer: 0
+  m_Name: Avatar
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &2840806855695648563
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 215591935234149780}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6088258241246692611}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &6401433706819796521
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 215591935234149780}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 18
+  mLayerType: 1
+  sourceLayerName: Avatar.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &544265632034898728
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 215591935234149780}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 6401433706819796521}
+--- !u!1 &234620850274159339
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8107628465703629125}
+  - component: {fileID: 2486537161798604918}
+  - component: {fileID: 661302830911972626}
+  m_Layer: 0
+  m_Name: RewardAmount
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &8107628465703629125
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 234620850274159339}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6834875678442304815}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &2486537161798604918
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 234620850274159339}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 10
+  mLayerType: 22
+  sourceLayerName: RewardAmount.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &661302830911972626
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 234620850274159339}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 2486537161798604918}
+--- !u!1 &282860969915887919
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5130979610491877790}
+  - component: {fileID: 3265106102082798076}
+  - component: {fileID: 4069502424866371452}
+  m_Layer: 0
+  m_Name: HeroOverlay
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5130979610491877790
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 282860969915887919}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3265106102082798076
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 282860969915887919}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 3
+  mLayerType: 1
+  sourceLayerName: HeroOverlay.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &4069502424866371452
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 282860969915887919}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 3265106102082798076}
+--- !u!1 &570143615197494714
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 999499916020121840}
+  - component: {fileID: 918536184376072075}
+  - component: {fileID: 9065562873671596079}
+  m_Layer: 0
+  m_Name: ConstellationIcon
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &999499916020121840
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 570143615197494714}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6088258241246692611}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &918536184376072075
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 570143615197494714}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 19
+  mLayerType: 1
+  sourceLayerName: ConstellationIcon.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &9065562873671596079
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 570143615197494714}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 918536184376072075}
+--- !u!1 &654550189684549234
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8695424170378521908}
+  - component: {fileID: 5483588861976972419}
+  - component: {fileID: 6812419919712578938}
+  m_Layer: 0
+  m_Name: Date
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &8695424170378521908
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 654550189684549234}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6088258241246692611}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &5483588861976972419
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 654550189684549234}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 21
+  mLayerType: 22
+  sourceLayerName: Date.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &6812419919712578938
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 654550189684549234}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 5483588861976972419}
+--- !u!1 &1267277021292021604
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6834875678442304815}
+  - component: {fileID: 2457482181909271366}
+  - component: {fileID: 2450580809552086241}
+  m_Layer: 0
+  m_Name: ClaimedReward
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &6834875678442304815
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1267277021292021604}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 3629032107434486047}
+  - {fileID: 5014950729652006126}
+  - {fileID: 7735563715890393989}
+  - {fileID: 7653928130106603836}
+  - {fileID: 8107628465703629125}
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &2457482181909271366
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1267277021292021604}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 11
+  mLayerType: 18
+  sourceLayerName: ClaimedReward.panel
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 17
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &2450580809552086241
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1267277021292021604}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9a7e9c0a0128433fafdc088b97d4aee9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PanelHelper
+  background: {fileID: 8020526882876475117}
+--- !u!1 &1751532692498919846
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3699328494192648856}
+  - component: {fileID: 1079663551762022591}
+  - component: {fileID: 2980196669952536325}
+  m_Layer: 0
+  m_Name: Rank02Icon
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 0
+--- !u!224 &3699328494192648856
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1751532692498919846}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &1079663551762022591
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1751532692498919846}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 29
+  mLayerType: 1
+  sourceLayerName: Rank02Icon.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &2980196669952536325
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1751532692498919846}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 1079663551762022591}
+--- !u!1 &1869973095567471637
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2050566781857137177}
+  - component: {fileID: 3344541327124192729}
+  - component: {fileID: 6882840357316025461}
+  m_Layer: 0
+  m_Name: Rank04
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 0
+--- !u!224 &2050566781857137177
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1869973095567471637}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3344541327124192729
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1869973095567471637}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 31
+  mLayerType: 22
+  sourceLayerName: Rank04.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &6882840357316025461
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1869973095567471637}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 3344541327124192729}
+--- !u!1 &2494871271521819458
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7380455585166806982}
+  - component: {fileID: 336172039872016876}
+  - component: {fileID: 7545956506435647960}
+  m_Layer: 0
+  m_Name: Content
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &7380455585166806982
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2494871271521819458}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 1896023229319694271}
+  - {fileID: 3239125012234249750}
+  - {fileID: 355570710439799514}
+  - {fileID: 5660262579175021378}
+  m_Father: {fileID: 5883222013534816019}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &336172039872016876
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2494871271521819458}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 37
+  mLayerType: 18
+  sourceLayerName: Content.panel
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 17
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &7545956506435647960
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2494871271521819458}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9a7e9c0a0128433fafdc088b97d4aee9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PanelHelper
+  background: {fileID: 0}
+--- !u!1 &2648148549478706960
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7870399811982600343}
+  - component: {fileID: 3281580625801622271}
+  - component: {fileID: 7574073747962252501}
+  m_Layer: 0
+  m_Name: Divider
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &7870399811982600343
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2648148549478706960}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3281580625801622271
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2648148549478706960}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 25
+  mLayerType: 1
+  sourceLayerName: Divider.col
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 11
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &7574073747962252501
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2648148549478706960}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a5627955972e4d6aa69d15198d1948f6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.FillColorHelper
+  fillColor: {fileID: 3281580625801622271}
+--- !u!1 &2897065616927427687
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5114697073129480589}
+  - component: {fileID: 3039259850771540397}
+  - component: {fileID: 6292269134239802014}
+  m_Layer: 0
+  m_Name: LuckyKingBadge
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5114697073129480589
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2897065616927427687}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3039259850771540397
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2897065616927427687}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 26
+  mLayerType: 1
+  sourceLayerName: LuckyKingBadge.img.sliced
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &6292269134239802014
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2897065616927427687}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 3039259850771540397}
+--- !u!1 &2907714184699430145
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5312233131831496364}
+  - component: {fileID: 2951411623443774185}
+  - component: {fileID: 8528671932803483750}
+  m_Layer: 0
+  m_Name: RewardIcon
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5312233131831496364
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2907714184699430145}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &2951411623443774185
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2907714184699430145}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 24
+  mLayerType: 1
+  sourceLayerName: RewardIcon.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &8528671932803483750
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2907714184699430145}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 2951411623443774185}
+--- !u!1 &3288755898188301288
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8710720094226637577}
+  - component: {fileID: 3964666155290748055}
+  m_Layer: 0
+  m_Name: ListBackground
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &8710720094226637577
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3288755898188301288}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 5883222013534816019}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3964666155290748055
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3288755898188301288}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 13
+  mLayerType: 1
+  sourceLayerName: ListBackground.bg
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 101
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!1 &3609686695432565672
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6364250529560591019}
+  - component: {fileID: 6850219710020423089}
+  - component: {fileID: 818655619216971920}
+  m_Layer: 0
+  m_Name: Rank03Icon
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 0
+--- !u!224 &6364250529560591019
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3609686695432565672}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &6850219710020423089
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3609686695432565672}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 30
+  mLayerType: 1
+  sourceLayerName: Rank03Icon.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &818655619216971920
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3609686695432565672}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 6850219710020423089}
+--- !u!1 &3728187540105630639
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8004119641188767383}
+  - component: {fileID: 3087760638054274799}
+  - component: {fileID: 266337165690694386}
+  m_Layer: 0
+  m_Name: SenderInfo
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &8004119641188767383
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3728187540105630639}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 5358690087352941181}
+  - {fileID: 767074342234538313}
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3087760638054274799
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3728187540105630639}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 42
+  mLayerType: 18
+  sourceLayerName: SenderInfo.panel
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 17
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &266337165690694386
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3728187540105630639}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9a7e9c0a0128433fafdc088b97d4aee9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PanelHelper
+  background: {fileID: 0}
+--- !u!1 &3912810787776720282
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1896023229319694271}
+  - component: {fileID: 228483836880999060}
+  m_Layer: 0
+  m_Name: Viewport
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1896023229319694271
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3912810787776720282}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 4441460546757392519}
+  m_Father: {fileID: 7380455585166806982}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &228483836880999060
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3912810787776720282}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 33
+  mLayerType: 18
+  sourceLayerName: Viewport.vpt
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 115
+  collapseChildrenForGeneration: 1
+  textSourceBindPsdLayerIndex: -1
+--- !u!1 &4375498223728236281
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5373965808403782807}
+  - component: {fileID: 6800575315935699283}
+  - component: {fileID: 7860936050243431073}
+  m_Layer: 0
+  m_Name: Signature
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5373965808403782807
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4375498223728236281}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &6800575315935699283
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4375498223728236281}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 4
+  mLayerType: 1
+  sourceLayerName: Signature.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &7860936050243431073
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4375498223728236281}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 6800575315935699283}
+--- !u!1 &4467217937293740839
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1504164180276421430}
+  - component: {fileID: 680266734041465927}
+  - component: {fileID: 7048605596165477870}
+  m_Layer: 0
+  m_Name: Sign_UGUI_UIFormEditor
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1504164180276421430
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4467217937293740839}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 5578581480040537962}
+  - {fileID: 349300675502482592}
+  - {fileID: 6516246245761959870}
+  - {fileID: 5130979610491877790}
+  - {fileID: 5373965808403782807}
+  - {fileID: 6834875678442304815}
+  - {fileID: 5883222013534816019}
+  - {fileID: 8004119641188767383}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!212 &680266734041465927
+SpriteRenderer:
+  serializedVersion: 2
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4467217937293740839}
+  m_Enabled: 1
+  m_CastShadows: 0
+  m_ReceiveShadows: 0
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 0
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 9dfc825aed78fcd4ba02077103263b40, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 0
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 0
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_Sprite: {fileID: 21300000, guid: 752cede2701faaf418785a6e10cb5e46, type: 3}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_FlipX: 0
+  m_FlipY: 0
+  m_DrawMode: 0
+  m_Size: {x: 10.8, y: 23.405714}
+  m_AdaptiveModeThreshold: 0.5
+  m_SpriteTileMode: 0
+  m_WasSpriteAssigned: 1
+  m_SpriteSortPoint: 0
+--- !u!114 &7048605596165477870
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4467217937293740839}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f621ca39d5a04bcfb82d1af3baebb138, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.Psd2UIFormConverter
+  psdAssetChangeTime: 20260716125249
+  uiFormName: Sign_UGUI
+  psdAsset: {fileID: 21300000, guid: 752cede2701faaf418785a6e10cb5e46, type: 3}
+  previewSprite: {fileID: 0}
+  psdAssetPath: Assets/Plugins/PSD2UIForm/Examples/Sign_UGUI.psd
+  drawLayerRectGizmos: 1
+  drawLayerRectGizmosColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  preferSmallestLayerOnScenePick: 1
+  generatedMetadataEntries:
+  - PrefabAssetPath: Assets/Sign_UGUI.prefab
+    Json: 
+    Entries:
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-8842060792103803255-0
+      Key: redpacketforeground
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-338902675047385148-0
+      Key: redpacketbackground
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-4719146134144055583-0
+      Key: zodiachero
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-6719393501405841992-0
+      Key: herooverlay
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-5777591743218655479-0
+      Key: signature
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-9026021821122947810-0
+      Key: claimedreward
+      TypeKey: Panel
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-8259650719715906439-0
+      Key: claimedreward/labelbackground
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-4243291545588120361-0
+      Key: claimedreward/claimedlabel
+      TypeKey: TMPText
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-8396578229081021506-0
+      Key: claimedreward/rewardicon
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-5271679055868170249-0
+      Key: claimedreward/rewardamount
+      TypeKey: TMPText
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-4059220154240718499-0
+      Key: rewardlist
+      TypeKey: ScrollView
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-2861489164986175515-0
+      Key: rewardlist/content
+      TypeKey: Panel
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-6764507525885524462-0
+      Key: rewardlist/content/headerbackground
+      TypeKey: FillColor
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-770368039993481965-0
+      Key: rewardlist/content/summaryicon
+      TypeKey: Image
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-5346586255971057517-0
+      Key: rewardlist/content/summary
+      TypeKey: TMPText
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-6456415976135033120-0
+      Key: senderinfo
+      TypeKey: Panel
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-3963390540635044851-0
+      Key: senderinfo/sendertitle
+      TypeKey: TMPText
+      IsContainer: 0
+    - GlobalObjectId: GlobalObjectId_V1-1-bee9094b41acd844d981531acac60bf4-3469270952372366351-0
+      Key: senderinfo/senderavatar
+      TypeKey: Image
+      IsContainer: 0
+--- !u!1 &4585267131603955274
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1808525016863980815}
+  - component: {fileID: 1420962617008573627}
+  - component: {fileID: 7598115865294035963}
+  m_Layer: 0
+  m_Name: RewardAmount
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1808525016863980815
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4585267131603955274}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &1420962617008573627
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4585267131603955274}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 23
+  mLayerType: 22
+  sourceLayerName: RewardAmount.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &7598115865294035963
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4585267131603955274}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 1420962617008573627}
+--- !u!1 &4616438242434743635
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5014950729652006126}
+  - component: {fileID: 124269228967209013}
+  - component: {fileID: 1259465657269224074}
+  m_Layer: 0
+  m_Name: LabelBackground
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5014950729652006126
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4616438242434743635}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6834875678442304815}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &124269228967209013
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4616438242434743635}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 7
+  mLayerType: 1
+  sourceLayerName: LabelBackground.img.sliced
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &1259465657269224074
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4616438242434743635}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 124269228967209013}
+--- !u!1 &4686149047577179967
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3629032107434486047}
+  - component: {fileID: 8020526882876475117}
+  m_Layer: 0
+  m_Name: PanelBackground
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &3629032107434486047
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4686149047577179967}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6834875678442304815}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &8020526882876475117
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4686149047577179967}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 6
+  mLayerType: 1
+  sourceLayerName: PanelBackground.bg.sliced
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 101
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!1 &4795646370558396265
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5509754504988457854}
+  - component: {fileID: 7720628888012558355}
+  - component: {fileID: 1202992352970494024}
+  m_Layer: 0
+  m_Name: Rank01Icon
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5509754504988457854
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4795646370558396265}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &7720628888012558355
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4795646370558396265}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 28
+  mLayerType: 1
+  sourceLayerName: Rank01Icon.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &1202992352970494024
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4795646370558396265}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 7720628888012558355}
+--- !u!1 &5266784054175188644
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5660262579175021378}
+  - component: {fileID: 9028930546982073749}
+  - component: {fileID: 7418876392504758418}
+  m_Layer: 0
+  m_Name: Summary
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5660262579175021378
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5266784054175188644}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 7380455585166806982}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &9028930546982073749
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5266784054175188644}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 36
+  mLayerType: 22
+  sourceLayerName: Summary.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &7418876392504758418
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5266784054175188644}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 9028930546982073749}
+--- !u!1 &5920447356989103300
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5358690087352941181}
+  - component: {fileID: 3539422041327185155}
+  - component: {fileID: 3361871452351480893}
+  m_Layer: 0
+  m_Name: SenderTitle
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5358690087352941181
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5920447356989103300}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 8004119641188767383}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3539422041327185155
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5920447356989103300}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 40
+  mLayerType: 22
+  sourceLayerName: SenderTitle.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &3361871452351480893
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5920447356989103300}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 3539422041327185155}
+--- !u!1 &6072827990758187369
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4441460546757392519}
+  - component: {fileID: 3597971234319571771}
+  - component: {fileID: 8165238107822405793}
+  m_Layer: 0
+  m_Name: RankItem01
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &4441460546757392519
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6072827990758187369}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 6088258241246692611}
+  - {fileID: 1808525016863980815}
+  - {fileID: 5312233131831496364}
+  - {fileID: 7870399811982600343}
+  - {fileID: 5114697073129480589}
+  - {fileID: 2097573504487047826}
+  - {fileID: 5509754504988457854}
+  - {fileID: 3699328494192648856}
+  - {fileID: 6364250529560591019}
+  - {fileID: 2050566781857137177}
+  m_Father: {fileID: 1896023229319694271}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3597971234319571771
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6072827990758187369}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 32
+  mLayerType: 18
+  sourceLayerName: RankItem01.panel
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 17
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &8165238107822405793
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6072827990758187369}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9a7e9c0a0128433fafdc088b97d4aee9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PanelHelper
+  background: {fileID: 0}
+--- !u!1 &6312408765472141388
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2097573504487047826}
+  - component: {fileID: 3411082337918065126}
+  - component: {fileID: 3947801476743172255}
+  m_Layer: 0
+  m_Name: LuckyKingLabel
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &2097573504487047826
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6312408765472141388}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3411082337918065126
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6312408765472141388}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 27
+  mLayerType: 22
+  sourceLayerName: LuckyKingLabel.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &3947801476743172255
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6312408765472141388}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 3411082337918065126}
+--- !u!1 &6437382499965102207
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7653928130106603836}
+  - component: {fileID: 7749454764911291026}
+  - component: {fileID: 5392472552163327752}
+  m_Layer: 0
+  m_Name: RewardIcon
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &7653928130106603836
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6437382499965102207}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6834875678442304815}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &7749454764911291026
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6437382499965102207}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 9
+  mLayerType: 1
+  sourceLayerName: RewardIcon.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &5392472552163327752
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6437382499965102207}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 7749454764911291026}
+--- !u!1 &6840415989217988927
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5578581480040537962}
+  - component: {fileID: 212784352743537461}
+  - component: {fileID: 6532156672114076947}
+  m_Layer: 0
+  m_Name: RedPacketForeground
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5578581480040537962
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6840415989217988927}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &212784352743537461
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6840415989217988927}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 0
+  mLayerType: 1
+  sourceLayerName: RedPacketForeground.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &6532156672114076947
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6840415989217988927}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 212784352743537461}
+--- !u!1 &7230810492484206824
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 767074342234538313}
+  - component: {fileID: 8552663816848966483}
+  - component: {fileID: 5550943683618359231}
+  m_Layer: 0
+  m_Name: SenderAvatar
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &767074342234538313
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7230810492484206824}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 8004119641188767383}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &8552663816848966483
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7230810492484206824}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 41
+  mLayerType: 1
+  sourceLayerName: SenderAvatar.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &5550943683618359231
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7230810492484206824}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 8552663816848966483}
+--- !u!1 &7358098714956507377
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 355570710439799514}
+  - component: {fileID: 8025672336506662218}
+  - component: {fileID: 2366607618674001197}
+  m_Layer: 0
+  m_Name: SummaryIcon
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &355570710439799514
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7358098714956507377}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 7380455585166806982}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &8025672336506662218
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7358098714956507377}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 35
+  mLayerType: 1
+  sourceLayerName: SummaryIcon.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &2366607618674001197
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7358098714956507377}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 8025672336506662218}
+--- !u!1 &7564308973951722606
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5883222013534816019}
+  - component: {fileID: 957162419512168885}
+  - component: {fileID: 5586063870202790146}
+  m_Layer: 0
+  m_Name: RewardList
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5883222013534816019
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7564308973951722606}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 8710720094226637577}
+  - {fileID: 7380455585166806982}
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &957162419512168885
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7564308973951722606}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 38
+  mLayerType: 18
+  sourceLayerName: RewardList.sv
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 9
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &5586063870202790146
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7564308973951722606}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fd736ea222764a2689168d2def75b8b7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ScrollViewHelper
+  background: {fileID: 3964666155290748055}
+  viewport: {fileID: 228483836880999060}
+  horizontalBarBG: {fileID: 0}
+  horizontalBar: {fileID: 0}
+  verticalBarBG: {fileID: 0}
+  verticalBar: {fileID: 0}
+--- !u!1 &7986149782530774661
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7735563715890393989}
+  - component: {fileID: 3825015540925737991}
+  - component: {fileID: 6605379432178091379}
+  m_Layer: 0
+  m_Name: ClaimedLabel
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &7735563715890393989
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7986149782530774661}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6834875678442304815}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3825015540925737991
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7986149782530774661}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 8
+  mLayerType: 22
+  sourceLayerName: ClaimedLabel.txt.tmp
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 12
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &6605379432178091379
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7986149782530774661}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 745f1d5886ac417b9a40204e99248124, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.TMPTextHelper
+  text: {fileID: 3825015540925737991}
+--- !u!1 &8073381571829716238
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3239125012234249750}
+  - component: {fileID: 6532784129833865971}
+  - component: {fileID: 8986061955257209002}
+  m_Layer: 0
+  m_Name: HeaderBackground
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &3239125012234249750
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8073381571829716238}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 7380455585166806982}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &6532784129833865971
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8073381571829716238}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 34
+  mLayerType: 1
+  sourceLayerName: HeaderBackground.col
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 11
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &8986061955257209002
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8073381571829716238}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a5627955972e4d6aa69d15198d1948f6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.FillColorHelper
+  fillColor: {fileID: 6532784129833865971}
+--- !u!1 &8633959458107339325
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 349300675502482592}
+  - component: {fileID: 7200096171315604043}
+  - component: {fileID: 3191302487434849721}
+  m_Layer: 0
+  m_Name: RedPacketBackground
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &349300675502482592
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8633959458107339325}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1504164180276421430}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &7200096171315604043
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8633959458107339325}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 1
+  mLayerType: 1
+  sourceLayerName: RedPacketBackground.img
+  markToExport: 1
+  generatedNodeId: 
+  UIType: 1
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &3191302487434849721
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8633959458107339325}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dc0bc0d688a44f68173684326dcf9ee, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.ImageHelper
+  image: {fileID: 7200096171315604043}
+--- !u!1 &9144999671106385050
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6088258241246692611}
+  - component: {fileID: 4036492588478274529}
+  - component: {fileID: 4633468536145151106}
+  m_Layer: 0
+  m_Name: PlayerInfo
+  m_TagString: EditorOnly
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &6088258241246692611
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9144999671106385050}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 2840806855695648563}
+  - {fileID: 999499916020121840}
+  - {fileID: 2355745549312714081}
+  - {fileID: 8695424170378521908}
+  m_Father: {fileID: 4441460546757392519}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &4036492588478274529
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9144999671106385050}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d5dc4709a6a4333b6883deca07ce767, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PsdLayerNode
+  BindPsdLayerIndex: 22
+  mLayerType: 18
+  sourceLayerName: PlayerInfo.panel
+  markToExport: 0
+  generatedNodeId: 
+  UIType: 17
+  collapseChildrenForGeneration: 0
+  textSourceBindPsdLayerIndex: -1
+--- !u!114 &4633468536145151106
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9144999671106385050}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9a7e9c0a0128433fafdc088b97d4aee9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: cn.efunstudio.psd2ugui::UGF.EditorTools.Psd2UGUI.PanelHelper
+  background: {fileID: 0}
