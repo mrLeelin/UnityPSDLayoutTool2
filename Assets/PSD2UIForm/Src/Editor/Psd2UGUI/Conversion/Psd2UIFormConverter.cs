@@ -482,6 +482,14 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private void OnSceneGUI(SceneView view)
         {
+            if ((Object)(object)_owner == (Object)null)
+            {
+                if (_attached)
+                {
+                    Detach();
+                }
+                return;
+            }
             Event current = Event.current;
             if (current == null || (int)current.type != 1 || current.button != 0)
             {
@@ -614,6 +622,14 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private void OnHierarchyWindowItemGUI(int value, Rect rect)
         {
+            if ((Object)(object)_owner == (Object)null)
+            {
+                if (_attached)
+                {
+                    Detach();
+                }
+                return;
+            }
             if (Event.current == null)
             {
                 return;
@@ -734,8 +750,9 @@ namespace UGF.EditorTools.Psd2UGUI
             }
             // 注意：这里刻意**不**释放 _psdDocument。
             // 生成物里的 PsdLayerNode 一直持有该文档的 PsdLayer（预览渲染依赖它），
-            // 而 Detach 会在"Inspector 失去选中 / PrefabStage 关闭"时发生，
-            // 此时释放文档会让下一个被选中的 PsdLayerNode 在首次渲染时 NRE。
+            // 而 Detach 会在 PrefabStage 关闭时发生，
+            // 此时释放文档会让仍然存在的 PsdLayerNode 在首次渲染时 NRE。
+            // （Inspector 失去选中已不再 Detach，否则 Hierarchy 勾选框/UIType 下拉会消失。）
             // 真正释放走 Dispose()（壳销毁时）。
         }
 
@@ -938,7 +955,7 @@ namespace UGF.EditorTools.Psd2UGUI
                     }
                     for (int num = value2.transform.childCount - 1; num >= 0; num--)
                     {
-                        Object.DestroyImmediate((Object)(object)value2.transform.GetChild(num).gameObject);
+                        Object.DestroyImmediate((Object)(object)value2.transform.GetChild(num).gameObject, true);
                     }
                     int num2 = psdDocument.GetLayerCount();
                     int num3 = 0;
@@ -1650,7 +1667,14 @@ namespace UGF.EditorTools.Psd2UGUI
             EditorUtility.DisplayProgressBar($"解析PSD({value4}/{Mathf.Max(1, value5)})", "正在解析图层:" + value.GetLayerName(), (value5 > 0) ? ((float)value4 / (float)value5) : 1f);
             int num = (((PsdLayer)value).IsGroup ? (value3 + value.GetLayerRecordSpan() - 1) : value3);
             PsdLayerNode psdLayerNode = CreateLayerNode(value, num);
-            ((Component)psdLayerNode).transform.SetParent((Transform)value2);
+            Transform nodeTransform = ((Component)psdLayerNode).transform;
+            Transform parentTransform = (Transform)value2;
+            // new GameObject() 创建在主场景；Prefab Stage 里 SetParent 前必须先移到父节点所在场景
+            if (nodeTransform.gameObject.scene != parentTransform.gameObject.scene)
+            {
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(nodeTransform.gameObject, parentTransform.gameObject.scene);
+            }
+            nodeTransform.SetParent(parentTransform);
             ((Component)psdLayerNode).transform.localPosition = Vector3.zero;
             if (((PsdLayer)value).Childs != null && ((PsdLayer)value).Childs.Length != 0)
             {
@@ -2088,6 +2112,7 @@ namespace UGF.EditorTools.Psd2UGUI
             }
             if ((array4 == null || array4.Length < 1) && value.PrefabReferenceRoots.Count < 1)
             {
+                Debug.LogError((object)"生成UIForm失败: 节点树中没有可生成的 UI 控件（无 UIHelper 组件且无引用 Prefab）。请检查图层 UI 类型是否已正确设置，或先执行「解析psd图层」。");
                 return false;
             }
             GameObject val = AssetDatabase.LoadAssetAtPath<GameObject>(text);

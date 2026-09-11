@@ -103,9 +103,9 @@ namespace Psd2UIForm.Tests
                 Assert.That(editor.IsDocumentLoaded(), Is.True);
                 Assert.That(node.GetBoundPsdLayer(), Is.Not.Null, "Attach 应把子节点重新绑定到文档图层");
 
-                // 模拟"从 converter 根切到某个图层节点"：converter 的 Inspector 失去选中 -> Detach。
-                // 此时若释放文档，新选中的 PsdLayerNode 在首次渲染时会 NullReferenceException
-                // （PsdBinaryReader.get_Position），这就是用户报的那个 NRE。
+                // 模拟 PrefabStage 关闭时的 Detach（Inspector 失去选中已不再 Detach）。
+                // 此时若释放文档，仍存在的 PsdLayerNode 在首次渲染时会 NullReferenceException
+                // （PsdBinaryReader.get_Position）。
                 editor.Detach();
                 Assert.That(editor.IsDocumentLoaded(), Is.True,
                     "Detach 不得释放 PSD 文档：节点仍持有该文档的 PsdLayer");

@@ -713,7 +713,21 @@ namespace UGF.EditorTools.Psd2UGUI
             UGUIParseRule uGUIParseRule = FindRule(uiType);
             if (uGUIParseRule != null && !string.IsNullOrWhiteSpace(uGUIParseRule.UIHelper))
             {
-                return Type.GetType(uGUIParseRule.UIHelper);
+                string typeName = uGUIParseRule.UIHelper;
+                Type type = Type.GetType(typeName);
+                if (type == null)
+                {
+                    // Type.GetType 不带程序集名只搜调用方程序集；Helper 类在 Runtime 程序集里。
+                    foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        type = assembly.GetType(typeName);
+                        if (type != null)
+                        {
+                            break;
+                        }
+                    }
+                }
+                return type;
             }
             return null;
         }

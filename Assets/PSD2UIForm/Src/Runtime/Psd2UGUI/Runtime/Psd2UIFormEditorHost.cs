@@ -66,8 +66,9 @@ namespace UGF.EditorTools.Psd2UGUI
 		void DetachConverter(Psd2UIFormConverter converter);
 
 		// 壳被销毁时的彻底清理（摘回调 + 释放 PSD 文档）。
-		// 与 DetachConverter 分开：Detach 会在 Inspector 失去选中/PrefabStage 关闭时发生，
+		// 与 DetachConverter 分开：Detach 会在 PrefabStage 关闭时发生，
 		// 那时不能释放文档，否则仍然存在的 PsdLayerNode 首次渲染会 NRE。
+		// Inspector 失去选中不走 Detach，否则 Hierarchy 勾选框/UIType 下拉会消失。
 		void DisposeConverter(Psd2UIFormConverter converter);
 
 		// 壳的 OnDrawGizmos 转发：Gizmos 只能由 MonoBehaviour 消息触发，

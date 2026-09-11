@@ -73,7 +73,10 @@ namespace UGF.EditorTools.Psd2UGUI
         private void OnDisable()
         {
             ScriptableSingleton<Psd2UIFormSettings>.SaveInstance();
-            targetEditor?.Detach();
+            // 这里刻意不 Detach：
+            // 选中子节点（PsdLayerNode）会触发本回调；若在此摘除 hierarchyWindowItemOnGUI，
+            // Hierarchy 右侧的导出勾选框与 UIType 下拉会立刻消失。
+            // 真正摘除回调的时机是 PrefabStageClosing / 壳 OnDestroy（Dispose）。
         }
 
         public override void OnInspectorGUI()
