@@ -8,7 +8,8 @@ using PsdLayerExtensionsNamespace;
 using AssetNameSanitizerNamespace;
 using UnityEditor;
 using UnityEditor.SceneManagement;
-using UnityEngine;
+using UnityEngine;
+
 using Object = UnityEngine.Object;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -18,10 +19,139 @@ using PathCompatibilityUtilityNamespace;
 
 namespace UGF.EditorTools.Psd2UGUI
 {
-    [ExecuteInEditMode]
-    [RequireComponent(typeof(SpriteRenderer))]
-    public sealed class Psd2UIFormConverter : MonoBehaviour
+    /// <summary>
+    /// PSD 生成物的生成期逻辑（Editor 程序集）。
+    ///
+    /// 拆分后 MonoBehaviour 身份与序列化状态都在运行期壳 <see cref="Psd2UIFormConverter"/> 上，
+    /// 本类只持有该壳的引用，并把壳的序列化字段与组件成员转发进来，因此原方法体基本无需改动。
+    /// 挂接/摘除/绘制 Gizmos 由壳的同名消息经 Psd2UIFormEditorHost 门面触发，
+    /// 保证触发时机与拆分前完全一致。
+    /// </summary>
+    internal sealed class Psd2UIFormConverterEditor
     {
+        private readonly Psd2UIFormConverter _owner;
+
+        private bool _attached;
+
+        private static Psd2UIFormConverterEditor s_Instance;
+
+        internal Psd2UIFormConverterEditor(Psd2UIFormConverter owner)
+        {
+            _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+        }
+
+        internal Psd2UIFormConverter Owner => _owner;
+
+        /// <summary>
+        /// 当前场景/Stage 中那个 converter 壳对应的逻辑对象。
+        /// 按壳实例缓存，使 _psdDocument 与引用索引等实例状态不会每次访问被重建。
+        /// 壳被销毁后 Unity 的 == 会把它判为 null，因此这里返回 null。
+        /// </summary>
+        internal static Psd2UIFormConverterEditor Instance => GetOrCreate(Psd2UIFormConverter.Instance);
+
+        internal static Psd2UIFormConverterEditor GetOrCreate(Psd2UIFormConverter owner)
+        {
+            if ((Object)(object)owner == (Object)null)
+            {
+                s_Instance = null;
+                return null;
+            }
+            Psd2UIFormConverterEditor editor = s_Instance;
+            if (editor == null || (Object)(object)editor._owner != (Object)(object)owner)
+            {
+                editor = new Psd2UIFormConverterEditor(owner);
+                s_Instance = editor;
+            }
+            return editor;
+        }
+
+        // ---- 壳的组件成员转发 ----
+
+        internal GameObject gameObject => _owner.gameObject;
+
+        internal Transform transform => _owner.transform;
+
+        internal T GetComponent<T>()
+        {
+            return _owner.GetComponent<T>();
+        }
+
+        internal T[] GetComponents<T>()
+        {
+            return _owner.GetComponents<T>();
+        }
+
+        internal T[] GetComponentsInChildren<T>()
+        {
+            return _owner.GetComponentsInChildren<T>();
+        }
+
+        internal T[] GetComponentsInChildren<T>(bool includeInactive)
+        {
+            return _owner.GetComponentsInChildren<T>(includeInactive);
+        }
+
+        internal bool TryGetComponent<T>(out T component)
+        {
+            return _owner.TryGetComponent<T>(out component);
+        }
+
+        // ---- 壳的序列化字段转发（字段名与拆分前一致，序列化不变） ----
+
+        internal string psdAssetChangeTime
+        {
+            get { return _owner.psdAssetChangeTime; }
+            set { _owner.psdAssetChangeTime = value; }
+        }
+
+        internal string uiFormName
+        {
+            get { return _owner.uiFormName; }
+            set { _owner.uiFormName = value; }
+        }
+
+        internal Sprite psdAsset
+        {
+            get { return _owner.psdAsset; }
+            set { _owner.psdAsset = value; }
+        }
+
+        internal Sprite previewSprite
+        {
+            get { return _owner.previewSprite; }
+            set { _owner.previewSprite = value; }
+        }
+
+        internal string psdAssetPath
+        {
+            get { return _owner.psdAssetPath; }
+            set { _owner.psdAssetPath = value; }
+        }
+
+        internal bool drawLayerRectGizmos
+        {
+            get { return _owner.drawLayerRectGizmos; }
+            set { _owner.drawLayerRectGizmos = value; }
+        }
+
+        internal Color drawLayerRectGizmosColor
+        {
+            get { return _owner.drawLayerRectGizmosColor; }
+            set { _owner.drawLayerRectGizmosColor = value; }
+        }
+
+        internal bool preferSmallestLayerOnScenePick
+        {
+            get { return _owner.preferSmallestLayerOnScenePick; }
+            set { _owner.preferSmallestLayerOnScenePick = value; }
+        }
+
+        internal List<GeneratedMetadataSerializedEntry> generatedMetadataEntries
+        {
+            get { return _owner.generatedMetadataEntries; }
+            set { _owner.generatedMetadataEntries = value; }
+        }
+
         [Serializable]
         private sealed class GeneratedMetadataCollection
         {
@@ -35,53 +165,6 @@ namespace UGF.EditorTools.Psd2UGUI
             }
 
             internal static GeneratedMetadataCollection GetObfuscationSentinel()
-            {
-                return s_ObfuscationSentinel;
-            }
-        }
-
-        [Serializable]
-        private sealed class GeneratedMetadataEntry
-        {
-            public string GlobalObjectId;
-
-            public string Key;
-
-            public string TypeKey;
-
-            public bool IsContainer;
-
-            internal static GeneratedMetadataEntry s_ObfuscationSentinel;
-
-            internal static bool IsObfuscationSentinelNull()
-            {
-                return s_ObfuscationSentinel == null;
-            }
-
-            internal static GeneratedMetadataEntry GetObfuscationSentinel()
-            {
-                return s_ObfuscationSentinel;
-            }
-        }
-
-        [Serializable]
-        private sealed class GeneratedMetadataSerializedEntry
-        {
-            public string PrefabAssetPath;
-
-            [HideInInspector]
-            public string Json;
-
-            public List<GeneratedMetadataEntry> Entries = new List<GeneratedMetadataEntry>();
-
-            internal static GeneratedMetadataSerializedEntry s_ObfuscationSentinel;
-
-            internal static bool IsObfuscationSentinelNull()
-            {
-                return s_ObfuscationSentinel == null;
-            }
-
-            internal static GeneratedMetadataSerializedEntry GetObfuscationSentinel()
             {
                 return s_ObfuscationSentinel;
             }
@@ -239,44 +322,6 @@ namespace UGF.EditorTools.Psd2UGUI
             }
         }
 
-        [CompilerGenerated]
-        private static Psd2UIFormConverter s_Instance;
-
-        [ReadOnlyFieldAttribute]
-        [SerializeField]
-        internal string psdAssetChangeTime;
-
-        [Tooltip("UIForm名字")]
-        [SerializeField]
-        private string uiFormName;
-
-        [SerializeField]
-        [Tooltip("关联的psd文件")]
-        private Sprite psdAsset;
-
-        [HideInInspector]
-        [SerializeField]
-        private Sprite previewSprite;
-
-        [SerializeField]
-        [HideInInspector]
-        private string psdAssetPath;
-
-        [SerializeField]
-        [Header("Debug:")]
-        private bool drawLayerRectGizmos = true;
-
-        [SerializeField]
-        private Color drawLayerRectGizmosColor = Color.gray;
-
-        [SerializeField]
-        [Tooltip("Scene点选时，优先选中命中区域内面积最小的图层节点")]
-        private bool preferSmallestLayerOnScenePick = true;
-
-        [HideInInspector]
-        [SerializeField]
-        private List<GeneratedMetadataSerializedEntry> generatedMetadataEntries = new List<GeneratedMetadataSerializedEntry>();
-
         private PsdDocument _psdDocument;
 
         private GUIStyle uiTypeLabelStyle;
@@ -290,22 +335,6 @@ namespace UGF.EditorTools.Psd2UGUI
         private readonly HashSet<string> _referencedAssetKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private readonly HashSet<string> _prefabExportsInProgress = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        internal static Psd2UIFormConverter s_Psd2UIFormConverterObfuscationSentinel;
-
-        internal static Psd2UIFormConverter Instance
-        {
-            [CompilerGenerated]
-            get
-            {
-                return s_Instance;
-            }
-            [CompilerGenerated]
-            private set
-            {
-                s_Instance = value;
-            }
-        }
 
         [SpecialName]
         internal bool IsDocumentLoaded()
@@ -363,9 +392,13 @@ namespace UGF.EditorTools.Psd2UGUI
             return Vector2Int.zero;
         }
 
-        private void OnEnable()
+        internal void Attach()
         {
-            Instance = this;
+            if (_attached)
+            {
+                return;
+            }
+            _attached = true;
             uiTypeLabelStyle = new GUIStyle();
             uiTypeLabelStyle.fontSize = 13;
             uiTypeLabelStyle.fontStyle = (FontStyle)3;
@@ -380,18 +413,19 @@ namespace UGF.EditorTools.Psd2UGUI
             EditorApplication.hierarchyWindowItemOnGUI = (EditorApplication.HierarchyWindowItemCallback)Delegate.Combine((Delegate)(object)EditorApplication.hierarchyWindowItemOnGUI, (Delegate)new EditorApplication.HierarchyWindowItemCallback(OnHierarchyWindowItemGUI));
         }
 
-        private void Start()
+        /// <summary>原 MonoBehaviour.Start 的行为，由壳的 Start 经门面转发，保持时机与拆分前一致。</summary>
+        internal void LoadDocument()
         {
             LoadDocumentAndRebindNodes();
         }
 
-        private void OnDrawGizmos()
+        internal void DrawGizmos()
         {
             if (!drawLayerRectGizmos)
             {
                 return;
             }
-            PsdLayerNode[] componentsInChildren = ((Component)this).GetComponentsInChildren<PsdLayerNode>();
+            PsdLayerNode[] componentsInChildren = GetComponentsInChildren<PsdLayerNode>();
             PsdLayerNode psdLayerNode = null;
             Gizmos.color = drawLayerRectGizmosColor;
             GameObject activeGameObject = Selection.activeGameObject;
@@ -435,7 +469,7 @@ namespace UGF.EditorTools.Psd2UGUI
             if (val2.Raycast(val, out num))
             {
                 Vector3 point = val.GetPoint(num);
-                PsdLayerNode psdLayerNode = (preferSmallestLayerOnScenePick ? FindSmallestNodeAtPoint(point, ((Component)this).transform) : FindTopmostNodeAtPoint(point, ((Component)this).transform));
+                PsdLayerNode psdLayerNode = (preferSmallestLayerOnScenePick ? FindSmallestNodeAtPoint(point, this.transform) : FindTopmostNodeAtPoint(point, this.transform));
                 if ((Object)(object)psdLayerNode != (Object)null)
                 {
                     Selection.activeGameObject = ((Component)psdLayerNode).gameObject;
@@ -561,7 +595,7 @@ namespace UGF.EditorTools.Psd2UGUI
             }
             GameObject val = HierarchyIdToGameObject(value);
             PsdLayerNode layerNode = default(PsdLayerNode);
-            if ((Object)(object)val == (Object)null || (Object)(object)val == (Object)(object)((Component)this).gameObject || !val.TryGetComponent<PsdLayerNode>(out layerNode))
+            if ((Object)(object)val == (Object)null || (Object)(object)val == (Object)(object)gameObject || !val.TryGetComponent<PsdLayerNode>(out layerNode))
             {
                 return;
             }
@@ -665,8 +699,13 @@ namespace UGF.EditorTools.Psd2UGUI
             }
         }
 
-        private void OnDestroy()
+        internal void Detach()
         {
+            if (!_attached)
+            {
+                return;
+            }
+            _attached = false;
             SceneView.duringSceneGui -= OnSceneGUI;
             EditorApplication.hierarchyWindowItemOnGUI = (EditorApplication.HierarchyWindowItemCallback)Delegate.Remove((Delegate)(object)EditorApplication.hierarchyWindowItemOnGUI, (Delegate)new EditorApplication.HierarchyWindowItemCallback(OnHierarchyWindowItemGUI));
             if (_psdDocument != null)
@@ -700,7 +739,7 @@ namespace UGF.EditorTools.Psd2UGUI
                     EditorUtility.ClearProgressBar();
                 }
             }
-            PsdLayerNode[] componentsInChildren = ((Component)this).GetComponentsInChildren<PsdLayerNode>(true);
+            PsdLayerNode[] componentsInChildren = GetComponentsInChildren<PsdLayerNode>(true);
             for (int i = 0; i < componentsInChildren.Length; i++)
             {
                 componentsInChildren[i].RebindPsdDocument(_psdDocument);
@@ -772,7 +811,7 @@ namespace UGF.EditorTools.Psd2UGUI
             PrefabStageUtility.OpenPrefab((string)((!val.Empty()) ? AssetDatabase.GUIDToAssetPath(val) : value));
         }
 
-        internal static bool CreateOrUpdateEditorPrefabFromPsd(object text3, Psd2UIFormConverter value2 = null, bool enabled = false, bool enabled2 = true)
+        internal static bool CreateOrUpdateEditorPrefabFromPsd(object text3, Psd2UIFormConverterEditor value2 = null, bool enabled = false, bool enabled2 = true)
         {
             text3 = NormalizeAssetPath(text3);
             if (!string.IsNullOrWhiteSpace((string)text3) && File.Exists((string)text3))
@@ -796,22 +835,22 @@ namespace UGF.EditorTools.Psd2UGUI
                 }
                 string text = BuildEditorPrefabPath(text3);
                 string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(text);
-                bool flag = (Object)(object)value2 == (Object)null;
-                if (!((Object)(object)value2 != (Object)null))
+                bool flag = value2 == null;
+                if (value2 == null)
                 {
-                    Psd2UIFormConverter value = CreateConverterRoot(fileNameWithoutExtension);
-                    if (!((Object)(object)value == (Object)null))
+                    Psd2UIFormConverterEditor value = Psd2UIFormConverterEditor.GetOrCreate(CreateConverterRoot(fileNameWithoutExtension));
+                    if (value != null)
                     {
                         value.psdAssetChangeTime = GetFileTimestampUtc(text3);
                         value.SetSourcePsdAsset((string)text3);
                         if (RebuildLayerNodesFromPsd(text3, value, enabled))
                         {
-                            ((Object)((Component)value).gameObject).name = Path.GetFileNameWithoutExtension(text);
+                            value.gameObject.name = Path.GetFileNameWithoutExtension(text);
                             bool flag2 = default(bool);
-                            PrefabUtility.SaveAsPrefabAsset(((Component)value).gameObject, text, out flag2);
+                            PrefabUtility.SaveAsPrefabAsset(value.gameObject, text, out flag2);
                             if (flag)
                             {
-                                Object.DestroyImmediate((Object)(object)((Component)value).gameObject);
+                                Object.DestroyImmediate((Object)(object)value.gameObject);
                             }
                             AssetDatabase.Refresh();
                             Stage currentStage = StageUtility.GetCurrentStage();
@@ -825,7 +864,7 @@ namespace UGF.EditorTools.Psd2UGUI
                         }
                         if (flag)
                         {
-                            Object.DestroyImmediate((Object)(object)((Component)value).gameObject);
+                            Object.DestroyImmediate((Object)(object)value.gameObject);
                         }
                         return false;
                     }
@@ -838,10 +877,10 @@ namespace UGF.EditorTools.Psd2UGUI
             return false;
         }
 
-        private static bool RebuildLayerNodesFromPsd(object value, object value2, bool enabled = false)
+        private static bool RebuildLayerNodesFromPsd(object value, Psd2UIFormConverterEditor value2, bool enabled = false)
         {
             EditorUtility.DisplayProgressBar("解析PSD", "正在解析" + (string)value, 0f);
-            Dictionary<string, NodeTypeSnapshot> dictionary = (enabled ? ((Psd2UIFormConverter)value2).CaptureNodeTypeSnapshots() : null);
+            Dictionary<string, NodeTypeSnapshot> dictionary = (enabled ? value2.CaptureNodeTypeSnapshots() : null);
             try
             {
                 using (PsdDocument psdDocument = PsdDocument.Create((string)value))
@@ -852,9 +891,9 @@ namespace UGF.EditorTools.Psd2UGUI
                         Debug.LogError((object)("解析PSD失败: PSD未包含可解析的图层树。文件: " + (string)value));
                         return false;
                     }
-                    for (int num = ((Component)value2).transform.childCount - 1; num >= 0; num--)
+                    for (int num = value2.transform.childCount - 1; num >= 0; num--)
                     {
-                        Object.DestroyImmediate((Object)(object)((Component)((Component)value2).transform.GetChild(num)).gameObject);
+                        Object.DestroyImmediate((Object)(object)value2.transform.GetChild(num).gameObject);
                     }
                     int num2 = psdDocument.GetLayerCount();
                     int num3 = 0;
@@ -863,29 +902,29 @@ namespace UGF.EditorTools.Psd2UGUI
                     {
                         if (psdLayer != null)
                         {
-                            BuildLayerNodeTreeRecursive(psdLayer, ((Component)value2).transform, ref num4, ref num3, num2);
+                            BuildLayerNodeTreeRecursive(psdLayer, value2.transform, ref num4, ref num3, num2);
                         }
                     }
-                    ((Psd2UIFormConverter)value2).RefreshPreviewSprite(psdDocument, (string)value);
+                    value2.RefreshPreviewSprite(psdDocument, (string)value);
                 }
-                ((Psd2UIFormConverter)value2).psdAssetChangeTime = GetFileTimestampUtc(value);
-                if (((Psd2UIFormConverter)value2)._psdDocument != null)
+                value2.psdAssetChangeTime = GetFileTimestampUtc(value);
+                if (value2._psdDocument != null)
                 {
-                    ((Psd2UIFormConverter)value2)._psdDocument.Dispose();
-                    ((Psd2UIFormConverter)value2)._psdDocument = null;
+                    value2._psdDocument.Dispose();
+                    value2._psdDocument = null;
                 }
-                ((Psd2UIFormConverter)value2).LoadDocumentAndRebindNodes();
+                value2.LoadDocumentAndRebindNodes();
                 if (enabled)
                 {
-                    ((Psd2UIFormConverter)value2).RestoreNodeTypeSnapshots(dictionary);
+                    value2.RestoreNodeTypeSnapshots(dictionary);
                 }
-                ((Psd2UIFormConverter)value2).NormalizeGroupGenerationState();
-                PsdLayerNode[] componentsInChildren = ((Component)value2).GetComponentsInChildren<PsdLayerNode>(true);
+                value2.NormalizeGroupGenerationState();
+                PsdLayerNode[] componentsInChildren = value2.GetComponentsInChildren<PsdLayerNode>(true);
                 for (int j = 0; j < componentsInChildren.Length; j++)
                 {
                     componentsInChildren[j].SynchronizeHelperComponent();
                 }
-                EditorUtility.SetDirty((Object)(object)((Component)value2).gameObject);
+                EditorUtility.SetDirty((Object)(object)value2.gameObject);
                 return true;
             }
             catch (Exception ex)
@@ -1532,13 +1571,13 @@ namespace UGF.EditorTools.Psd2UGUI
             }
             if ((Object)(object)obj != (Object)(object)previewSprite)
             {
-                EditorUtility.SetDirty((Object)(object)this);
+                EditorUtility.SetDirty((Object)(object)_owner);
             }
         }
 
         private void SyncPreviewSpriteRenderer()
         {
-            (((Component)this).gameObject.GetComponent<SpriteRenderer>() ?? ((Component)this).gameObject.AddComponent<SpriteRenderer>()).sprite = GetPreviewSprite();
+            (gameObject.GetComponent<SpriteRenderer>() ?? gameObject.AddComponent<SpriteRenderer>()).sprite = GetPreviewSprite();
         }
 
         private static Psd2UIFormConverter CreateConverterRoot(object value)
@@ -1623,7 +1662,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal void NormalizeGroupGenerationState()
         {
-            PsdLayerNode[] componentsInChildren = ((Component)this).GetComponentsInChildren<PsdLayerNode>(true);
+            PsdLayerNode[] componentsInChildren = GetComponentsInChildren<PsdLayerNode>(true);
             if (componentsInChildren == null || componentsInChildren.Length == 0)
             {
                 return;
@@ -1673,7 +1712,7 @@ namespace UGF.EditorTools.Psd2UGUI
         internal void RefreshAllHelperComponents()
         {
             NormalizeGroupGenerationState();
-            PsdLayerNode[] componentsInChildren = ((Component)this).GetComponentsInChildren<PsdLayerNode>(true);
+            PsdLayerNode[] componentsInChildren = GetComponentsInChildren<PsdLayerNode>(true);
             if (componentsInChildren == null || componentsInChildren.Length == 0)
             {
                 return;
@@ -1788,7 +1827,7 @@ namespace UGF.EditorTools.Psd2UGUI
         internal void ExportMarkedLayerImages()
         {
             RebuildReferenceCaches();
-            IEnumerable<PsdLayerNode> enumerable = from node in ((Component)this).GetComponentsInChildren<PsdLayerNode>()
+            IEnumerable<PsdLayerNode> enumerable = from node in GetComponentsInChildren<PsdLayerNode>()
                 where node.ShouldExportImage()
                 select node;
             string path = GetImageExportDirectory();
@@ -1816,7 +1855,7 @@ namespace UGF.EditorTools.Psd2UGUI
         {
             if (!ScriptableSingleton<Psd2UIFormSettings>.Instance.UseUIFormOutputDir || !string.IsNullOrWhiteSpace(ScriptableSingleton<Psd2UIFormSettings>.Instance.UIFormOutputDir))
             {
-                Transform transform = ((Component)this).transform;
+                Transform transform = this.transform;
                 if ((Object)(object)layerNode != (Object)null)
                 {
                     transform = ((Component)layerNode).transform;
@@ -1923,7 +1962,7 @@ namespace UGF.EditorTools.Psd2UGUI
             }
             LoadDocumentAndRebindNodes();
             string text = Path.Combine(text4, uiFormName + ".prefab");
-            if ((Object)(object)transform3 == (Object)(object)((Component)this).transform && File.Exists(text))
+            if ((Object)(object)transform3 == (Object)(object)_owner.transform && File.Exists(text))
             {
                 switch (EditorUtility.DisplayDialogComplex("警告", "prefab文件已存在, 请选择生成方式:" + text, "覆盖生成(不丢失引用)", "取消", "重新生成"))
                 {
@@ -2026,9 +2065,9 @@ namespace UGF.EditorTools.Psd2UGUI
             ((Object)val2).name = uiFormName;
             HashSet<string> hashSet = new HashSet<string>(StringComparer.Ordinal);
             value.ScopedNodePath = null;
-            if ((Object)(object)transform3 != (Object)(object)((Component)this).transform)
+            if ((Object)(object)transform3 != (Object)(object)_owner.transform)
             {
-                value.ScopedNodePath = BuildNormalizedNodePath(((Component)transform3).gameObject, ((Component)this).transform);
+                value.ScopedNodePath = BuildNormalizedNodePath(((Component)transform3).gameObject, this.transform);
                 if (!string.IsNullOrEmpty(value.ScopedNodePath))
                 {
                     CollectGeneratedKeyIdentities(val2.transform, hashSet, (PsdGeneratedKey generatedKey) => !IsKeyWithinScope(generatedKey.Key, value.ScopedNodePath));
@@ -2050,17 +2089,17 @@ namespace UGF.EditorTools.Psd2UGUI
                 if (!((Object)(object)uIHelperBase2 == (Object)null) && !((Object)(object)uIHelperBase2.GetLayerNode() == (Object)null))
                 {
                     EditorUtility.DisplayProgressBar($"生成UIFrom:({num3++}/{num4})", "正在生成UI元素:" + ((Object)uIHelperBase2).name, (float)num3 / (float)num4);
-                    string text2 = BuildNormalizedNodePath(((Component)uIHelperBase2).gameObject, ((Component)this).transform);
+                    string text2 = BuildNormalizedNodePath(((Component)uIHelperBase2).gameObject, this.transform);
                     string[] array7;
-                    string[] array6 = GetAncestorContainerPaths(((Component)uIHelperBase2).gameObject, ((Component)this).transform, out array7);
+                    string[] array6 = GetAncestorContainerPaths(((Component)uIHelperBase2).gameObject, this.transform, out array7);
                     GameObject val4 = ResolveOrCreateContainerHierarchy(val2, array6, array7, hashSet);
                     GameObject val5 = FindReusableGeneratedObject(val4.transform, uIHelperBase2, text2);
                     GameObject val6 = uIHelperBase2.CreateOrUpdateUIRoot(val5);
                     if (!((Object)(object)val6 == (Object)null))
                     {
                         ApplyGeneratedKey(val6, text2, uIHelperBase2.GetLayerNode().UIType.ToString(), false, hashSet);
-                        RemoveRedundantButtonVisualDependencies(val6, uIHelperBase2, ((Component)this).transform);
-                        TagButtonTextDependencies(val6, uIHelperBase2, ((Component)this).transform, hashSet);
+                        RemoveRedundantButtonVisualDependencies(val6, uIHelperBase2, this.transform);
+                        TagButtonTextDependencies(val6, uIHelperBase2, this.transform, hashSet);
                         val6.transform.SetParent(val4.transform, true);
                         CopySiblingIndex(val6.transform, ((Component)uIHelperBase2).transform);
                         Transform transform = val6.transform;
@@ -2088,9 +2127,9 @@ namespace UGF.EditorTools.Psd2UGUI
                         Debug.LogWarning((object)("引用prefab未找到且导出失败: " + item.GetPrefabReferenceName()));
                         continue;
                     }
-                    string text3 = BuildNormalizedNodePath(((Component)item).gameObject, ((Component)this).transform);
+                    string text3 = BuildNormalizedNodePath(((Component)item).gameObject, this.transform);
                     string[] array9;
-                    string[] array8 = GetAncestorContainerPaths(((Component)item).gameObject, ((Component)this).transform, out array9);
+                    string[] array8 = GetAncestorContainerPaths(((Component)item).gameObject, this.transform, out array9);
                     GameObject val8 = ResolveOrCreateContainerHierarchy(val2, array8, array9, hashSet);
                     GameObject val9 = FindReusablePrefabReferenceInstance(val8.transform, item, text3, val7);
                     if ((Object)(object)val9 == (Object)null)
@@ -2364,14 +2403,14 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private void PersistMetadataChanges()
         {
-            EditorUtility.SetDirty((Object)(object)this);
-            PrefabUtility.RecordPrefabInstancePropertyModifications((Object)(object)this);
-            if ((Object)(object)((Component)this).gameObject != (Object)null)
+            EditorUtility.SetDirty((Object)(object)_owner);
+            PrefabUtility.RecordPrefabInstancePropertyModifications((Object)(object)_owner);
+            if ((Object)(object)gameObject != (Object)null)
             {
-                Scene scene = ((Component)this).gameObject.scene;
+                Scene scene = gameObject.scene;
                 if (scene.IsValid())
                 {
-                    EditorSceneManager.MarkSceneDirty(((Component)this).gameObject.scene);
+                    EditorSceneManager.MarkSceneDirty(gameObject.scene);
                 }
             }
             AssetDatabase.SaveAssets();
@@ -2379,7 +2418,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal string GetMetadataOwnerPath()
         {
-            string assetPath = AssetDatabase.GetAssetPath((Object)(object)((Component)this).gameObject);
+            string assetPath = AssetDatabase.GetAssetPath((Object)(object)gameObject);
             if (string.IsNullOrWhiteSpace(assetPath))
             {
                 return "<Scene Object>";
@@ -3003,7 +3042,7 @@ namespace UGF.EditorTools.Psd2UGUI
         private Dictionary<string, NodeTypeSnapshot> CaptureNodeTypeSnapshots()
         {
             Dictionary<string, NodeTypeSnapshot> dictionary = new Dictionary<string, NodeTypeSnapshot>(StringComparer.OrdinalIgnoreCase);
-            PsdLayerNode[] componentsInChildren = ((Component)this).GetComponentsInChildren<PsdLayerNode>(true);
+            PsdLayerNode[] componentsInChildren = GetComponentsInChildren<PsdLayerNode>(true);
             foreach (PsdLayerNode psdLayerNode in componentsInChildren)
             {
                 string text = BuildSourceLayerIdentityPath(psdLayerNode);
@@ -3024,7 +3063,7 @@ namespace UGF.EditorTools.Psd2UGUI
             {
                 return;
             }
-            PsdLayerNode[] componentsInChildren = ((Component)this).GetComponentsInChildren<PsdLayerNode>(true);
+            PsdLayerNode[] componentsInChildren = GetComponentsInChildren<PsdLayerNode>(true);
             foreach (PsdLayerNode psdLayerNode in componentsInChildren)
             {
                 string text = BuildSourceLayerIdentityPath(psdLayerNode);
@@ -3041,7 +3080,7 @@ namespace UGF.EditorTools.Psd2UGUI
             {
                 List<string> list = new List<string>();
                 Transform val = ((Component)layerNode).transform;
-                while ((Object)(object)val != (Object)null && (Object)(object)val != (Object)(object)((Component)this).transform)
+                while ((Object)(object)val != (Object)null && (Object)(object)val != (Object)(object)_owner.transform)
                 {
                     PsdLayerNode component = ((Component)val).GetComponent<PsdLayerNode>();
                     if ((Object)(object)component != (Object)null)
@@ -3371,7 +3410,7 @@ namespace UGF.EditorTools.Psd2UGUI
             _referencedAssetKeys.Clear();
             if (layerNodes == null || layerNodes.Length == 0)
             {
-                layerNodes = ((Component)this).GetComponentsInChildren<PsdLayerNode>(true);
+                layerNodes = GetComponentsInChildren<PsdLayerNode>(true);
             }
             PsdLayerNode[] array = layerNodes;
             foreach (PsdLayerNode psdLayerNode in array)
@@ -4455,14 +4494,5 @@ namespace UGF.EditorTools.Psd2UGUI
             return Path.Combine(ScriptableSingleton<Psd2UIFormSettings>.Instance.UIImagesOutputDir, uiFormName);
         }
 
-        internal static bool IsPsd2UIFormConverterObfuscationSentinelNull()
-        {
-            return (object)s_Psd2UIFormConverterObfuscationSentinel == null;
-        }
-
-        internal static Psd2UIFormConverter GetPsd2UIFormConverterObfuscationSentinel()
-        {
-            return s_Psd2UIFormConverterObfuscationSentinel;
-        }
     }
 }

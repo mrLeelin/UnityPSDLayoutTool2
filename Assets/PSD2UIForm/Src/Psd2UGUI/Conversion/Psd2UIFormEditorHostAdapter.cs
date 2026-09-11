@@ -128,12 +128,32 @@ namespace UGF.EditorTools.Psd2UGUI
 
 		public bool HasConverterInstance()
 		{
-			return (Object)(object)Psd2UIFormConverter.Instance != (Object)null;
+			return (Object)(object)Psd2UIFormConverterEditor.Instance != (Object)null;
+		}
+
+		public void AttachConverter(Psd2UIFormConverter converter)
+		{
+			Psd2UIFormConverterEditor.GetOrCreate(converter)?.Attach();
+		}
+
+		public void DetachConverter(Psd2UIFormConverter converter)
+		{
+			Psd2UIFormConverterEditor.GetOrCreate(converter)?.Detach();
+		}
+
+		public void DrawConverterGizmos(Psd2UIFormConverter converter)
+		{
+			Psd2UIFormConverterEditor.GetOrCreate(converter)?.DrawGizmos();
+		}
+
+		public void LoadConverterDocument(Psd2UIFormConverter converter)
+		{
+			Psd2UIFormConverterEditor.GetOrCreate(converter)?.LoadDocument();
 		}
 
 		public void RefreshAllHelperComponents()
 		{
-			Psd2UIFormConverter converter = Psd2UIFormConverter.Instance;
+			Psd2UIFormConverterEditor converter = Psd2UIFormConverterEditor.Instance;
 			if ((Object)(object)converter != (Object)null)
 			{
 				converter.RefreshAllHelperComponents();
@@ -142,13 +162,13 @@ namespace UGF.EditorTools.Psd2UGUI
 
 		public string GetSourcePsdAssetPath()
 		{
-			return Psd2UIFormConverter.Instance?.GetSourcePsdAssetPath();
+			return Psd2UIFormConverterEditor.Instance?.GetSourcePsdAssetPath();
 		}
 
 		public string GetPsdAssetChangeTime()
 		{
-			Psd2UIFormConverter converter = Psd2UIFormConverter.Instance;
-			if ((Object)(object)converter == (Object)null)
+			Psd2UIFormConverterEditor converter = Psd2UIFormConverterEditor.Instance;
+			if (converter == null)
 			{
 				return null;
 			}
@@ -157,8 +177,8 @@ namespace UGF.EditorTools.Psd2UGUI
 
 		public PsdLayerNode FindNodeByReferenceKey(string key)
 		{
-			Psd2UIFormConverter converter = Psd2UIFormConverter.Instance;
-			if ((Object)(object)converter == (Object)null)
+			Psd2UIFormConverterEditor converter = Psd2UIFormConverterEditor.Instance;
+			if (converter == null)
 			{
 				return null;
 			}

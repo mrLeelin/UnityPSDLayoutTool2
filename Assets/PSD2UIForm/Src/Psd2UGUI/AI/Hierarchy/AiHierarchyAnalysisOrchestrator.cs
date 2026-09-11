@@ -57,7 +57,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                 }
             }
 
-            private readonly Psd2UIFormConverter _converter;
+            private readonly Psd2UIFormConverterEditor _converter;
 
             private readonly AiJobContext _jobContext;
 
@@ -69,7 +69,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
             internal static TemporaryHierarchyNormalizationScope s_ObfuscationSentinel;
 
-            private TemporaryHierarchyNormalizationScope(Psd2UIFormConverter value, AiJobContext value2, GameObject gameObject, List<DetachedNodeRecord> values)
+            private TemporaryHierarchyNormalizationScope(Psd2UIFormConverterEditor value, AiJobContext value2, GameObject gameObject, List<DetachedNodeRecord> values)
             {
                 _converter = value;
                 _jobContext = value2;
@@ -123,7 +123,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                             }
                         }
                         AiJobFileStore.LogDebug(aiJobContext, $"Temporarily detached {list.Count} inactive source-bound node roots before local structure normalization.");
-                        return new TemporaryHierarchyNormalizationScope((Psd2UIFormConverter)value2, (AiJobContext)aiJobContext, val, list);
+                        return new TemporaryHierarchyNormalizationScope((Psd2UIFormConverterEditor)value2, (AiJobContext)aiJobContext, val, list);
                     }
                     return null;
                 }
@@ -193,7 +193,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                             {
                                 return null;
                             }
-                            return ((Component)_converter).transform;
+                            return _converter.transform;
                         }
                         return val;
                     }
@@ -201,7 +201,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                 }
                 if ((Object)(object)_converter != (Object)null)
                 {
-                    return ((Component)_converter).transform;
+                    return _converter.transform;
                 }
                 return null;
             }
@@ -291,11 +291,11 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
         private sealed class ConverterAiJobListener : IAiJobListener
         {
-            private readonly Psd2UIFormConverter _converter;
+            private readonly Psd2UIFormConverterEditor _converter;
 
             internal static ConverterAiJobListener s_ObfuscationSentinel;
 
-            internal ConverterAiJobListener(Psd2UIFormConverter value)
+            internal ConverterAiJobListener(Psd2UIFormConverterEditor value)
             {
                 _converter = value;
             }
@@ -402,8 +402,8 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
             {
                 string text2 = Directory.GetParent(Application.dataPath).FullName;
                 string text = GetAiJobsRootPath(text2);
-                AiJobContext aiJobContext = _jobManager.CreateJobContext(cliProvider.GetProviderId(), text, ((Psd2UIFormConverter)value2).GetSourcePsdAssetPath());
-                if (!new AiAnalysisPackageBuilder().TryBuildAnalysisPackage((Psd2UIFormConverter)value2, aiJobContext, out var treeHash, out result))
+                AiJobContext aiJobContext = _jobManager.CreateJobContext(cliProvider.GetProviderId(), text, ((Psd2UIFormConverterEditor)value2).GetSourcePsdAssetPath());
+                if (!new AiAnalysisPackageBuilder().TryBuildAnalysisPackage((Psd2UIFormConverterEditor)value2, aiJobContext, out var treeHash, out result))
                 {
                     return false;
                 }
@@ -413,7 +413,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                     providerId = cliProvider.GetProviderId(),
                     createdAtUtc = DateTime.UtcNow.ToString("o"),
                     projectPath = text2.Replace("\\", "/"),
-                    psdAssetPath = (((Psd2UIFormConverter)value2).GetSourcePsdAssetPath() ?? string.Empty),
+                    psdAssetPath = (((Psd2UIFormConverterEditor)value2).GetSourcePsdAssetPath() ?? string.Empty),
                     converterPath = (AssetDatabase.GetAssetPath((Object)(object)((Component)value2).gameObject) ?? string.Empty),
                     analysisPackageVersion = "4.0",
                     recognitionCombinedVersion = "2.0",
@@ -428,7 +428,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                 bool flag = ShouldUseVisibleCliExecution(cliProvider, uGUIParser.GetAiProviderConfig());
                 AiJobFileStore.WriteJsonAtomic(aiJobContext.MetaPath, value);
                 AiJobFileStore.LogDebug(aiJobContext, "Workflow prepared. provider=" + cliProvider.GetProviderId() + ", projectRoot=" + text2 + ", recognitionPrompt=" + text3);
-                _jobManager.StartJob(aiJobContext, cliProvider, new ConverterAiJobListener((Psd2UIFormConverter)value2), delegate(AiJobContext jobContext, CancellationToken cancellationToken)
+                _jobManager.StartJob(aiJobContext, cliProvider, new ConverterAiJobListener((Psd2UIFormConverterEditor)value2), delegate(AiJobContext jobContext, CancellationToken cancellationToken)
                 {
                     ExecuteRecognitionWorkflow(jobContext, cliProvider, text2, cancellationToken, text3, flag);
                 });
@@ -450,7 +450,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
             {
                 if (!_jobManager.HasActiveJobs())
                 {
-                    AiJobContext aiJobContext = CreateJobContextForSourceAsset(Directory.GetParent(Application.dataPath).FullName, ((Psd2UIFormConverter)value).GetSourcePsdAssetPath());
+                    AiJobContext aiJobContext = CreateJobContextForSourceAsset(Directory.GetParent(Application.dataPath).FullName, ((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath());
                     if (TryLoadLatestPatch(value, aiJobContext, out var aiPatchDocument, out result))
                     {
                         if (aiPatchDocument != null && aiPatchDocument.operations != null && aiPatchDocument.operations.Count >= 1)
@@ -780,8 +780,8 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                 result2 = Directory.GetParent(Application.dataPath).FullName;
                 string text = GetAiJobsRootPath(result2);
                 AiJobManager aiJobManager = new AiJobManager();
-                result = aiJobManager.CreateJobContext(((IAiCliProvider)value2).GetProviderId(), text, ((Psd2UIFormConverter)value).GetSourcePsdAssetPath());
-                if (!new AiAnalysisPackageBuilder().TryBuildAnalysisPackage((Psd2UIFormConverter)value, result, out result4, out result5))
+                result = aiJobManager.CreateJobContext(((IAiCliProvider)value2).GetProviderId(), text, ((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath());
+                if (!new AiAnalysisPackageBuilder().TryBuildAnalysisPackage((Psd2UIFormConverterEditor)value, result, out result4, out result5))
                 {
                     return false;
                 }
@@ -791,7 +791,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                     providerId = ((IAiCliProvider)value2).GetProviderId(),
                     createdAtUtc = DateTime.UtcNow.ToString("o"),
                     projectPath = result2.Replace("\\", "/"),
-                    psdAssetPath = (((Psd2UIFormConverter)value).GetSourcePsdAssetPath() ?? string.Empty),
+                    psdAssetPath = (((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath() ?? string.Empty),
                     converterPath = (AssetDatabase.GetAssetPath((Object)(object)((Component)value).gameObject) ?? string.Empty),
                     analysisPackageVersion = "4.0",
                     recognitionCombinedVersion = "2.0",
@@ -1127,9 +1127,9 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                         }
                         if (string.IsNullOrWhiteSpace(text) || string.Equals(text, result.treeHash, StringComparison.OrdinalIgnoreCase))
                         {
-                            if (!string.IsNullOrWhiteSpace(text2) && !AreAssetPathsEqual(text2, ((Psd2UIFormConverter)value).GetSourcePsdAssetPath()))
+                            if (!string.IsNullOrWhiteSpace(text2) && !AreAssetPathsEqual(text2, ((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath()))
                             {
-                                result2 = "AI 结果属于 PSD '" + text2 + "'，当前面板绑定 PSD 为 '" + ((Psd2UIFormConverter)value).GetSourcePsdAssetPath() + "'。请切换到对应面板或重新执行 AI 自动识别修正。";
+                                result2 = "AI 结果属于 PSD '" + text2 + "'，当前面板绑定 PSD 为 '" + ((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath() + "'。请切换到对应面板或重新执行 AI 自动识别修正。";
                                 result = null;
                                 return false;
                             }
@@ -1250,7 +1250,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                 AiJobFileStore.WriteJsonAtomic(((AiJobContext)value2).PatchPath, (AiPatchDocument)value3);
             }
             AiPatchLocalNormalizer.AddMissingSetUiTypeOperations(value, value3);
-            if (new AiPatchApplier().ApplyPatch((Psd2UIFormConverter)value, (AiPatchDocument)value3, out result))
+            if (new AiPatchApplier().ApplyPatch((Psd2UIFormConverterEditor)value, (AiPatchDocument)value3, out result))
             {
                 if (!enabled)
                 {
@@ -1258,7 +1258,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                 }
                 using (TemporaryHierarchyNormalizationScope.DetachInactiveSourceBoundNodes(value, value2))
                 {
-                    if (!((Psd2UIFormConverter)value).RunLocalNormalization(true, out string text2))
+                    if (!((Psd2UIFormConverterEditor)value).RunLocalNormalization(true, out string text2))
                     {
                         result = text2;
                         return false;

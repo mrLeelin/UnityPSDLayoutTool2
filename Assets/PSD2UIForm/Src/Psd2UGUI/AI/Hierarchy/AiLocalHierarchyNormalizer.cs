@@ -47,13 +47,13 @@ namespace AiLocalHierarchyNormalizerNamespace
                 }
                 try
                 {
-                    ((Psd2UIFormConverter)value).NormalizeGroupGenerationState();
+                    ((Psd2UIFormConverterEditor)value).NormalizeGroupGenerationState();
                     PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
                     if (componentsInChildren != null && componentsInChildren.Length != 0)
                     {
                         MoveDependencyNodesToOwners(componentsInChildren, result, enabled);
                         FlattenEmptyNullGroups(value, result, enabled);
-                        ((Psd2UIFormConverter)value).RefreshAllHelperComponents();
+                        ((Psd2UIFormConverterEditor)value).RefreshAllHelperComponents();
                         EditorUtility.SetDirty((Object)(object)((Component)value).gameObject);
                         return true;
                     }

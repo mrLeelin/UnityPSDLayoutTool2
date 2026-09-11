@@ -15,7 +15,7 @@ namespace UGF.EditorTools.Psd2UGUI
     /// 从 <see cref="PsdLayerNode"/> 搬出的编辑器侧实现。
     ///
     /// 原因：这些成员依赖只能存在于编辑器程序集中的类型（PsdRenderedImage / PsdLayerRenderer /
-    /// PsdTextureAssetUtility / Psd2UIFormConverter），而 PsdLayerNode 必须位于运行期程序集中。
+    /// PsdTextureAssetUtility / Psd2UIFormConverterEditor），而 PsdLayerNode 必须位于运行期程序集中。
     /// 方法体与搬迁前逐行一致，只把 <c>this</c> 显式化为首个 <c>PsdLayerNode node</c> 参数，
     /// 因此编辑器行为不变。
     /// </summary>
@@ -63,7 +63,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private static void CollectRenderablePsdLayers(PsdLayerNode value, List<PsdLayer> psdLayers)
         {
-            if ((Object)(object)value == (Object)null || psdLayers == null)
+            if (value == null || psdLayers == null)
             {
                 return;
             }
@@ -212,8 +212,8 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal static string ExportImageAsset(PsdLayerNode node, bool enabled = false, string text10 = null, string text11 = null, bool enabled2 = true, bool enabled3 = false, bool enabled4 = false)
         {
-            Psd2UIFormConverter value = Psd2UIFormConverter.Instance;
-            if ((Object)(object)value != (Object)null && value.TryGetCachedExportPath(node, out var result))
+            Psd2UIFormConverterEditor value = Psd2UIFormConverterEditor.Instance;
+            if (value != null && value.TryGetCachedExportPath(node, out var result))
             {
                 return result;
             }
@@ -221,7 +221,7 @@ namespace UGF.EditorTools.Psd2UGUI
             string text = null;
             string text2 = text10;
             string text3 = text11;
-            if ((Object)(object)value != (Object)null && string.IsNullOrEmpty(text2) && !node.HasAssetReference() && value.TryGetSharedExportTarget(node, out var text4, out var text5))
+            if (value != null && string.IsNullOrEmpty(text2) && !node.HasAssetReference() && value.TryGetSharedExportTarget(node, out var text4, out var text5))
             {
                 text2 = text4;
                 text3 = text5;
@@ -229,7 +229,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 text = text5;
                 enabled = true;
             }
-            if (!enabled4 && node.HasAssetReference() && (Object)(object)value != (Object)null)
+            if (!enabled4 && node.HasAssetReference() && value != null)
             {
                 return value.ResolveOrExportReferencedImage(node, enabled3);
             }
@@ -240,7 +240,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 if (psdRenderedImage != null && !psdRenderedImage.IsEmpty)
                 {
                     bool flag2 = node.UIType != GUIType.FillColor && node.UIType != GUIType.RawImage;
-                    text2 = (string.IsNullOrWhiteSpace(text2) ? Psd2UIFormConverter.Instance.GetImageExportDirectory() : text2);
+                    text2 = (string.IsNullOrWhiteSpace(text2) ? Psd2UIFormConverterEditor.Instance.GetImageExportDirectory() : text2);
                     if (!Directory.Exists(text2))
                     {
                         try
@@ -277,12 +277,12 @@ namespace UGF.EditorTools.Psd2UGUI
                     File.WriteAllBytes(text9, array);
                     result2 = text9;
                     AssetDatabase.Refresh();
-                    Psd2UIFormConverter.ConvertTexturesType(new string[1] { text9 }, flag2 || enabled, psdRenderedImage.IsHighBitDepth);
+                    Psd2UIFormConverterEditor.ConvertTexturesType(new string[1] { text9 }, flag2 || enabled, psdRenderedImage.IsHighBitDepth);
                     if (enabled3)
                     {
-                        Psd2UIFormConverter.EnsureNineSliceBorder(text9);
+                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text9);
                     }
-                    if (flag && (Object)(object)value != (Object)null)
+                    if (flag && value != null)
                     {
                         value.CacheExportPath(string.IsNullOrEmpty(text) ? node.GetNormalizedNodeKey() : text, text9);
                     }
@@ -319,11 +319,11 @@ namespace UGF.EditorTools.Psd2UGUI
             return "PsdLayer";
         }
 
-        private static string EnsureUniqueExportName(PsdLayerNode owner, Psd2UIFormConverter value, string text, bool enabled)
+        private static string EnsureUniqueExportName(PsdLayerNode owner, Psd2UIFormConverterEditor value, string text, bool enabled)
         {
-            if (!((Object)(object)value == (Object)null) && !string.IsNullOrWhiteSpace(text))
+            if (!(value == null) && !string.IsNullOrWhiteSpace(text))
             {
-                PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+                PsdLayerNode[] componentsInChildren = value.gameObject.GetComponentsInChildren<PsdLayerNode>(true);
                 if (componentsInChildren != null && componentsInChildren.Length != 0)
                 {
                     PsdLayerNode[] array = componentsInChildren.Where(delegate(PsdLayerNode node)

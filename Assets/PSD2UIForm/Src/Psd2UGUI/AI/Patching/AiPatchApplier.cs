@@ -41,7 +41,7 @@ namespace AiPatchApplierNamespace
 
         private static AiPatchApplier s_ObfuscationSentinel;
 
-        internal bool ApplyPatch(Psd2UIFormConverter value5, AiPatchDocument aiPatchDocument, out string result)
+        internal bool ApplyPatch(Psd2UIFormConverterEditor value5, AiPatchDocument aiPatchDocument, out string result)
         {
             result = null;
             if ((Object)(object)value5 == (Object)null)
@@ -67,7 +67,7 @@ namespace AiPatchApplierNamespace
                 Undo.IncrementCurrentGroup();
                 int currentGroup = Undo.GetCurrentGroup();
                 Undo.SetCurrentGroupName("Apply AI Patch");
-                Undo.RegisterFullObjectHierarchyUndo((Object)(object)((Component)value5).gameObject, "Apply AI Patch");
+                Undo.RegisterFullObjectHierarchyUndo((Object)(object)value5.gameObject, "Apply AI Patch");
                 for (int i = 0; i < aiPatchDocument.operations.Count; i++)
                 {
                     AiPatchOperation aiPatchOperation = aiPatchDocument.operations[i];
@@ -136,7 +136,7 @@ namespace AiPatchApplierNamespace
                 }
                 RefreshGeneratedGroupBounds(value._generatedLayerNodes);
                 new AiHierarchyStructureValidator().ValidateHierarchy(value5, list);
-                EditorUtility.SetDirty((Object)(object)((Component)value5).gameObject);
+                EditorUtility.SetDirty((Object)(object)value5.gameObject);
                 Undo.CollapseUndoOperations(currentGroup);
                 if (list.Count > 0)
                 {

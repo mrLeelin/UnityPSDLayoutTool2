@@ -910,7 +910,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 {
                     if (enabled)
                     {
-                        Psd2UIFormConverter.EnsureNineSliceBorder(text);
+                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text);
                         if (ScriptableSingleton<Psd2UIFormSettings>.Instance.AutoCropMinimalNineSlice)
                         {
                             RightClickExtension.TryCropMinimalNineSlice(text);

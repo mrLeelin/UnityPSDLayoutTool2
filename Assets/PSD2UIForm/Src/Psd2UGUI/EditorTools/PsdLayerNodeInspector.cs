@@ -51,7 +51,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 }
                 if (flag)
                 {
-                    Psd2UIFormConverter.Instance?.RefreshAllHelperComponents();
+                    Psd2UIFormConverterEditor.Instance?.RefreshAllHelperComponents();
                 }
             }
             EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
@@ -69,11 +69,11 @@ namespace UGF.EditorTools.Psd2UGUI
             EditorGUILayout.EndHorizontal();
             if (targetLogic.IsPrimaryUIType() && GUILayout.Button("生成当前节点UIForm", Array.Empty<GUILayoutOption>()))
             {
-                Psd2UIFormConverter.Instance.ExportUIFormPrefab(targetLogic);
+                Psd2UIFormConverterEditor.Instance.ExportUIFormPrefab(targetLogic);
             }
             if (GUILayout.Button("导出Prefab", Array.Empty<GUILayoutOption>()))
             {
-                Psd2UIFormConverter.Instance.ExportReusablePrefab(targetLogic);
+                Psd2UIFormConverterEditor.Instance.ExportReusablePrefab(targetLogic);
             }
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Layer Data", EditorStyles.boldLabel, Array.Empty<GUILayoutOption>());

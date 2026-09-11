@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UGF.EditorTools.Psd2UGUI;
-using UnityEngine;
+using UnityEngine;
+
 using Object = UnityEngine.Object;
 using UiTypeCompatibilityRulesNamespace;
 
@@ -15,14 +16,14 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static AiHierarchyStructureValidator s_ObfuscationSentinel;
 
-        internal void ValidateHierarchy(Psd2UIFormConverter value, List<string> ids)
+        internal void ValidateHierarchy(Psd2UIFormConverterEditor value, List<string> ids)
         {
             if ((Object)(object)value == (Object)null)
             {
                 ids?.Add("Skipped AI structure validation: converter is null.");
                 return;
             }
-            PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+            PsdLayerNode[] componentsInChildren = value.GetComponentsInChildren<PsdLayerNode>(true);
             if (componentsInChildren == null || componentsInChildren.Length < 1)
             {
                 return;

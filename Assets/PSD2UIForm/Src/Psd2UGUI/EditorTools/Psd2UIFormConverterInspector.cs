@@ -2,7 +2,8 @@ using System;
 using System.IO;
 using AiHierarchyAnalysisOrchestratorNamespace;
 using UnityEditor;
-using UnityEngine;
+using UnityEngine;
+
 using Object = UnityEngine.Object;
 using cn.efunstudio.psdreader;
 using PathCompatibilityUtilityNamespace;
@@ -13,6 +14,9 @@ namespace UGF.EditorTools.Psd2UGUI
     internal sealed class Psd2UIFormConverterInspector : Editor
     {
         private Psd2UIFormConverter targetLogic;
+
+        /// <summary>壳对应的生成期逻辑对象（序列化状态在壳上）。</summary>
+        private Psd2UIFormConverterEditor targetEditor;
 
         private GUIContent parsePsd2NodesBt;
 
@@ -44,6 +48,7 @@ namespace UGF.EditorTools.Psd2UGUI
         {
             btHeight = GUILayout.Height(30f);
             targetLogic = ((Editor)this).target as Psd2UIFormConverter;
+            targetEditor = Psd2UIFormConverterEditor.GetOrCreate(targetLogic);
             parsePsd2NodesBt = new GUIContent("解析psd图层", "把psd图层解析为可编辑节点树");
             exportUISpritesBt = new GUIContent("导出Images", "导出勾选的psd图层为碎图");
             aiAutoFixBt = new GUIContent("AI自动识别UI类型", "导出当前节点树和预览图，调用AI自动识别并修正UI类型与结构");
@@ -71,7 +76,7 @@ namespace UGF.EditorTools.Psd2UGUI
         {
             bool flag = false;
             DrawPendingUpdateTip();
-            if (targetLogic.IsDocumentLoaded())
+            if (targetEditor.IsDocumentLoaded())
             {
                 EditorGUILayout.BeginVertical((GUIStyle)("box"), Array.Empty<GUILayoutOption>());
                 if (GUILayout.Button("查看使用文档", Array.Empty<GUILayoutOption>()))
@@ -126,25 +131,25 @@ namespace UGF.EditorTools.Psd2UGUI
                 EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
                 if (GUILayout.Button(parsePsd2NodesBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }) && TryGetKeepExistingUITypeSelection(out var keepExistingUIType))
                 {
-                    Psd2UIFormConverter.CreateOrUpdateEditorPrefabFromPsd(targetLogic.GetSourcePsdAssetPath(), targetLogic, keepExistingUIType);
+                    Psd2UIFormConverterEditor.CreateOrUpdateEditorPrefabFromPsd(targetEditor.GetSourcePsdAssetPath(), targetEditor, keepExistingUIType);
                 }
                 if (GUILayout.Button(exportUISpritesBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }))
                 {
-                    targetLogic.ExportMarkedLayerImages();
+                    targetEditor.ExportMarkedLayerImages();
                 }
                 EditorGUILayout.EndHorizontal();
                 EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
-                if (GUILayout.Button(aiAutoFixBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }) && !AiHierarchyAnalysisOrchestrator.StartRecognitionJob(targetLogic, out var text3))
+                if (GUILayout.Button(aiAutoFixBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }) && !AiHierarchyAnalysisOrchestrator.StartRecognitionJob(targetEditor, out var text3))
                 {
                     EditorUtility.DisplayDialog("AI修正启动失败", text3, "确定");
                 }
-                if (GUILayout.Button(applyAiResultBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }) && !AiHierarchyAnalysisOrchestrator.TryApplyLatestPatchWithUndo(targetLogic, out var text4))
+                if (GUILayout.Button(applyAiResultBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }) && !AiHierarchyAnalysisOrchestrator.TryApplyLatestPatchWithUndo(targetEditor, out var text4))
                 {
                     EditorUtility.DisplayDialog("应用AI结果失败", text4, "确定");
                 }
                 if (GUILayout.Button(normalizeStructureBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }))
                 {
-                    if (!targetLogic.RunLocalNormalization(true, out var text5))
+                    if (!targetEditor.RunLocalNormalization(true, out var text5))
                     {
                         EditorUtility.DisplayDialog("本地归一化失败", text5, "确定");
                     }
@@ -156,7 +161,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 EditorGUILayout.EndHorizontal();
                 if (GUILayout.Button(generateUIFormBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }))
                 {
-                    targetLogic.ExportUIFormPrefab();
+                    targetEditor.ExportUIFormPrefab();
                 }
                 DrawMetadataDebugPanel();
             base.OnInspectorGUI();
@@ -170,7 +175,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 EditorGUILayout.HelpBox("请打开Prefab,进入Psd2UIForm编辑界面后才能操作!", (MessageType)3);
                 if (GUILayout.Button("打开编辑界面", Array.Empty<GUILayoutOption>()))
                 {
-                    Psd2UIFormConverter.OpenEditorPrefab(AssetDatabase.GetAssetPath(((Editor)this).target));
+                    Psd2UIFormConverterEditor.OpenEditorPrefab(AssetDatabase.GetAssetPath(((Editor)this).target));
                 }
             }
         }
@@ -207,8 +212,8 @@ namespace UGF.EditorTools.Psd2UGUI
                 return;
             }
             EditorGUILayout.BeginVertical((GUIStyle)("box"), Array.Empty<GUILayoutOption>());
-            EditorGUILayout.LabelField("数据宿主:", targetLogic.GetMetadataOwnerPath() ?? "<None>", Array.Empty<GUILayoutOption>());
-            string[] array = targetLogic.GetGeneratedMetadataPrefabPaths();
+            EditorGUILayout.LabelField("数据宿主:", targetEditor.GetMetadataOwnerPath() ?? "<None>", Array.Empty<GUILayoutOption>());
+            string[] array = targetEditor.GetGeneratedMetadataPrefabPaths();
             if (array == null || array.Length < 1)
             {
                 metadataDebugShowJson = false;
@@ -220,7 +225,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 metadataDebugSelection = EditorGUILayout.Popup("目标Prefab", metadataDebugSelection, array, Array.Empty<GUILayoutOption>());
                 string text = array[metadataDebugSelection];
                 EditorGUILayout.LabelField("路径:", text, Array.Empty<GUILayoutOption>());
-                string text2 = targetLogic.GetGeneratedMetadataJson(text);
+                string text2 = targetEditor.GetGeneratedMetadataJson(text);
                 EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
                 if (GUILayout.Button(metadataDebugShowJson ? "隐藏内容" : "查看元数据", (GUILayoutOption[])(object)new GUILayoutOption[1] { GUILayout.Width(100f) }))
                 {
@@ -247,12 +252,12 @@ namespace UGF.EditorTools.Psd2UGUI
 
         public override bool HasPreviewGUI()
         {
-            return (Object)(object)targetLogic.GetPreviewSprite() != (Object)null;
+            return (Object)(object)targetEditor.GetPreviewSprite() != (Object)null;
         }
 
         public override void OnPreviewGUI(Rect r, GUIStyle background)
         {
-            GUI.DrawTexture(r, (Texture)(object)targetLogic.GetPreviewSprite().texture, (ScaleMode)2);
+            GUI.DrawTexture(r, (Texture)(object)targetEditor.GetPreviewSprite().texture, (ScaleMode)2);
         }
 
         internal static bool IsPsd2UIFormConverterInspectorObfuscationSentinelNull()

@@ -59,6 +59,21 @@ namespace UGF.EditorTools.Psd2UGUI
 
 		bool HasConverterInstance();
 
+		// Psd2UIFormConverter（运行期壳）的编辑器侧逻辑挂接/摘除，
+		// 由壳的 OnEnable/OnDestroy 触发，保证拆分后触发时机与拆分前完全一致。
+		void AttachConverter(Psd2UIFormConverter converter);
+
+		void DetachConverter(Psd2UIFormConverter converter);
+
+		// 壳的 OnDrawGizmos 转发：Gizmos 只能由 MonoBehaviour 消息触发，
+		// 而绘制体依赖 Selection 等编辑器 API，因此实现在编辑器侧。
+		void DrawConverterGizmos(Psd2UIFormConverter converter);
+
+		// 壳的 Start 转发（原 MonoBehaviour.Start 的行为：无条件重试加载文档）。
+		// 必须与 Attach 分开：CreateConverterRoot 之后 psdAssetPath 才被赋值，
+		// 若在 Attach 里就无条件加载会误报“源文档不存在”。
+		void LoadConverterDocument(Psd2UIFormConverter converter);
+
 		void RefreshAllHelperComponents();
 
 		string GetSourcePsdAssetPath();

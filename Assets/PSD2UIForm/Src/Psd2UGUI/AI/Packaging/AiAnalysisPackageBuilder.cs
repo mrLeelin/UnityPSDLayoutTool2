@@ -95,7 +95,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         internal static AiAnalysisPackageBuilder s_ObfuscationSentinel;
 
-        internal bool TryBuildAnalysisPackage(Psd2UIFormConverter value3, AiJobContext aiJobContext, out string result, out string result2)
+        internal bool TryBuildAnalysisPackage(Psd2UIFormConverterEditor value3, AiJobContext aiJobContext, out string result, out string result2)
         {
             result = string.Empty;
             result2 = null;
@@ -117,7 +117,7 @@ namespace AiAnalysisPackageBuilderNamespace
                             document = BuildDocumentInfo(value3, aiPackagePaths, out value2),
                             config = BuildConfigInfo()
                         };
-                        PsdLayerNode[] componentsInChildren = ((Component)value3).GetComponentsInChildren<PsdLayerNode>(true);
+                        PsdLayerNode[] componentsInChildren = value3.GetComponentsInChildren<PsdLayerNode>(true);
                         Dictionary<PsdLayerNode, string> dictionary = BuildShortIdLookup(componentsInChildren);
                         for (int i = 0; i < componentsInChildren.Length; i++)
                         {
@@ -151,7 +151,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static AiPackagePaths BuildPackagePaths(object value)
         {
-            string text = Path.Combine(AiPathUtility.ResolvePath(Directory.GetParent(Application.dataPath).FullName, "Library/Psd2UIForm/AiShared"), AiPathUtility.SanitizePsdName((!((Object)value != (Object)null)) ? null : ((Psd2UIFormConverter)value).GetSourcePsdAssetPath()));
+            string text = Path.Combine(AiPathUtility.ResolvePath(Directory.GetParent(Application.dataPath).FullName, "Library/Psd2UIForm/AiShared"), AiPathUtility.SanitizePsdName((!((Object)value != (Object)null)) ? null : ((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath()));
             return new AiPackagePaths
             {
                 _packageRootDirectory = text,
@@ -172,7 +172,7 @@ namespace AiAnalysisPackageBuilderNamespace
             int num2 = 0;
             int num3 = 0;
             int num4 = 0;
-            PsdDocument psdDocument = ((Psd2UIFormConverter)value).GetPsdDocument();
+            PsdDocument psdDocument = ((Psd2UIFormConverterEditor)value).GetPsdDocument();
             byte[] array = null;
             if (psdDocument != null)
             {
@@ -180,7 +180,7 @@ namespace AiAnalysisPackageBuilderNamespace
                 num4 = psdDocument.Height;
                 try
                 {
-                    array = Psd2UIFormConverter.RenderDocumentPreviewPng(psdDocument, out value3, out previewTop, out num, out num2);
+                    array = Psd2UIFormConverterEditor.RenderDocumentPreviewPng(psdDocument, out value3, out previewTop, out num, out num2);
                 }
                 catch (Exception ex)
                 {
@@ -195,7 +195,7 @@ namespace AiAnalysisPackageBuilderNamespace
             }
             else
             {
-                Sprite val = ((Psd2UIFormConverter)value).GetPreviewSprite();
+                Sprite val = ((Psd2UIFormConverterEditor)value).GetPreviewSprite();
                 if ((Object)(object)val != (Object)null && (Object)(object)val.texture != (Object)null)
                 {
                     EnsureTexturePng(val.texture, text);
