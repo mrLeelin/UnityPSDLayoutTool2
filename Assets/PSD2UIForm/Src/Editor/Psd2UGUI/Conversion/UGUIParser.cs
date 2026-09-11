@@ -11,13 +11,14 @@ using PsdLayerExtensionsNamespace;
 using AssetNameSanitizerNamespace;
 using TMPro;
 using UnityEditor;
-using UnityEngine;
+using UnityEngine;
 using Object = UnityEngine.Object;
 using UnityEngine.TextCore;
 using UnityEngine.UI;
 using TextGradientColorStopNamespace;
 using PsdTextStyleInfoNamespace;
 using Psd2UIFormPluginPathResolverNamespace;
+using UGF.EditorTools.Psd2UGUI.NineSlice;
 
 namespace UGF.EditorTools.Psd2UGUI
 {
@@ -218,10 +219,6 @@ namespace UGF.EditorTools.Psd2UGUI
 
         [HideInInspector]
         [SerializeField]
-        private int nineSliceBorderTolerance = 5;
-
-        [HideInInspector]
-        [SerializeField]
         private string sharedAssetsOutput = "Assets/SharedUIAssets";
 
         [HideInInspector]
@@ -294,12 +291,6 @@ namespace UGF.EditorTools.Psd2UGUI
         internal AiProviderConfig GetAiProviderConfig()
         {
             return aiProviderConfig ?? (aiProviderConfig = new AiProviderConfig());
-        }
-
-        [SpecialName]
-        internal int GetNineSliceBorderTolerance()
-        {
-            return Mathf.Clamp(nineSliceBorderTolerance, 0, 255);
         }
 
         [SpecialName]
@@ -918,13 +909,14 @@ namespace UGF.EditorTools.Psd2UGUI
         {
             if ((Object)value != (Object)null)
             {
-                string text = ((PsdLayerNode)value).ExportImageAsset(true, (string)null, (string)null, true, false, false);
+                PsdLayerNode node = (PsdLayerNode)value;
+                string text = node.ExportImageAsset(true, (string)null, (string)null, true, false, false);
                 Sprite val = PsdLayerNode.LoadSpriteAtPath(text);
                 if ((Object)(object)val != (Object)null)
                 {
                     if (enabled)
                     {
-                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text);
+                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text, node.GetSourceLayerName());
                         if (ScriptableSingleton<Psd2UIFormSettings>.Instance.AutoCropMinimalNineSlice)
                         {
                             RightClickExtension.TryCropMinimalNineSlice(text);
@@ -937,215 +929,95 @@ namespace UGF.EditorTools.Psd2UGUI
             return null;
         }
 
-        internal static Vector4 CalculateNineSliceBorder(object value, byte value2 = 0, int value3 = -1)
+        /// <summary>
+        /// Calculate nine-slice border using PSDLayoutTool2's triple inference algorithm.
+        /// </summary>
+        internal static Vector4 CalculateNineSliceBorder(Texture2D texture, string layerName = null)
         {
-            if ((Object)value == (Object)null)
+            if (texture == null)
             {
                 return Vector4.zero;
             }
-            int width = ((Texture)value).width;
-            int height = ((Texture)value).height;
-            if (width > 0 && height > 0)
+
+            // 1. Try parse naming rules (compatible with old |sliced tag)
+            Psd2UiNineSliceNameRule rule = null;
+            if (!string.IsNullOrEmpty(layerName))
             {
-                Color32[] pixels = ((Texture2D)value).GetPixels32();
-                byte b = (byte)((value2 == 0) ? 1 : value2);
-                int num = ((value3 >= 0) ? Mathf.Clamp(value3, 0, 255) : ((!((Object)(object)Instance != (Object)null)) ? 5 : Instance.GetNineSliceBorderTolerance()));
-                RectInt val = CalculateOpaqueBounds(pixels, width, height, b);
-                int xMin = val.xMin;
-                int num2 = val.xMax - 1;
-                int yMin = val.yMin;
-                int num3 = val.yMax - 1;
-                RangeInt val2 = FindNineSliceStretchRange(pixels, width, val, true, b, num);
-                RangeInt val3 = FindNineSliceStretchRange(pixels, width, val, false, b, num);
-                bool num4 = val2.length > 1;
-                bool flag = val3.length > 1;
-                int num5 = (num4 ? Mathf.Clamp(val2.start - xMin, 0, Mathf.Max(0, width - 1)) : 0);
-                int num6 = (num4 ? Mathf.Clamp(num2 - (val2.start + val2.length - 1), 0, Mathf.Max(0, width - 1)) : 0);
-                int num7 = (flag ? Mathf.Clamp(val3.start - yMin, 0, Mathf.Max(0, height - 1)) : 0);
-                int num8 = (flag ? Mathf.Clamp(num3 - (val3.start + val3.length - 1), 0, Mathf.Max(0, height - 1)) : 0);
-                return new Vector4((float)num5, (float)num7, (float)num6, (float)num8);
+                // Compatible with old tags
+                if (layerName.Contains("|sliced") || layerName.Contains("|九宫格") ||
+                    layerName.Contains("[sliced]") || layerName.Contains("[九宫格]"))
+                {
+                    rule = new Psd2UiNineSliceNameRule(Psd2UiNineSliceMode.NineSlice, null);
+                }
+                else
+                {
+                    Psd2UiNineSliceNameRules.TryParse(layerName, out rule);
+                }
+
+                // If has explicit border, return directly
+                if (rule != null && rule.HasExplicitBorder)
+                {
+                    var border = rule.ExplicitBorder;
+                    return new Vector4(border.Left, border.Bottom, border.Right, border.Top);
+                }
             }
+
+            // 2. Use triple inference algorithm
+            Psd2UiNineSliceRaster raster = TextureToRaster(texture);
+            Psd2UiNineSliceInference inference;
+
+            if (Psd2UiNineSliceAnalyzer.TryInfer(raster, out inference))
+            {
+                var border = inference.Border;
+
+                #if UNITY_EDITOR
+                Debug.Log($"[Psd2UI NineSlice] {layerName ?? texture.name}: " +
+                          $"Border=({border.Left}, {border.Top}, {border.Right}, {border.Bottom}) " +
+                          $"Method={inference.Method} Confidence={inference.Confidence}");
+                #endif
+
+                return new Vector4(border.Left, border.Bottom, border.Right, border.Top);
+            }
+
+            #if UNITY_EDITOR
+            Debug.LogWarning($"[Psd2UI NineSlice] {layerName ?? texture.name}: " +
+                             "Inference failed - texture may be too small or fully transparent");
+            #endif
+
             return Vector4.zero;
         }
 
-        private static RangeInt FindNineSliceStretchRange(object value, int value2, RectInt value3, bool enabled, byte value4, int value5)
+        /// <summary>
+        /// Convert Unity Texture2D to nine-slice raster data.
+        /// </summary>
+        internal static Psd2UiNineSliceRaster TextureToRaster(Texture2D texture)
         {
-            int num = ((!enabled) ? value3.yMin : value3.xMin);
-            int num2 = ((!enabled) ? (value3.yMax - 1) : (value3.xMax - 1));
-            int num3 = (enabled ? value3.yMin : value3.xMin);
-            int num4 = ((!enabled) ? (value3.xMax - 1) : (value3.yMax - 1));
-            int num5 = num2 - num + 1;
-            int num6 = num4 - num3 + 1;
-            if (num5 >= 3 && num6 > 0)
+            Color32[] pixels = texture.GetPixels32();
+            byte[] bytes = new byte[pixels.Length * 4];
+
+            for (int i = 0; i < pixels.Length; i++)
             {
-                value5 = Mathf.Max(0, value5);
-                int[] array = new int[num6];
-                int[] array2 = new int[num6];
-                int[] array3 = new int[num6];
-                int[] array4 = new int[num6];
-                int[] array5 = new int[num6];
-                int[] array6 = new int[num6];
-                int[] array7 = new int[num6];
-                int[] array8 = new int[num6];
-                int num7 = num + num5 / 2;
-                int num8 = 1;
-                int num9 = int.MaxValue;
-                int num10 = -1;
-                float num11 = float.PositiveInfinity;
-                float num12 = (float)num + (float)(num5 - 1) * 0.5f;
-                for (int i = num + 1; i < num2; i++)
-                {
-                    InitializeNineSliceChannelRanges(value, value2, enabled, i, num3, num4, value4, array, array2, array3, array4, array5, array6, array7, array8);
-                    for (int j = i; j < num2 && (j <= i || TryExtendNineSliceRange(value, value2, enabled, j, num3, num4, value4, value5, array, array2, array3, array4, array5, array6, array7, array8)); j++)
-                    {
-                        int num13 = j - i + 1;
-                        if (num13 <= 1)
-                        {
-                            continue;
-                        }
-                        int num14 = i - num;
-                        int num15 = num2 - j;
-                        if (num14 <= 0 || num15 <= 0)
-                        {
-                            continue;
-                        }
-                        int num16 = Mathf.Abs(num14 - num15);
-                        int num17 = Mathf.Min(num14, num15);
-                        float num18 = Mathf.Abs((float)i + (float)(num13 - 1) * 0.5f - num12);
-                        bool flag = false;
-                        if (num13 > num8)
-                        {
-                            flag = true;
-                        }
-                        else if (num13 == num8)
-                        {
-                            if (num16 < num9)
-                            {
-                                flag = true;
-                            }
-                            else if (num16 == num9)
-                            {
-                                if (num18 < num11 - 0.001f)
-                                {
-                                    flag = true;
-                                }
-                                else if (Mathf.Abs(num18 - num11) <= 0.001f && num17 > num10)
-                                {
-                                    flag = true;
-                                }
-                            }
-                        }
-                        if (flag)
-                        {
-                            num7 = i;
-                            num8 = num13;
-                            num9 = num16;
-                            num10 = num17;
-                            num11 = num18;
-                        }
-                    }
-                }
-                return new RangeInt(num7, num8);
+                bytes[i * 4 + 0] = pixels[i].r;
+                bytes[i * 4 + 1] = pixels[i].g;
+                bytes[i * 4 + 2] = pixels[i].b;
+                bytes[i * 4 + 3] = pixels[i].a;
             }
-            return new RangeInt(num + Mathf.Max(0, num5 / 2), 1);
+
+            return new Psd2UiNineSliceRaster(texture.width, texture.height, bytes);
         }
 
-        private static void InitializeNineSliceChannelRanges(object value, int value2, bool enabled, int value3, int value4, int value5, byte value6, object value7, object value8, object value9, object value10, object value11, object value12, object value13, object value14)
+        /// <summary>
+        /// Backward compatibility: keep old function signature.
+        /// </summary>
+        internal static Vector4 CalculateNineSliceBorder(object value, byte value2 = 0, int value3 = -1)
         {
-            for (int i = value4; i <= value5; i++)
+            if (value == null)
             {
-                Color32 val = ApplyAlphaThreshold(GetNineSliceAxisPixel(value, value2, enabled, value3, i), value6);
-                int num = i - value4;
-                ((int[])value7)[num] = (((int[])value11)[num] = val.r);
-                ((int[])value8)[num] = (((int[])value12)[num] = val.g);
-                ((int[])value9)[num] = (((int[])value13)[num] = val.b);
-                ((int[])value10)[num] = (((int[])value14)[num] = val.a);
+                return Vector4.zero;
             }
-        }
 
-        private static bool TryExtendNineSliceRange(object value, int value2, bool enabled, int value3, int value4, int value5, byte value6, int value7, object value8, object value9, object value10, object value11, object value12, object value13, object value14, object value15)
-        {
-            int num = value4;
-            while (true)
-            {
-                if (num <= value5)
-                {
-                    Color32 val = ApplyAlphaThreshold(GetNineSliceAxisPixel(value, value2, enabled, value3, num), value6);
-                    int num2 = num - value4;
-                    ((int[])value8)[num2] = Mathf.Min(((int[])value8)[num2], (int)val.r);
-                    ((int[])value9)[num2] = Mathf.Min(((int[])value9)[num2], (int)val.g);
-                    ((int[])value10)[num2] = Mathf.Min(((int[])value10)[num2], (int)val.b);
-                    ((int[])value11)[num2] = Mathf.Min(((int[])value11)[num2], (int)val.a);
-                    ((int[])value12)[num2] = Mathf.Max(((int[])value12)[num2], (int)val.r);
-                    ((int[])value13)[num2] = Mathf.Max(((int[])value13)[num2], (int)val.g);
-                    ((int[])value14)[num2] = Mathf.Max(((int[])value14)[num2], (int)val.b);
-                    ((int[])value15)[num2] = Mathf.Max(((int[])value15)[num2], (int)val.a);
-                    if (((int[])value12)[num2] - ((int[])value8)[num2] > value7 || ((int[])value13)[num2] - ((int[])value9)[num2] > value7 || ((int[])value14)[num2] - ((int[])value10)[num2] > value7 || ((int[])value15)[num2] - ((int[])value11)[num2] > value7)
-                    {
-                        break;
-                    }
-                    num++;
-                    continue;
-                }
-                return true;
-            }
-            return false;
-        }
-
-        private static Color32 ApplyAlphaThreshold(Color32 value, byte value2)
-        {
-            if (value.a < value2)
-            {
-                value.r = 0;
-                value.g = 0;
-                value.b = 0;
-            }
-            return value;
-        }
-
-        private static Color32 GetNineSliceAxisPixel(object value, int value2, bool enabled, int value3, int value4)
-        {
-            int num = (enabled ? value3 : value4);
-            int num2 = Mathf.Clamp(((!enabled) ? value3 : value4) * value2 + num, 0, ((Array)value).Length - 1);
-            return ((Color32[])value)[num2];
-        }
-
-        private static RectInt CalculateOpaqueBounds(object value, int value2, int value3, byte value4)
-        {
-            int num = value2;
-            int num2 = value3;
-            int num3 = -1;
-            int num4 = -1;
-            for (int i = 0; i < value3; i++)
-            {
-                for (int j = 0; j < value2; j++)
-                {
-                    if (((Color32[])value)[i * value2 + j].a >= value4)
-                    {
-                        if (j < num)
-                        {
-                            num = j;
-                        }
-                        if (j > num3)
-                        {
-                            num3 = j;
-                        }
-                        if (i < num2)
-                        {
-                            num2 = i;
-                        }
-                        if (i > num4)
-                        {
-                            num4 = i;
-                        }
-                    }
-                }
-            }
-            if (num3 < num || num4 < num2)
-            {
-                return new RectInt(0, 0, value2, value3);
-            }
-            return new RectInt(num, num2, num3 - num + 1, num4 - num2 + 1);
+            // Forward to new implementation (ignore old alphaThreshold and tolerance parameters)
+            return CalculateNineSliceBorder((Texture2D)value, layerName: null);
         }
 
         internal static PsdTextStyleInfo ApplyLegacyTextStyle(object value, object value2)

@@ -280,7 +280,7 @@ namespace UGF.EditorTools.Psd2UGUI
                     Psd2UIFormConverterEditor.ConvertTexturesType(new string[1] { text9 }, flag2 || enabled, psdRenderedImage.IsHighBitDepth);
                     if (enabled3)
                     {
-                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text9);
+                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text9, node.GetSourceLayerName());
                     }
                     if (flag && value != null)
                     {

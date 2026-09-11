@@ -16,6 +16,7 @@ using UnityEngine.UI;
 using cn.efunstudio.psdreader.PsdParser;
 using AiLocalHierarchyNormalizerNamespace;
 using PathCompatibilityUtilityNamespace;
+using UGF.EditorTools.Psd2UGUI.NineSlice;
 
 namespace UGF.EditorTools.Psd2UGUI
 {
@@ -4506,52 +4507,142 @@ namespace UGF.EditorTools.Psd2UGUI
             }
         }
 
-        internal static void EnsureNineSliceBorder(object text)
+        internal static void EnsureNineSliceBorder(string texturePath, string layerName = null)
         {
-            AssetImporter atPath = AssetImporter.GetAtPath((string)text);
-            TextureImporter val = (TextureImporter)(object)((atPath is TextureImporter) ? atPath : null);
-            if (!((Object)(object)val == (Object)null))
+            TextureImporter importer = AssetImporter.GetAtPath(texturePath) as TextureImporter;
+            if (importer == null)
             {
-                bool flag;
-                if (flag = !val.isReadable)
-                {
-                    val.isReadable = true;
-                    ((AssetImporter)val).SaveAndReimport();
-                    AssetImporter atPath2 = AssetImporter.GetAtPath((string)text);
-                    val = (TextureImporter)(object)((atPath2 is TextureImporter) ? atPath2 : null);
-                }
-                if ((Object)(object)val == (Object)null)
-                {
-                    return;
-                }
-                Sprite val2 = PsdLayerNode.LoadSpriteAtPath(text);
-                if ((Object)(object)val2 != (Object)null && val.spriteBorder == Vector4.zero)
-                {
-                    val.spriteBorder = UGUIParser.CalculateNineSliceBorder(val2.texture, 0);
-                    ((AssetImporter)val).SaveAndReimport();
-                }
-                if (flag)
-                {
-                    AssetImporter atPath3 = AssetImporter.GetAtPath((string)text);
-                    val = (TextureImporter)(object)((atPath3 is TextureImporter) ? atPath3 : null);
-                    if ((Object)(object)val != (Object)null)
-                    {
-                        val.isReadable = false;
-                        ((AssetImporter)val).SaveAndReimport();
-                    }
-                }
                 return;
             }
-            Texture2D val3 = AssetDatabase.LoadAssetAtPath<Texture2D>((string)text);
-            Sprite val4 = PsdLayerNode.LoadSpriteAtPath(text);
-            if (!((Object)(object)val3 == (Object)null) && !((Object)(object)val4 == (Object)null) && !(val4.border != Vector4.zero))
+
+            // Ensure readable
+            bool wasReadable = importer.isReadable;
+            if (!wasReadable)
             {
-                Vector4 val5 = UGUIParser.CalculateNineSliceBorder(val3, 0);
-                if (!(val5 == Vector4.zero))
+                importer.isReadable = true;
+                importer.SaveAndReimport();
+            }
+
+            // Load texture
+            Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+            if (texture != null && importer.spriteBorder == Vector4.zero)
+            {
+                // Use new algorithm with layer name
+                Vector4 border = UGUIParser.CalculateNineSliceBorder(texture, layerName);
+
+                if (border != Vector4.zero)
                 {
-                    PsdLayerNode.RecreateSpriteWithBorder(text, val3, val5, out var _);
+                    importer.spriteBorder = border;
+                    importer.SaveAndReimport();
+
+                    // Optional cropping
+                    if (ScriptableSingleton<Psd2UIFormSettings>.Instance.AutoCropMinimalNineSlice)
+                    {
+                        TryCropMinimalNineSlice(texturePath, layerName);
+                    }
                 }
             }
+
+            // Restore readable state
+            if (!wasReadable)
+            {
+                importer.isReadable = false;
+                importer.SaveAndReimport();
+            }
+        }
+
+        /// <summary>
+        /// Backward compatibility: keep old function signature.
+        /// </summary>
+        internal static void EnsureNineSliceBorder(object text)
+        {
+            EnsureNineSliceBorder((string)text, layerName: null);
+        }
+
+        /// <summary>
+        /// Crop texture to minimal nine-slice size using PSDLayoutTool2's cropper.
+        /// </summary>
+        private static bool TryCropMinimalNineSlice(string texturePath, string layerName)
+        {
+            Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+            if (texture == null)
+            {
+                return false;
+            }
+
+            // Parse naming rules
+            Psd2UiNineSliceNameRule rule = null;
+            if (!string.IsNullOrEmpty(layerName))
+            {
+                // Compatible with old tags
+                if (layerName.Contains("|sliced") || layerName.Contains("|九宫格"))
+                {
+                    rule = new Psd2UiNineSliceNameRule(Psd2UiNineSliceMode.NineSlice, null);
+                }
+                else
+                {
+                    Psd2UiNineSliceNameRules.TryParse(layerName, out rule);
+                }
+            }
+
+            if (rule == null)
+            {
+                rule = new Psd2UiNineSliceNameRule(Psd2UiNineSliceMode.NineSlice, null);
+            }
+
+            // Convert to raster
+            Psd2UiNineSliceRaster raster = UGUIParser.TextureToRaster(texture);
+
+            // Use cropping processor
+            Psd2UiNineSliceRaster croppedRaster;
+            Psd2UiNineSliceBorder border;
+            string reason;
+
+            if (Psd2UiNineSliceAutoProcessor.TryProcessRaster(raster, rule, out croppedRaster, out border, out reason))
+            {
+                // Convert back to Texture2D
+                Texture2D croppedTexture = new Texture2D(
+                    croppedRaster.Width,
+                    croppedRaster.Height,
+                    TextureFormat.RGBA32,
+                    false);
+
+                Color32[] croppedPixels = new Color32[croppedRaster.Width * croppedRaster.Height];
+                for (int i = 0; i < croppedPixels.Length; i++)
+                {
+                    croppedPixels[i] = new Color32(
+                        croppedRaster.Pixels[i * 4 + 0],
+                        croppedRaster.Pixels[i * 4 + 1],
+                        croppedRaster.Pixels[i * 4 + 2],
+                        croppedRaster.Pixels[i * 4 + 3]);
+                }
+
+                croppedTexture.SetPixels32(croppedPixels);
+                byte[] pngBytes = croppedTexture.EncodeToPNG();
+                Object.DestroyImmediate(croppedTexture);
+
+                // Write file
+                File.WriteAllBytes(texturePath, pngBytes);
+                AssetDatabase.Refresh();
+
+                // Update border
+                TextureImporter importer = AssetImporter.GetAtPath(texturePath) as TextureImporter;
+                if (importer != null)
+                {
+                    importer.spriteBorder = new Vector4(
+                        border.Left,
+                        border.Bottom,
+                        border.Right,
+                        border.Top);
+                    importer.SaveAndReimport();
+                }
+
+                Debug.Log($"[Psd2UI NineSlice Crop] {texturePath}: Success");
+                return true;
+            }
+
+            Debug.LogWarning($"[Psd2UI NineSlice Crop] {texturePath}: {reason}");
+            return false;
         }
 
         internal static bool CompressImageFile(object value)

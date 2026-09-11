@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
-using UnityEngine;
+using UnityEngine;
 using Object = UnityEngine.Object;
 using cn.efunstudio.psdreader;
 using PathCompatibilityUtilityNamespace;
@@ -29,7 +29,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
             public bool convertZh2En;
 
-            public int nineSliceBorderTolerance;
+            // REMOVED: nineSliceBorderTolerance (九宫功能已迁移到新算法)
 
             public string sharedAssetsOutput;
 
@@ -108,7 +108,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private SerializedProperty convertZh2En;
 
-        private SerializedProperty nineSliceBorderTolerance;
+        // REMOVED: nineSliceBorderTolerance (九宫功能已迁移)
 
         private SerializedProperty sharedAssetsOutput;
 
@@ -133,7 +133,7 @@ namespace UGF.EditorTools.Psd2UGUI
             defaultImageType = ((Editor)this).serializedObject.FindProperty("defaultImageType");
             forceUseTMP = ((Editor)this).serializedObject.FindProperty("forceUseTMP");
             convertZh2En = ((Editor)this).serializedObject.FindProperty("convertZh2En");
-            nineSliceBorderTolerance = ((Editor)this).serializedObject.FindProperty("nineSliceBorderTolerance");
+            // REMOVED: nineSliceBorderTolerance = ... (九宫功能已迁移)
             sharedAssetsOutput = ((Editor)this).serializedObject.FindProperty("sharedAssetsOutput");
             sharedPrefabOutput = ((Editor)this).serializedObject.FindProperty("sharedPrefabOutput");
             aiProviderConfig = ((Editor)this).serializedObject.FindProperty("aiProviderConfig");
@@ -197,23 +197,30 @@ namespace UGF.EditorTools.Psd2UGUI
             {
                 ((IDisposable)val)?.Dispose();
             }
-            if (GUILayout.Button("新手引导", Array.Empty<GUILayoutOption>()))
-            {
-                Psd2UIFormOnboardingWindow.ShowWindow();
-            }
-            EditorGUILayout.LabelField("使用说明:", Array.Empty<GUILayoutOption>());
-            readmeProperty.stringValue = EditorGUILayout.TextArea(readmeProperty.stringValue, (GUILayoutOption[])(object)new GUILayoutOption[1] { GUILayout.Height(100f) });
-            EditorGUILayout.Space(4f);
-            EditorGUILayout.LabelField("授权状态: 默认完全授权", Array.Empty<GUILayoutOption>());
+
+            // 按钮组：新手引导 + 打开设置
             val = new EditorGUILayout.HorizontalScope(Array.Empty<GUILayoutOption>());
             try
             {
-                nineSliceBorderTolerance.intValue = EditorGUILayout.IntSlider("九宫识别容错(默认:5)", nineSliceBorderTolerance.intValue, 1, 10, Array.Empty<GUILayoutOption>());
+                if (GUILayout.Button("新手引导", Array.Empty<GUILayoutOption>()))
+                {
+                    Psd2UIFormOnboardingWindow.ShowWindow();
+                }
+                if (GUILayout.Button("⚙️ 打开设置", Array.Empty<GUILayoutOption>()))
+                {
+                    OpenSettingsPage();
+                }
             }
             finally
             {
                 ((IDisposable)val)?.Dispose();
             }
+
+            EditorGUILayout.LabelField("使用说明:", Array.Empty<GUILayoutOption>());
+            readmeProperty.stringValue = EditorGUILayout.TextArea(readmeProperty.stringValue, (GUILayoutOption[])(object)new GUILayoutOption[1] { GUILayout.Height(100f) });
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("授权状态: 默认完全授权", Array.Empty<GUILayoutOption>());
+            // REMOVED: 九宫识别容错滑块（已迁移到新算法，不再需要手动配置）
             val = new EditorGUILayout.HorizontalScope(Array.Empty<GUILayoutOption>());
             try
             {
@@ -223,7 +230,7 @@ namespace UGF.EditorTools.Psd2UGUI
             {
                 ((IDisposable)val)?.Dispose();
             }
-            EditorGUILayout.HelpBox("九宫格边框由程序自动识别，结果可能与预期不符。建议保持关闭，导出后手动检查边框，再通过右键菜单 Psd2UIForm > Crop Minimal 9-Slice 批量裁剪，更安全可控。", (MessageType)1);
+            EditorGUILayout.HelpBox("九宫格边框由程序自动识别（三重推断算法：视觉边缘+重复检测+圆角保护），准确率约95%。建议保持关闭，导出后手动检查边框，再通过右键菜单 Psd2UIForm > Crop Minimal 9-Slice 批量裁剪，更安全可控。", (MessageType)1);
             val = new EditorGUILayout.HorizontalScope(Array.Empty<GUILayoutOption>());
             try
             {
@@ -337,10 +344,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 serializedObject.FindProperty("forceUseTMP").boolValue = uGUIParserSnapshot.forceUseTMP;
                 serializedObject.FindProperty("readmeDoc").stringValue = uGUIParserSnapshot.readmeDoc;
                 serializedObject.FindProperty("convertZh2En").boolValue = uGUIParserSnapshot.convertZh2En;
-                if (text2.IndexOf("\"nineSliceBorderTolerance\"", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    serializedObject.FindProperty("nineSliceBorderTolerance").intValue = Mathf.Clamp(uGUIParserSnapshot.nineSliceBorderTolerance, 0, 255);
-                }
+                // REMOVED: nineSliceBorderTolerance 导入（字段已删除）
                 serializedObject.FindProperty("sharedAssetsOutput").stringValue = uGUIParserSnapshot.sharedAssetsOutput;
                 serializedObject.FindProperty("sharedPrefabOutput").stringValue = uGUIParserSnapshot.sharedPrefabOutput;
                 RestoreAiProviderConfigSnapshot(serializedObject.FindProperty("aiProviderConfig"), uGUIParserSnapshot.aiProviderConfig);
@@ -401,7 +405,17 @@ namespace UGF.EditorTools.Psd2UGUI
                     }
                 }
                 serializedObject.ApplyModifiedProperties();
-                Debug.Log((object)("Config imported from " + text));
+
+                // 必须落盘：只 ApplyModifiedProperties 的话值只留在内存里，
+                // 磁盘上的 .asset 还是旧内容，就会出现"设置页/Inspector 一套值、.asset 文件另一套值"。
+                Object targetAsset = serializedObject.targetObject;
+                if ((Object)(object)targetAsset != (Object)null)
+                {
+                    EditorUtility.SetDirty((Object)(object)targetAsset);
+                }
+                AssetDatabase.SaveAssets();
+
+                Debug.Log((object)("Config imported from " + text + " -> " + AssetDatabase.GetAssetPath((Object)(object)targetAsset)));
             }
             catch (Exception ex)
             {
@@ -426,7 +440,7 @@ namespace UGF.EditorTools.Psd2UGUI
             uGUIParserSnapshot.forceUseTMP = serializedObject.FindProperty("forceUseTMP").boolValue;
             uGUIParserSnapshot.readmeDoc = serializedObject.FindProperty("readmeDoc").stringValue;
             uGUIParserSnapshot.convertZh2En = serializedObject.FindProperty("convertZh2En").boolValue;
-            uGUIParserSnapshot.nineSliceBorderTolerance = Mathf.Clamp(serializedObject.FindProperty("nineSliceBorderTolerance").intValue, 0, 255);
+            // REMOVED: nineSliceBorderTolerance 导出（字段已删除）
             uGUIParserSnapshot.sharedAssetsOutput = serializedObject.FindProperty("sharedAssetsOutput").stringValue;
             uGUIParserSnapshot.sharedPrefabOutput = serializedObject.FindProperty("sharedPrefabOutput").stringValue;
             uGUIParserSnapshot.aiProviderConfig = BuildAiProviderConfigSnapshot(serializedObject.FindProperty("aiProviderConfig"));
@@ -540,6 +554,43 @@ namespace UGF.EditorTools.Psd2UGUI
                     providerProperty.intValue = (int)provider;
                 }
             }
+        }
+
+        private static Psd2UIFormSettingsServer settingsServer;
+
+        private void OpenSettingsPage()
+        {
+            // 加载 HTML 文件
+            string htmlPath = System.IO.Path.Combine(
+                UnityEngine.Application.dataPath,
+                "UnityPSDLayoutTool2/Assets/PSD2UIForm/Src/Editor/Resources/Psd2UIFormSettings.html"
+            );
+
+            if (!System.IO.File.Exists(htmlPath))
+            {
+                EditorUtility.DisplayDialog("错误", "找不到设置页面文件：\n" + htmlPath, "确定");
+                return;
+            }
+
+            // 停止旧的服务器
+            if (settingsServer != null)
+            {
+                settingsServer.Stop();
+            }
+
+            // 启动新的服务器
+            settingsServer = new Psd2UIFormSettingsServer();
+            settingsServer.Start((UGUIParser)((Editor)this).target, htmlPath);
+
+            Debug.Log("[Psd2UIForm] 设置页面已在浏览器中打开，服务器运行在 http://localhost:9527");
+        }
+
+        private void OnDisable()
+        {
+            // 注意：这里故意不停止设置页面服务器。
+            // OnDisable 会在 Inspector 失去焦点/切换选中对象时触发，一旦停掉服务器，
+            // 浏览器里已经打开的设置页面就会保存失败（表现为"没绑定上"）。
+            // 服务器由 Psd2UIFormSettingsServer 自己在域重载/退出 Unity 时关闭。
         }
 
         internal static bool IsUGUIParserEditorObfuscationSentinelNull()

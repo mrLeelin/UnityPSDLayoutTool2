@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4e9ad7835bbb45f59a8d0cd5b4fd3cd3, type: 3}
   m_Name: Psd2UIFormConfig
   m_EditorClassIdentifier: 
-  defaultTextType: 3
+  defaultTextType: 12
   defaultImageType: 1
   forceUseTMP: 1
   uiFormTemplate: {fileID: 3548335019738977768, guid: 6d8c85c377edc7240ace111136f916b1, type: 3}
@@ -388,7 +388,6 @@ MonoBehaviour:
     \u5F00\u542F\u201C\u5F3A\u5236\u4F18\u5148\u4F7F\u7528TMP\u201D\u540E\uFF0CText\u3001Button\u3001Dropdown\u3001InputField\u3001Toggle
     \u4F1A\u4F18\u5148\u751F\u6210 TMP \u7248\u672C\u3002\n- \u5F00\u542F\u201C\u4E2D\u6587\u8F6C\u62FC\u97F3\u201D\u540E\uFF0C\u5BFC\u51FA\u7684\u5BF9\u8C61\u540D\u548C\u8D44\u6E90\u540D\u4F1A\u81EA\u52A8\u8F6C\u6210\u66F4\u5B89\u5168\u7684\u82F1\u6587/\u62FC\u97F3\u683C\u5F0F\u3002"
   convertZh2En: 1
-  nineSliceBorderTolerance: 5
   sharedAssetsOutput: Assets\Examples\Common
   sharedPrefabOutput: Assets\Examples\CommonPrefab
   aiProviderConfig:

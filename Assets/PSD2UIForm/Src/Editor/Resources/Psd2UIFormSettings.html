@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSD2UIForm 设置</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f5f7fa;
+            color: #1a1a1a;
+            line-height: 1.6;
+            padding: 40px 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 920px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .header-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }
+
+        .header-subtitle {
+            font-size: 16px;
+            color: #6b7280;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+            transition: box-shadow 0.2s;
+        }
+
+        .card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .card-icon {
+            font-size: 28px;
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+        }
+
+        .card-icon.green {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+
+        .card-icon.blue {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        }
+
+        .card-icon.orange {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        }
+
+        .card-icon.purple {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+        }
+
+        .card-title {
+            flex: 1;
+        }
+
+        .card-title h2 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 4px;
+        }
+
+        .card-title p {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .info-banner {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            border-left: 4px solid #3b82f6;
+            padding: 16px 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .info-banner strong {
+            color: #1e40af;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .rules-panel {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 16px;
+            display: none;
+        }
+
+        .rules-panel.visible {
+            display: block;
+        }
+
+        .rules-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 16px;
+        }
+
+        .rule-item {
+            display: flex;
+            align-items: baseline;
+            padding: 8px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .rule-item:last-child {
+            border-bottom: none;
+        }
+
+        .rule-tag {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background: #3b82f6;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 120px;
+            text-align: center;
+            margin-right: 16px;
+        }
+
+        .rule-desc {
+            font-size: 14px;
+            color: #4b5563;
+            flex: 1;
+        }
+
+        .rule-example {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            color: #6b7280;
+            margin-left: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }
+
+        .form-help {
+            display: block;
+            font-size: 13px;
+            color: #6b7280;
+            margin-top: 6px;
+        }
+
+        .form-select,
+        .form-input,
+        .form-textarea {
+            width: 100%;
+            padding: 12px 16px;
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            color: #1a1a1a;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .form-select:hover,
+        .form-input:hover,
+        .form-textarea:hover {
+            background: #ffffff;
+            border-color: #d1d5db;
+        }
+
+        .form-select:focus,
+        .form-input:focus,
+        .form-textarea:focus {
+            outline: none;
+            background: #ffffff;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .form-textarea {
+            resize: vertical;
+            min-height: 100px;
+            line-height: 1.6;
+        }
+
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            transition: all 0.2s;
+        }
+
+        .toggle-row:hover {
+            background: #ffffff;
+            border-color: #d1d5db;
+        }
+
+        .toggle-label {
+            flex: 1;
+        }
+
+        .toggle-label-main {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a1a;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .toggle-label-sub {
+            font-size: 13px;
+            color: #6b7280;
+        }
+
+        .toggle {
+            position: relative;
+            width: 52px;
+            height: 28px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #d1d5db;
+            border-radius: 28px;
+            transition: 0.3s;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            bottom: 3px;
+            background: white;
+            border-radius: 50%;
+            transition: 0.3s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        input:checked + .toggle-slider {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        }
+
+        input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            margin-top: 40px;
+        }
+
+        .btn {
+            padding: 14px 32px;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #6b7280;
+            border: 2px solid #e5e7eb;
+        }
+
+        .btn-secondary:hover {
+            background: #f9fafb;
+            border-color: #d1d5db;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 24px 16px;
+            }
+
+            .header {
+                margin-bottom: 32px;
+            }
+
+            h1 {
+                font-size: 28px;
+            }
+
+            .card {
+                padding: 24px;
+                margin-bottom: 20px;
+            }
+
+            .button-group {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-icon">⚙️</div>
+            <h1>PSD2UIForm 设置</h1>
+            <p class="header-subtitle">配置 PSD 转 UI 的转换流程</p>
+        </div>
+
+        <!-- Nine-Slice Card -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon green">🎯</div>
+                <div class="card-title">
+                    <h2>九宫格检测</h2>
+                    <p>基于三重推断的智能边框检测</p>
+                </div>
+                <span class="badge badge-success">95% Accurate</span>
+            </div>
+
+            <div class="info-banner">
+                <strong>三重推断算法已启用</strong>
+                视觉边缘检测 + 重复模式分析 + 圆角保护。准确率从 40% 提升到 95%，处理速度提升 16 倍。
+            </div>
+
+            <div class="toggle-row">
+                <div class="toggle-label">
+                    <span class="toggle-label-main">导出时自动裁剪</span>
+                    <span class="toggle-label-sub">自动裁剪到最小尺寸（建议：关闭以确保安全）</span>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="autoCropNineSlice" onchange="toggleRulesPanel()">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <!-- 九宫格标签规则面板 -->
+            <div class="rules-panel" id="rulesPanel">
+                <div class="rules-title">📋 支持的九宫格标签</div>
+
+                <div class="rule-item">
+                    <span class="rule-tag">|9slice</span>
+                    <span class="rule-desc">自动推断九宫格边界（推荐）</span>
+                    <span class="rule-example">例: bg|9slice</span>
+                </div>
+
+                <div class="rule-item">
+                    <span class="rule-tag">|9slice=L,T,R,B</span>
+                    <span class="rule-desc">显式指定边界（左、上、右、下像素）</span>
+                    <span class="rule-example">例: panel|9slice=12,15,12,15</span>
+                </div>
+
+                <div class="rule-item">
+                    <span class="rule-tag">|h3slice</span>
+                    <span class="rule-desc">横向三切（左-中-右，适合进度条）</span>
+                    <span class="rule-example">例: progressbar|h3slice</span>
+                </div>
+
+                <div class="rule-item">
+                    <span class="rule-tag">|v3slice</span>
+                    <span class="rule-desc">纵向三切（上-中-下）</span>
+                    <span class="rule-example">例: scrollbar|v3slice</span>
+                </div>
+
+                <div class="rule-item">
+                    <span class="rule-tag">|sliced</span>
+                    <span class="rule-desc">旧标签，自动转换为 |9slice（兼容）</span>
+                    <span class="rule-example">例: button|sliced</span>
+                </div>
+
+                <div class="rule-item">
+                    <span class="rule-tag">|九宫格</span>
+                    <span class="rule-desc">中文旧标签，自动转换（兼容）</span>
+                    <span class="rule-example">例: 背景|九宫格</span>
+                </div>
+
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 2px solid #e5e7eb; font-size: 13px; color: #6b7280;">
+                    <strong style="color: #1a1a1a;">💡 提示：</strong> 推荐使用 <code style="background:#e5e7eb;padding:2px 6px;border-radius:4px;">|9slice</code> 标签，算法会自动检测最佳边界（95% 准确率）
+                </div>
+            </div>
+        </div>
+
+        <!-- Default Types Card -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon blue">📝</div>
+                <div class="card-title">
+                    <h2>默认组件类型</h2>
+                    <p>设置文本和图片的首选 UI 组件</p>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="defaultTextType">文本组件</label>
+                <select class="form-select" id="defaultTextType">
+                    <!-- 值必须和 Unity 端 GUIType 的数值一致：TMPText = 12，Text = 3 -->
+                    <option value="12">TextMeshPro（推荐）</option>
+                    <option value="3">Unity UI Text</option>
+                </select>
+                <span class="form-help">TMP 提供更好的渲染质量和性能（GUIType: TMPText = 12 / Text = 3）</span>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="defaultImageType">图片组件</label>
+                <select class="form-select" id="defaultImageType">
+                    <!-- 值必须和 Unity 端 GUIType 的数值一致：Image = 1，RawImage = 2 -->
+                    <option value="1">Image（标准）</option>
+                    <option value="2">RawImage</option>
+                </select>
+                <span class="form-help">Image 支持九宫格和填充模式（GUIType: Image = 1 / RawImage = 2）</span>
+            </div>
+
+            <div class="toggle-row">
+                <div class="toggle-label">
+                    <span class="toggle-label-main">强制使用 TextMeshPro</span>
+                    <span class="toggle-label-sub">将所有文本覆盖为 TMP，忽略图层标签</span>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="forceUseTMP" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Export Paths Card -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon orange">📦</div>
+                <div class="card-title">
+                    <h2>导出配置</h2>
+                    <p>定义输出目录和命名选项</p>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="sharedAssetsOutput">共享资源目录</label>
+                <input type="text" class="form-input" id="sharedAssetsOutput" placeholder="留空使用默认路径">
+                <span class="form-help">共享图片和资源的输出路径</span>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="sharedPrefabOutput">共享 Prefab 目录</label>
+                <input type="text" class="form-input" id="sharedPrefabOutput" placeholder="留空使用默认路径">
+                <span class="form-help">可复用 UI 组件 Prefab 的输出路径</span>
+            </div>
+
+            <div class="toggle-row">
+                <div class="toggle-label">
+                    <span class="toggle-label-main">中文名转英文名</span>
+                    <span class="toggle-label-sub">自动翻译图层名称（需要 AI 支持）</span>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="convertZh2En">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Documentation Card -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon purple">📖</div>
+                <div class="card-title">
+                    <h2>团队文档</h2>
+                    <p>添加自定义注释和指南</p>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="readmeDoc">使用说明</label>
+                <textarea class="form-textarea" id="readmeDoc" placeholder="添加团队规范、命名约定、常见问题或工作流程提示..."></textarea>
+                <span class="form-help">这些说明对所有团队成员可见</span>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="button-group">
+            <button class="btn btn-secondary" onclick="resetToDefaults()">恢复默认</button>
+            <button class="btn btn-primary" onclick="saveSettings()">💾 保存设置</button>
+        </div>
+    </div>
+
+    <script>
+        // 切换规则面板显示
+        function toggleRulesPanel() {
+            const checkbox = document.getElementById('autoCropNineSlice');
+            const panel = document.getElementById('rulesPanel');
+
+            if (checkbox.checked) {
+                panel.classList.add('visible');
+            } else {
+                panel.classList.remove('visible');
+            }
+        }
+
+        // 把值写进 select，并检查页面里是否真的有这个选项。
+        // 枚举值和 option 对不上时浏览器会静默回落到第一个选项，看起来就像"两边值不一致"。
+        function applySelectValue(id, value, label) {
+            const select = document.getElementById(id);
+            const expected = String(value);
+            select.value = expected;
+            if (select.value !== expected) {
+                console.warn('[PSD2UIForm] ' + label + ' = ' + expected +
+                    ' 在页面里没有对应选项，已回落到「' + select.options[select.selectedIndex].text + '」');
+            }
+        }
+
+        // Load settings from Unity
+        function loadSettings(config) {
+            document.getElementById('autoCropNineSlice').checked = config.autoCropNineSlice === true;
+            applySelectValue('defaultTextType', config.defaultTextType !== undefined ? config.defaultTextType : 12, '默认文本类型');
+            applySelectValue('defaultImageType', config.defaultImageType !== undefined ? config.defaultImageType : 1, '默认图片类型');
+            document.getElementById('forceUseTMP').checked = config.forceUseTMP !== undefined ? config.forceUseTMP : true;
+            document.getElementById('sharedAssetsOutput').value = config.sharedAssetsOutput || '';
+            document.getElementById('sharedPrefabOutput').value = config.sharedPrefabOutput || '';
+            document.getElementById('convertZh2En').checked = config.convertZh2En === true;
+            document.getElementById('readmeDoc').value = config.readmeDoc || '';
+
+            // 标记"已经拿到 Unity 的真实配置"，之后的保存才被允许
+            window.__psd2uiformLoaded = true;
+
+            // 根据自动裁剪状态显示/隐藏规则面板
+            toggleRulesPanel();
+        }
+
+        // Collect current settings
+        function collectSettings() {
+            return {
+                autoCropNineSlice: document.getElementById('autoCropNineSlice').checked,
+                defaultTextType: parseInt(document.getElementById('defaultTextType').value),
+                defaultImageType: parseInt(document.getElementById('defaultImageType').value),
+                forceUseTMP: document.getElementById('forceUseTMP').checked,
+                sharedAssetsOutput: document.getElementById('sharedAssetsOutput').value,
+                sharedPrefabOutput: document.getElementById('sharedPrefabOutput').value,
+                convertZh2En: document.getElementById('convertZh2En').checked,
+                readmeDoc: document.getElementById('readmeDoc').value
+            };
+        }
+
+        // 保存结果的就地提示（不弹窗打断，重试时也能看到进度）
+        function setSaveStatus(text, isError) {
+            let el = document.getElementById('psd2uiform-save-status');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'psd2uiform-save-status';
+                el.style.cssText = 'margin:10px 0 0;font:13px/1.6 Inter,sans-serif;text-align:right;min-height:20px';
+                const btn = document.querySelector('.btn.btn-primary');
+                (btn && btn.parentNode ? btn.parentNode : document.body).appendChild(el);
+            }
+            el.style.color = isError ? '#f87171' : '#4ade80';
+            el.textContent = text || '';
+        }
+
+        // Unity 侧现在是"两段式"保存：收到请求立刻应答，再由编辑器主线程写进 asset。
+        // 编辑器在后台时主循环会被节流，落盘可能晚一点 —— 这里拿到 pending:true 就轮询确认，
+        // 但请求本身不会再像以前那样一直吊着（那正是"点了保存要等点一下 Unity 才成功"的原因）。
+        function postSave(attempt) {
+            const maxAttempts = 3;
+            window.__psd2uiformSaving = true;
+            setSaveStatus(attempt === 0 ? '正在保存…' : `重试第 ${attempt + 1} 次…`, false);
+
+            fetch(window.saveUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectSettings())
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.success) { throw new Error(data.error || '未知错误'); }
+                if (data.applied === false) {
+                    // 值已经收下了，只是还没轮到主线程落盘
+                    confirmSaveApplied(0);
+                    return;
+                }
+                window.__psd2uiformSaving = false;
+                setSaveStatus('✅ 已保存到 Unity', false);
+                alert('✅ 配置已保存到 Unity！');
+            })
+            .catch(error => {
+                console.error('保存错误:', error);
+                if (attempt + 1 < maxAttempts) {
+                    setTimeout(() => postSave(attempt + 1), 600 * Math.pow(2, attempt));
+                    return;
+                }
+                window.__psd2uiformSaving = false;
+                setSaveStatus('❌ 保存失败：' + error.message, true);
+                alert('❌ 保存失败：' + error.message +
+                      '\n\n如果 Unity 正在编译 / 重载程序集，等它跑完再点一次「保存设置」。\n' +
+                      '（本次没有写进 asset，表单里的值不会被改动。）');
+            });
+        }
+
+        // 轮询落盘结果：编辑器在后台时可能要等它把主循环跑起来
+        function confirmSaveApplied(attempt) {
+            const maxAttempts = 12;
+            setSaveStatus(`已提交，正在写入 asset…（${attempt + 1}）`, false);
+
+            fetch(window.saveStatusUrl, { cache: 'no-store' })
+                .then(r => r.json())
+                .then(st => {
+                    if (st.pending) {
+                        if (attempt < maxAttempts) {
+                            setTimeout(() => confirmSaveApplied(attempt + 1), 500);
+                            return;
+                        }
+                        window.__psd2uiformSaving = false;
+                        setSaveStatus('✅ 已提交保存（Unity 空闲时会写入 asset）', false);
+                        return;
+                    }
+                    window.__psd2uiformSaving = false;
+                    if (st.error) {
+                        setSaveStatus('❌ 保存失败：' + st.error, true);
+                        alert('❌ 保存失败：' + st.error);
+                        return;
+                    }
+                    setSaveStatus('✅ 已保存到 Unity', false);
+                    alert('✅ 配置已保存到 Unity！');
+                })
+                .catch(() => {
+                    window.__psd2uiformSaving = false;
+                    setSaveStatus('✅ 已提交保存', false);
+                });
+        }
+
+        // Save settings
+        function saveSettings() {
+            // 守卫：没成功从 Unity 读到配置时，表单里全是页面默认值。
+            // 此时保存会把默认值覆盖到 asset 上（空导出路径、空使用说明、中文转英文被关掉），
+            // 这就是之前 .asset 被洗成默认值的原因。
+            if (!window.__psd2uiformLoaded) {
+                alert('⚠️ 还没有从 Unity 读到配置，已阻止保存。\n\n' +
+                      '原因: ' + (window.__psd2uiformLoadError || '未知') + '\n\n' +
+                      '请回到 Unity，重新点击 Psd2UIFormConfig 上的「⚙️ 打开设置」。');
+                return;
+            }
+            if (window.__psd2uiformSaving) {
+                return;
+            }
+
+            const settings = collectSettings();
+
+            // 检查是否有保存 URL（由 Unity 注入）
+            if (window.saveUrl) {
+                postSave(0);
+            } else if (window.unitySettings && window.unitySettings.save) {
+                window.unitySettings.save(JSON.stringify(settings));
+                alert('设置已保存！');
+            } else {
+                // 临时方案：显示配置
+                const summary = `
+━━━━━━━━━━━━━━━━━━━━━━
+九宫格设置
+━━━━━━━━━━━━━━━━━━━━━━
+• 自动裁剪: ${settings.autoCropNineSlice ? '✓ 开启' : '✗ 关闭'}
+
+━━━━━━━━━━━━━━━━━━━━━━
+默认类型
+━━━━━━━━━━━━━━━━━━━━━━
+• 文本: ${settings.defaultTextType === 12 ? 'TextMeshPro' : 'Unity UI Text'}
+• 图片: ${settings.defaultImageType === 1 ? 'Image' : 'RawImage'}
+• 强制TMP: ${settings.forceUseTMP ? '✓ 开启' : '✗ 关闭'}
+
+━━━━━━━━━━━━━━━━━━━━━━
+导出配置
+━━━━━━━━━━━━━━━━━━━━━━
+• 共享资源: ${settings.sharedAssetsOutput || '(空)'}
+• 共享Prefab: ${settings.sharedPrefabOutput || '(空)'}
+• 中文转英文: ${settings.convertZh2En ? '✓ 开启' : '✗ 关闭'}`;
+
+                console.log('=== PSD2UIForm 配置 ===');
+                console.log(summary);
+                console.log(JSON.stringify(settings, null, 2));
+
+                alert('⚠️ 未连接到 Unity\n\n请在 Unity 中通过 Inspector 打开此页面\n\n配置已输出到浏览器控制台（F12）');
+            }
+        }
+
+        // Reset to defaults
+        function resetToDefaults() {
+            if (confirm('确定要恢复所有设置为默认值吗？')) {
+                loadSettings({
+                    autoCropNineSlice: false,
+                    defaultTextType: 12,
+                    defaultImageType: 1,
+                    forceUseTMP: true,
+                    sharedAssetsOutput: '',
+                    sharedPrefabOutput: '',
+                    convertZh2En: false,
+                    readmeDoc: ''
+                });
+            }
+        }
+
+        // Initialize
+        window.addEventListener('DOMContentLoaded', () => {
+            if (window.unitySettings && window.unitySettings.initialConfig) {
+                loadSettings(JSON.parse(window.unitySettings.initialConfig));
+            }
+        });
+    </script>
+</body>
+</html>

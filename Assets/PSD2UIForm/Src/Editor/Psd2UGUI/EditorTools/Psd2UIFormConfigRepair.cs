@@ -256,12 +256,22 @@ namespace UGF.EditorTools.Psd2UGUI
                     return false;
                 }
                 SerializedObject val = new SerializedObject((Object)(object)config);
-                val.FindProperty("defaultTextType").enumValueIndex = (int)configSnapshot.defaultTextType;
-                val.FindProperty("defaultImageType").enumValueIndex = (int)configSnapshot.defaultImageType;
+                // 注意：这里必须用 intValue 而不是 enumValueIndex。
+                // GUIType 的值域不是连续的（Background = 101 … ScrollView_VerticalBar = 119），
+                // enumValueIndex 是"枚举名数组下标"，用枚举数值去赋值会整体错位。
+                val.FindProperty("defaultTextType").intValue = (int)configSnapshot.defaultTextType;
+                val.FindProperty("defaultImageType").intValue = (int)configSnapshot.defaultImageType;
                 val.FindProperty("forceUseTMP").boolValue = configSnapshot.forceUseTMP;
                 val.FindProperty("readmeDoc").stringValue = configSnapshot.readmeDoc ?? string.Empty;
                 val.FindProperty("convertZh2En").boolValue = configSnapshot.convertZh2En;
-                val.FindProperty("nineSliceBorderTolerance").intValue = Mathf.Clamp(configSnapshot.nineSliceBorderTolerance, 0, 255);
+
+                // nineSliceBorderTolerance 已从 UGUIParser 移除（九宫功能已迁移），旧 JSON 里可能还有这个字段。
+                // 直接写会 NullReferenceException，这里做存在性判断。
+                SerializedProperty toleranceProperty = val.FindProperty("nineSliceBorderTolerance");
+                if (toleranceProperty != null)
+                {
+                    toleranceProperty.intValue = Mathf.Clamp(configSnapshot.nineSliceBorderTolerance, 0, 255);
+                }
                 val.FindProperty("sharedAssetsOutput").stringValue = configSnapshot.sharedAssetsOutput ?? string.Empty;
                 val.FindProperty("sharedPrefabOutput").stringValue = configSnapshot.sharedPrefabOutput ?? string.Empty;
                 val.FindProperty("uiFormTemplate").objectReferenceValue = (Object)(object)LoadGuidAsset<GameObject>(configSnapshot.uiFormTemplateGuid);
@@ -272,7 +282,7 @@ namespace UGF.EditorTools.Psd2UGUI
                     RuleSnapshot ruleSnapshot = configSnapshot.rules[i];
                     val2.InsertArrayElementAtIndex(i);
                     SerializedProperty arrayElementAtIndex = val2.GetArrayElementAtIndex(i);
-                    arrayElementAtIndex.FindPropertyRelative("UIType").enumValueIndex = (int)ruleSnapshot.UIType;
+                    arrayElementAtIndex.FindPropertyRelative("UIType").intValue = (int)ruleSnapshot.UIType;
                     arrayElementAtIndex.FindPropertyRelative("UITypeDesc").stringValue = ruleSnapshot.UITypeDesc ?? string.Empty;
                     arrayElementAtIndex.FindPropertyRelative("UIHelper").stringValue = ruleSnapshot.UIHelper ?? string.Empty;
                     arrayElementAtIndex.FindPropertyRelative("Comment").stringValue = ruleSnapshot.Comment ?? string.Empty;
