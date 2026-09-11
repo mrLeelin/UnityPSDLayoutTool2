@@ -13,13 +13,42 @@
 - 菜单 `Tools/Psd2UIForm/Other/LicenseWindow`、`Clear License`、`Check Update` 已移除；仅保留 `Window/PSDReader/Force Reset`。
 - Inspector 中的授权/订单 UI 已改为“默认完全授权”文案。
 
+## 程序集结构（Runtime / Editor 拆分）
+
+本目录包含**两个**程序集，边界由 asmdef 强制：
+
+| 程序集 | asmdef 位置 | 平台 | 内容 |
+|---|---|---|---|
+| `cn.efunstudio.psd2ugui` | `Runtime/cn.efunstudio.psd2ugui.asmdef` | 全平台 | 运行期组件：`PsdLayerNode`、各 `UIHelper`、键与数据类型、运行期判定规则 |
+| `cn.efunstudio.psd2ugui.Editor` | 本目录根部 `cn.efunstudio.psd2ugui.Editor.asmdef` | 仅 Editor | 其余全部：`Psd2UIFormConverter`、`UGUIParser`、`PsdReader`、AI、Importing、Updates、EditorTools |
+
+依赖方向固定为 **Editor → Runtime**（单向）。
+
+**为什么要拆**：运行期组件会被挂在生成的 Prefab 上并随包发布，必须存在于播放器构建中；
+而 PSD 解析 / 导图 / 生成逻辑本质上是编辑器行为，不应进包。
+
+### 跨程序集调用：`Psd2UIFormEditorHost` 门面
+
+运行期组件里仍有一部分方法只在编辑器期执行（生成、导图、预览），它们**不能直接引用**编辑器侧类型
+（Unity 禁止平台无限制的 asmdef 引用 Editor-only 的 asmdef，`#if UNITY_EDITOR` 也救不了）。
+统一约定：
+
+- `Runtime/Psd2UGUI/Runtime/Psd2UIFormEditorHost.cs` 定义 `internal interface IPsd2UIFormEditorHost` + 注册点；
+- `Psd2UGUI/Conversion/Psd2UIFormEditorHostAdapter.cs` 提供实现，并由 `[InitializeOnLoadMethod]` 注册；
+- 运行期代码只调门面（`Psd2UIFormEditorHost.Current?.X(...)`）。**接口签名里不得出现编辑器侧类型。**
+- 双程序集可见性由 `Runtime/Psd2UGUI/Runtime/AssemblyInfo.cs` 的 `InternalsVisibleTo("cn.efunstudio.psd2ugui.Editor")` 提供。
+
+注意：门面未注册时（播放器构建中）相关入口会静默返回 `null`/`false`，这是设计行为。
+
 ## 目录结构
 
+- `Runtime/`
+  - 运行期程序集的全部源码（`Psd2UGUI/Runtime`、`Psd2UGUI/UIComponents`，以及被它们依赖的 PsdReader 数据模型）
 - `PsdReader`
   - PSD 二进制读取、描述符、区段、图像资源、图层附加信息、链接图层和文本解析
   - 导入、重建、序列化（授权与输出保护已删除）
 - `Psd2UGUI`
-  - AI 分析与补丁、PSD 转 UGUI、运行时数据、UI 组件和编辑器工具
+  - AI 分析与补丁、PSD 转 UGUI、UI 组件和编辑器工具
 - `Internal`
   - 兼容辅助、诊断和生成代码
 
@@ -49,8 +78,31 @@
 
 ## 维护约束
 
-- `cn.efunstudio.psd2ugui.asmdef` 必须保留在本目录根部，且不得改成 Editor-only 程序集。
-- 不要创建名为 `Editor`、`Scripts`、`Resources`、`StreamingAssets` 或 `Gizmos` 的子目录。
-- 移动 `.cs` 文件时必须同时移动对应的 `.cs.meta`，以保持 Unity GUID。
-- 不要修改已登记的公共类型全名、程序集名称、序列化字段键或配置中的类型字符串。
+- **拆分边界不可回退**：`Runtime/` 下的任何文件都不得引用 `cn.efunstudio.psd2ugui.Editor` 里的类型；如需调用编辑器能力，走 `Psd2UIFormEditorHost` 门面。
+- 运行期文件里调用 `UnityEditor` API（`AssetDatabase`、`EditorUtility`、`EditorGUI`、`EditorPrefs`…）必须包在 `#if UNITY_EDITOR` 内，并给出 `#else` 的安全默认值。
+- 编辑器专用的新文件（Inspector、Drawer、Importer、菜单、AI 等）一律放在 `Runtime/` **之外**；不要为了省事把 `Editor`、`Scripts`、`Resources`、`StreamingAssets`、`Gizmos` 之类魔法目录塞进 `Runtime/`。
+- 移动 `.cs` 文件时必须同时移动对应的 `.cs.meta`：Prefab 的组件绑定只认 GUID，`.meta` 丢了就掉脚本。
+- 不要修改已登记的公共类型全名、程序集名称（`cn.efunstudio.psd2ugui` 必须由运行期程序集持有）、序列化字段键或配置中的类型字符串。
 - 离线重建项目和嵌入资源位于 `Decompiled/PSD2UGUI_deobfuscated/Reconstruction`，不得放回 Unity 正式源码目录。
+
+## 如何验证拆分（不需启动 Unity）
+
+Unity 会为每个程序集生成 response file，直接用它与 csc 编译即可秒级得到结果：
+
+```bash
+PROJ=/e/Project/Demo/monsterhunter
+RSP=$PROJ/Library/Bee/artifacts/*/cn.efunstudio.psd2ugui.rsp          # 运行期程序集
+CSC=/e/UnityEngine/Engine/Installs_location/6000.3.6f1/Editor/Data/DotNetSdkRoslyn/csc.dll
+RUN=/e/UnityEngine/Engine/Installs_location/6000.3.6f1/Editor/Data/netcorerun/netcorerun.exe
+
+# 编辑器路径编译
+"$RUN" "$CSC" @$RSP
+
+# 播放器面编译：去掉 -define:UNITY_EDITOR，并剔除所有 -r:...UnityEditor* 引用
+# → 0 error 才能保证运行期程序集既无编辑器 API、也无对 Editor 程序集的依赖
+```
+
+另有两条与编译状态无关的静态检查：
+
+- Prefab 的 `m_Script` GUID 是否全部能解析到现存 `.cs.meta`（悬空必须为 0）；
+- `MonoScript.GetClass()` 是否返回类型（返回 `null` 说明脚本无法绑定）。

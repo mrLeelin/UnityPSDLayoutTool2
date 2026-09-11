@@ -353,43 +353,27 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal static bool IsPrimaryUIType(GUIType uiType)
         {
-            if (uiType == GUIType.Null)
-            {
-                return false;
-            }
-            return uiType <= (GUIType)100;
+            return UITypeRules.IsPrimaryUIType(uiType);
         }
 
         internal static bool IsAuxiliaryUIType(GUIType uiType)
         {
-            return uiType > (GUIType)100;
+            return UITypeRules.IsAuxiliaryUIType(uiType);
         }
 
         internal static bool IsPanelOrNull(GUIType uiType)
         {
-            if (uiType != GUIType.Null)
-            {
-                return uiType == GUIType.Panel;
-            }
-            return true;
+            return UITypeRules.IsPanelOrNull(uiType);
         }
 
         internal static bool IsCompositeControlType(GUIType uiType)
         {
-            if ((uint)(uiType - 4) > 5u && (uint)(uiType - 13) > 5u)
-            {
-                return false;
-            }
-            return true;
+            return UITypeRules.IsCompositeControlType(uiType);
         }
 
         internal static bool IsLeafVisualType(GUIType uiType)
         {
-            if ((uint)(uiType - 1) > 2u && (uint)(uiType - 10) > 2u)
-            {
-                return false;
-            }
-            return true;
+            return UITypeRules.IsLeafVisualType(uiType);
         }
 
         internal static bool IsNestedContainerType(GUIType uiType)
@@ -412,75 +396,12 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal static bool CanOwnAuxiliaryType(GUIType uiType, GUIType uiType2)
         {
-            switch (uiType2)
-            {
-            default:
-                return false;
-            case GUIType.Background:
-                return IsPrimaryUIType(uiType);
-            case GUIType.Button_Highlight:
-            case GUIType.Button_Press:
-            case GUIType.Button_Select:
-            case GUIType.Button_Disable:
-            case GUIType.Button_Text:
-                if (uiType != GUIType.Button)
-                {
-                    return uiType == GUIType.TMPButton;
-                }
-                return true;
-            case GUIType.Dropdown_Label:
-            case GUIType.Dropdown_Arrow:
-                if (uiType != GUIType.Dropdown)
-                {
-                    return uiType == GUIType.TMPDropdown;
-                }
-                return true;
-            case GUIType.InputField_Placeholder:
-            case GUIType.InputField_Text:
-                if (uiType != GUIType.InputField)
-                {
-                    return uiType == GUIType.TMPInputField;
-                }
-                return true;
-            case GUIType.Toggle_Checkmark:
-            case GUIType.Toggle_Label:
-                if (uiType != GUIType.Toggle)
-                {
-                    return uiType == GUIType.TMPToggle;
-                }
-                return true;
-            case GUIType.Slider_Fill:
-            case GUIType.Slider_Handle:
-                return uiType == GUIType.Slider;
-            case GUIType.ScrollView_Viewport:
-            case GUIType.ScrollView_HorizontalBarBG:
-            case GUIType.ScrollView_HorizontalBar:
-            case GUIType.ScrollView_VerticalBarBG:
-            case GUIType.ScrollView_VerticalBar:
-                return uiType == GUIType.ScrollView;
-            }
+            return UITypeRules.CanOwnAuxiliaryType(uiType, uiType2);
         }
 
         internal static bool CanOwnNestedControlType(GUIType uiType, GUIType uiType2)
         {
-            switch (uiType)
-            {
-            default:
-                return false;
-            case GUIType.ToggleGroup:
-                if (uiType2 != GUIType.Toggle)
-                {
-                    return uiType2 == GUIType.TMPToggle;
-                }
-                return true;
-            case GUIType.Dropdown:
-            case GUIType.TMPDropdown:
-                if (uiType2 != GUIType.ScrollView && uiType2 != GUIType.Toggle)
-                {
-                    return uiType2 == GUIType.TMPToggle;
-                }
-                return true;
-            }
+            return UITypeRules.CanOwnNestedControlType(uiType, uiType2);
         }
 
         internal GUIType ApplyForcedTMPType(GUIType uiType)
