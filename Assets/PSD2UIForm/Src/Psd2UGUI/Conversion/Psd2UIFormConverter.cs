@@ -417,23 +417,25 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal void Attach()
         {
-            if (_attached)
+            if (!_attached)
             {
-                return;
+                _attached = true;
+                uiTypeLabelStyle = new GUIStyle();
+                uiTypeLabelStyle.fontSize = 13;
+                uiTypeLabelStyle.fontStyle = (FontStyle)3;
+                Color textColor = default(Color);
+                ColorUtility.TryParseHtmlString("#7ED994", out textColor);
+                uiTypeLabelStyle.normal.textColor = textColor;
+                SceneView.duringSceneGui += OnSceneGUI;
+                EditorApplication.hierarchyWindowItemOnGUI = (EditorApplication.HierarchyWindowItemCallback)Delegate.Combine((Delegate)(object)EditorApplication.hierarchyWindowItemOnGUI, (Delegate)new EditorApplication.HierarchyWindowItemCallback(OnHierarchyWindowItemGUI));
             }
-            _attached = true;
-            uiTypeLabelStyle = new GUIStyle();
-            uiTypeLabelStyle.fontSize = 13;
-            uiTypeLabelStyle.fontStyle = (FontStyle)3;
-            Color textColor = default(Color);
-            ColorUtility.TryParseHtmlString("#7ED994", out textColor);
-            uiTypeLabelStyle.normal.textColor = textColor;
+            // 回调订阅只需一次，但文档必须补加载：
+            // 壳是先生成（psdAssetPath 为空）后绑定 PSD 的，先 Attach 再绑定是常见顺序，
+            // 不补加载的话 Inspector 会一直显示"请打开Prefab…"。
             if (_psdDocument == null && !string.IsNullOrWhiteSpace(GetSourcePsdAssetPath()))
             {
                 LoadDocumentAndRebindNodes();
             }
-            SceneView.duringSceneGui += OnSceneGUI;
-            EditorApplication.hierarchyWindowItemOnGUI = (EditorApplication.HierarchyWindowItemCallback)Delegate.Combine((Delegate)(object)EditorApplication.hierarchyWindowItemOnGUI, (Delegate)new EditorApplication.HierarchyWindowItemCallback(OnHierarchyWindowItemGUI));
         }
 
         /// <summary>原 MonoBehaviour.Start 的行为，由壳的 Start 经门面转发，保持时机与拆分前一致。</summary>
@@ -730,11 +732,27 @@ namespace UGF.EditorTools.Psd2UGUI
                 SceneView.duringSceneGui -= OnSceneGUI;
                 EditorApplication.hierarchyWindowItemOnGUI = (EditorApplication.HierarchyWindowItemCallback)Delegate.Remove((Delegate)(object)EditorApplication.hierarchyWindowItemOnGUI, (Delegate)new EditorApplication.HierarchyWindowItemCallback(OnHierarchyWindowItemGUI));
             }
+            // 注意：这里刻意**不**释放 _psdDocument。
+            // 生成物里的 PsdLayerNode 一直持有该文档的 PsdLayer（预览渲染依赖它），
+            // 而 Detach 会在"Inspector 失去选中 / PrefabStage 关闭"时发生，
+            // 此时释放文档会让下一个被选中的 PsdLayerNode 在首次渲染时 NRE。
+            // 真正释放走 Dispose()（壳销毁时）。
+        }
+
+        /// <summary>壳被销毁时的彻底清理：先摘除回调，再释放 PSD 文档与缓存。</summary>
+        internal void Dispose()
+        {
+            Detach();
             if (_psdDocument != null)
             {
                 _psdDocument.Dispose();
                 _psdDocument = null;
             }
+            _nodeByReferenceKey.Clear();
+            _exportedPathByNodeKey.Clear();
+            _prefabAssetByReferenceKey.Clear();
+            _referencedAssetKeys.Clear();
+            _prefabExportsInProgress.Clear();
             s_byOwnerInstanceId.Remove(_owner.GetInstanceID());
             if (s_Instance == this)
             {

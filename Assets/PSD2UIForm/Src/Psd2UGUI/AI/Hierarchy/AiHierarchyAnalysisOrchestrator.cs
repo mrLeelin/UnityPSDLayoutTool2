@@ -79,17 +79,17 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
             internal static TemporaryHierarchyNormalizationScope DetachInactiveSourceBoundNodes(object value2, object aiJobContext)
             {
-                if ((Object)value2 == (Object)null)
+                if (Psd2UIFormTargetCompat.IsNull(value2))
                 {
                     return null;
                 }
-                PsdLayerNode[] componentsInChildren = ((Component)value2).GetComponentsInChildren<PsdLayerNode>(true);
+                PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value2).GetComponentsInChildren<PsdLayerNode>(true);
                 if (componentsInChildren != null && componentsInChildren.Length >= 1)
                 {
                     List<DetachedNodeRecord> list = null;
                     foreach (PsdLayerNode psdLayerNode in componentsInChildren)
                     {
-                        if (!((Object)(object)psdLayerNode == (Object)null) && !((Object)(object)((Component)psdLayerNode).transform == (Object)null) && !((Object)(object)((Component)psdLayerNode).gameObject == (Object)null) && !((Component)psdLayerNode).gameObject.activeSelf && psdLayerNode.BindPsdLayerIndex >= 0 && !HasInactiveSourceBoundAncestor(((Component)psdLayerNode).transform, ((Component)value2).transform))
+                        if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode) && !((Object)(object)Psd2UIFormTargetCompat.TransformOf(psdLayerNode) == (Object)null) && !((Object)(object)Psd2UIFormTargetCompat.GameObjectOf(psdLayerNode) == (Object)null) && !Psd2UIFormTargetCompat.GameObjectOf(psdLayerNode).activeSelf && psdLayerNode.BindPsdLayerIndex >= 0 && !HasInactiveSourceBoundAncestor(Psd2UIFormTargetCompat.TransformOf(psdLayerNode), Psd2UIFormTargetCompat.TransformOf(value2)))
                         {
                             if (list == null)
                             {
@@ -97,11 +97,11 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                             }
                             list.Add(new DetachedNodeRecord
                             {
-                                _transform = ((Component)psdLayerNode).transform,
-                                _originalParent = ((Component)psdLayerNode).transform.parent,
-                                _originalParentNodePath = GetParentNodePath(value2, ((Component)psdLayerNode).transform.parent),
-                                _originalSiblingIndex = ((Component)psdLayerNode).transform.GetSiblingIndex(),
-                                _depth = GetTransformDepth(((Component)psdLayerNode).transform)
+                                _transform = Psd2UIFormTargetCompat.TransformOf(psdLayerNode),
+                                _originalParent = Psd2UIFormTargetCompat.TransformOf(psdLayerNode).parent,
+                                _originalParentNodePath = GetParentNodePath(value2, Psd2UIFormTargetCompat.TransformOf(psdLayerNode).parent),
+                                _originalSiblingIndex = Psd2UIFormTargetCompat.TransformOf(psdLayerNode).GetSiblingIndex(),
+                                _depth = GetTransformDepth(Psd2UIFormTargetCompat.TransformOf(psdLayerNode))
                             });
                         }
                     }
@@ -158,7 +158,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                             continue;
                         }
                         Transform val = ResolveOriginalParent(value);
-                        if (!((Object)(object)val == (Object)null))
+                        if (!Psd2UIFormTargetCompat.IsNull(val))
                         {
                             value._transform.SetParent(val, true);
                             value._transform.SetSiblingIndex(Mathf.Clamp(value._originalSiblingIndex, 0, Mathf.Max(0, val.childCount - 1)));
@@ -174,7 +174,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                         AiJobFileStore.LogDebug(_jobContext, $"Restored {num} inactive source-bound node roots after local structure normalization.");
                     }
                 }
-                if ((Object)(object)_stashObject != (Object)null)
+                if (!Psd2UIFormTargetCompat.IsNull(_stashObject))
                 {
                     Object.DestroyImmediate((Object)(object)_stashObject);
                 }
@@ -187,9 +187,9 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                     if (!((Object)(object)value._originalParent != (Object)null))
                     {
                         Transform val = FindTransformByNodePath(_converter, value._originalParentNodePath);
-                        if (!((Object)(object)val != (Object)null))
+                        if (!(!Psd2UIFormTargetCompat.IsNull(val)))
                         {
-                            if (!((Object)(object)_converter != (Object)null))
+                            if (!(!Psd2UIFormTargetCompat.IsNull(_converter)))
                             {
                                 return null;
                             }
@@ -199,7 +199,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                     }
                     return value._originalParent;
                 }
-                if ((Object)(object)_converter != (Object)null)
+                if (!Psd2UIFormTargetCompat.IsNull(_converter))
                 {
                     return _converter.transform;
                 }
@@ -208,15 +208,15 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
             private static bool HasInactiveSourceBoundAncestor(object value, object value2)
             {
-                if ((Object)value == (Object)null)
+                if (Psd2UIFormTargetCompat.IsNull(value))
                 {
                     return false;
                 }
                 Transform parent = ((Transform)value).parent;
-                while ((Object)(object)parent != (Object)null && (Object)(object)parent != (Object)value2)
+                while (!Psd2UIFormTargetCompat.IsNull(parent) && (Object)(object)parent != (Object)value2)
                 {
-                    PsdLayerNode component = ((Component)parent).GetComponent<PsdLayerNode>();
-                    if (!((Object)(object)component != (Object)null) || ((Component)component).gameObject.activeSelf || component.BindPsdLayerIndex < 0)
+                    PsdLayerNode component = Psd2UIFormTargetCompat.GameObjectOf(parent).GetComponent<PsdLayerNode>();
+                    if (!(!Psd2UIFormTargetCompat.IsNull(component)) || Psd2UIFormTargetCompat.GameObjectOf(component).activeSelf || component.BindPsdLayerIndex < 0)
                     {
                         parent = parent.parent;
                         continue;
@@ -230,7 +230,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
             {
                 int num = 0;
                 Transform val = (Transform)value;
-                while ((Object)(object)val != (Object)null)
+                while (!Psd2UIFormTargetCompat.IsNull(val))
                 {
                     num++;
                     val = val.parent;
@@ -240,10 +240,10 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
             private static string GetParentNodePath(object value, object value2)
             {
-                if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null))
+                if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2))
                 {
-                    PsdLayerNode component = ((Component)value2).GetComponent<PsdLayerNode>();
-                    if (!((Object)(object)component != (Object)null))
+                    PsdLayerNode component = Psd2UIFormTargetCompat.GameObjectOf(value2).GetComponent<PsdLayerNode>();
+                    if (!(!Psd2UIFormTargetCompat.IsNull(component)))
                     {
                         return string.Empty;
                     }
@@ -254,9 +254,9 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
             private static Transform FindTransformByNodePath(object value, object value2)
             {
-                if (!((Object)value == (Object)null) && !string.IsNullOrWhiteSpace((string)value2))
+                if (!Psd2UIFormTargetCompat.IsNull(value) && !string.IsNullOrWhiteSpace((string)value2))
                 {
-                    PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+                    PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value).GetComponentsInChildren<PsdLayerNode>(true);
                     int num = 0;
                     PsdLayerNode psdLayerNode;
                     while (true)
@@ -264,7 +264,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                         if (num < componentsInChildren.Length)
                         {
                             psdLayerNode = componentsInChildren[num];
-                            if (!((Object)(object)psdLayerNode == (Object)null) && !((Object)(object)((Component)psdLayerNode).transform == (Object)null) && string.Equals(LayerNodeIdUtility.GetStableNodeId(value, psdLayerNode), (string)value2, StringComparison.OrdinalIgnoreCase))
+                            if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode) && !((Object)(object)Psd2UIFormTargetCompat.TransformOf(psdLayerNode) == (Object)null) && string.Equals(LayerNodeIdUtility.GetStableNodeId(value, psdLayerNode), (string)value2, StringComparison.OrdinalIgnoreCase))
                             {
                                 break;
                             }
@@ -273,7 +273,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                         }
                         return null;
                     }
-                    return ((Component)psdLayerNode).transform;
+                    return Psd2UIFormTargetCompat.TransformOf(psdLayerNode);
                 }
                 return null;
             }
@@ -302,7 +302,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
             public void OnJobCompleted(AiJobContext aiJobContext)
             {
-                if ((Object)(object)_converter == (Object)null)
+                if (Psd2UIFormTargetCompat.IsNull(_converter))
                 {
                     return;
                 }
@@ -381,13 +381,13 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
         internal static bool StartRecognitionJob(object value2, out string result)
         {
             result = null;
-            if ((Object)value2 == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value2))
             {
                 result = "\ufffd";
                 return false;
             }
             UGUIParser uGUIParser = UGUIParser.Instance;
-            if ((Object)(object)uGUIParser == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(uGUIParser))
             {
                 result = "Psd2UIFormConfig 未加载。";
                 return false;
@@ -414,7 +414,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                     createdAtUtc = DateTime.UtcNow.ToString("o"),
                     projectPath = text2.Replace("\\", "/"),
                     psdAssetPath = (((Psd2UIFormConverterEditor)value2).GetSourcePsdAssetPath() ?? string.Empty),
-                    converterPath = (AssetDatabase.GetAssetPath((Object)(object)((Component)value2).gameObject) ?? string.Empty),
+                    converterPath = (AssetDatabase.GetAssetPath((Object)(object)Psd2UIFormTargetCompat.GameObjectOf(value2)) ?? string.Empty),
                     analysisPackageVersion = "4.0",
                     recognitionCombinedVersion = "2.0",
                     mainTypeVersion = "2.0",
@@ -446,7 +446,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
         internal static bool TryApplyLatestPatch(object value, bool enabled, out string result)
         {
             result = null;
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 if (!_jobManager.HasActiveJobs())
                 {
@@ -473,10 +473,10 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
         {
             result = null;
             result2 = null;
-            if (!((Object)unityObject == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(unityObject))
             {
                 UGUIParser uGUIParser = UGUIParser.Instance;
-                if ((Object)(object)uGUIParser == (Object)null)
+                if (Psd2UIFormTargetCompat.IsNull(uGUIParser))
                 {
                     result2 = "Psd2UIFormConfig 未加载。";
                     return false;
@@ -792,7 +792,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                     createdAtUtc = DateTime.UtcNow.ToString("o"),
                     projectPath = result2.Replace("\\", "/"),
                     psdAssetPath = (((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath() ?? string.Empty),
-                    converterPath = (AssetDatabase.GetAssetPath((Object)(object)((Component)value).gameObject) ?? string.Empty),
+                    converterPath = (AssetDatabase.GetAssetPath((Object)(object)Psd2UIFormTargetCompat.GameObjectOf(value)) ?? string.Empty),
                     analysisPackageVersion = "4.0",
                     recognitionCombinedVersion = "2.0",
                     mainTypeVersion = "2.0",
@@ -1322,11 +1322,11 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
         private static bool ValidateHierarchyAgainstAnalysisPackage(object value2, object value3, out string result)
         {
             result = null;
-            if (!((Object)value2 == (Object)null) && value3 != null && !string.IsNullOrWhiteSpace(((AiJobContext)value3).AnalysisPackagePath))
+            if (!Psd2UIFormTargetCompat.IsNull(value2) && value3 != null && !string.IsNullOrWhiteSpace(((AiJobContext)value3).AnalysisPackagePath))
             {
                 if (AiJobFileStore.TryReadJson<AiAnalysisPackageDocument>(((AiJobContext)value3).AnalysisPackagePath, out var aiAnalysisPackageDocument) && aiAnalysisPackageDocument != null && aiAnalysisPackageDocument.nodes != null)
                 {
-                    PsdLayerNode[] componentsInChildren = ((Component)value2).GetComponentsInChildren<PsdLayerNode>(true);
+                    PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value2).GetComponentsInChildren<PsdLayerNode>(true);
                     Dictionary<string, PsdLayerNode> dictionary = new Dictionary<string, PsdLayerNode>(StringComparer.OrdinalIgnoreCase);
                     if (componentsInChildren != null)
                     {
@@ -1347,15 +1347,15 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                         {
                             continue;
                         }
-                        if (!dictionary.TryGetValue(aiAnalysisNodeEntry.id, out var value) || (Object)(object)value == (Object)null)
+                        if (!dictionary.TryGetValue(aiAnalysisNodeEntry.id, out var value) || Psd2UIFormTargetCompat.IsNull(value))
                         {
                             list.Add("'" + aiAnalysisNodeEntry.id + "' 已不存在");
                             continue;
                         }
-                        string text2 = GetParentNodeId(value2, ((Component)value).transform.parent);
+                        string text2 = GetParentNodeId(value2, Psd2UIFormTargetCompat.TransformOf(value).parent);
                         string text3 = (string.IsNullOrWhiteSpace(aiAnalysisNodeEntry.uiType) ? GUIType.Null.ToString() : aiAnalysisNodeEntry.uiType);
                         string text4 = aiAnalysisNodeEntry.name ?? string.Empty;
-                        if (!string.Equals(text2, aiAnalysisNodeEntry.parentId, StringComparison.OrdinalIgnoreCase) || !string.Equals(value.UIType.ToString(), text3, StringComparison.Ordinal) || !string.Equals(((Object)((Component)value).gameObject).name ?? string.Empty, text4, StringComparison.Ordinal))
+                        if (!string.Equals(text2, aiAnalysisNodeEntry.parentId, StringComparison.OrdinalIgnoreCase) || !string.Equals(value.UIType.ToString(), text3, StringComparison.Ordinal) || !string.Equals(((Object)Psd2UIFormTargetCompat.GameObjectOf(value)).name ?? string.Empty, text4, StringComparison.Ordinal))
                         {
                             list.Add($"'{aiAnalysisNodeEntry.id}' (name={text4}→{((Object)value).name}, parent={aiAnalysisNodeEntry.parentId}→{text2}, uiType={text3}→{value.UIType})");
                         }
@@ -1373,10 +1373,10 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
         private static string GetParentNodeId(object value, object value2)
         {
-            if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null) && !((Object)value2 == (Object)(object)((Component)value).transform))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2) && !((Object)value2 == (Object)(object)Psd2UIFormTargetCompat.TransformOf(value)))
             {
-                PsdLayerNode component = ((Component)value2).GetComponent<PsdLayerNode>();
-                if ((Object)(object)component != (Object)null)
+                PsdLayerNode component = Psd2UIFormTargetCompat.GameObjectOf(value2).GetComponent<PsdLayerNode>();
+                if (!Psd2UIFormTargetCompat.IsNull(component))
                 {
                     return LayerNodeIdUtility.GetStableNodeId(value, component);
                 }

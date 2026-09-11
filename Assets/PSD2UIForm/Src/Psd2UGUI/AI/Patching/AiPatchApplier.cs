@@ -44,7 +44,7 @@ namespace AiPatchApplierNamespace
         internal bool ApplyPatch(Psd2UIFormConverterEditor value5, AiPatchDocument aiPatchDocument, out string result)
         {
             result = null;
-            if ((Object)(object)value5 == (Object)null)
+            if (value5 == null)
             {
                 result = "\ufffd";
                 return false;
@@ -67,7 +67,7 @@ namespace AiPatchApplierNamespace
                 Undo.IncrementCurrentGroup();
                 int currentGroup = Undo.GetCurrentGroup();
                 Undo.SetCurrentGroupName("Apply AI Patch");
-                Undo.RegisterFullObjectHierarchyUndo((Object)(object)value5.gameObject, "Apply AI Patch");
+                Undo.RegisterFullObjectHierarchyUndo(value5.gameObject, "Apply AI Patch");
                 for (int i = 0; i < aiPatchDocument.operations.Count; i++)
                 {
                     AiPatchOperation aiPatchOperation = aiPatchDocument.operations[i];
@@ -136,7 +136,7 @@ namespace AiPatchApplierNamespace
                 }
                 RefreshGeneratedGroupBounds(value._generatedLayerNodes);
                 new AiHierarchyStructureValidator().ValidateHierarchy(value5, list);
-                EditorUtility.SetDirty((Object)(object)value5.gameObject);
+                EditorUtility.SetDirty(value5.gameObject);
                 Undo.CollapseUndoOperations(currentGroup);
                 if (list.Count > 0)
                 {
@@ -192,14 +192,14 @@ namespace AiPatchApplierNamespace
         private static AiPatchApplyContext BuildApplyContext(object value)
         {
             AiPatchApplyContext value2 = new AiPatchApplyContext();
-            value2._gameObjectsById["root"] = ((Component)value).gameObject;
-            PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+            value2._gameObjectsById["root"] = Psd2UIFormTargetCompat.GameObjectOf(value);
+            PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value).GetComponentsInChildren<PsdLayerNode>(true);
             foreach (PsdLayerNode psdLayerNode in componentsInChildren)
             {
                 string text = LayerNodeIdUtility.GetStableNodeId(value, psdLayerNode);
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    value2._gameObjectsById[text] = ((Component)psdLayerNode).gameObject;
+                    value2._gameObjectsById[text] = Psd2UIFormTargetCompat.GameObjectOf(psdLayerNode);
                     value2._layerNodesById[text] = psdLayerNode;
                 }
             }
@@ -210,7 +210,7 @@ namespace AiPatchApplierNamespace
         {
             if (!string.IsNullOrWhiteSpace(((AiPatchOperation)value4).id) && !((AiPatchApplyContext)value3)._gameObjectsById.ContainsKey(((AiPatchOperation)value4).id))
             {
-                if (((AiPatchApplyContext)value3)._gameObjectsById.TryGetValue(((AiPatchOperation)value4).parentId, out var value) && !((Object)(object)value == (Object)null))
+                if (((AiPatchApplyContext)value3)._gameObjectsById.TryGetValue(((AiPatchOperation)value4).parentId, out var value) && !Psd2UIFormTargetCompat.IsNull(value))
                 {
                     GUIType gUIType = GUIType.Null;
                     AiPatchValidator.TryParsePatchUiType(((AiPatchOperation)value4).uiType, out gUIType);
@@ -219,10 +219,10 @@ namespace AiPatchApplierNamespace
                     {
                         if (((AiPatchOperation)value4).insertIndex >= 0)
                         {
-                            ApplyRequestedSiblingIndex(value3, ((Component)psdLayerNode).transform, value.transform, ((AiPatchOperation)value4).insertIndex);
-                            ((AiPatchApplyContext)value3)._requestedSiblingIndices[((Component)psdLayerNode).transform] = ((AiPatchOperation)value4).insertIndex;
+                            ApplyRequestedSiblingIndex(value3, Psd2UIFormTargetCompat.TransformOf(psdLayerNode), value.transform, ((AiPatchOperation)value4).insertIndex);
+                            ((AiPatchApplyContext)value3)._requestedSiblingIndices[Psd2UIFormTargetCompat.TransformOf(psdLayerNode)] = ((AiPatchOperation)value4).insertIndex;
                         }
-                        ((AiPatchApplyContext)value3)._gameObjectsById[((AiPatchOperation)value4).id] = ((Component)psdLayerNode).gameObject;
+                        ((AiPatchApplyContext)value3)._gameObjectsById[((AiPatchOperation)value4).id] = Psd2UIFormTargetCompat.GameObjectOf(psdLayerNode);
                         ((AiPatchApplyContext)value3)._layerNodesById[((AiPatchOperation)value4).id] = psdLayerNode;
                         return;
                     }
@@ -254,15 +254,15 @@ namespace AiPatchApplierNamespace
         private static bool TryReuseGeneratedGroup(object value, object value2, object value3, object value4, GUIType uiType, out PsdLayerNode result)
         {
             result = null;
-            if ((Object)value2 == (Object)null || string.IsNullOrWhiteSpace((string)value3))
+            if (Psd2UIFormTargetCompat.IsNull(value2) || string.IsNullOrWhiteSpace((string)value3))
             {
                 return false;
             }
             for (int i = 0; i < ((Transform)value2).childCount; i++)
             {
                 Transform child = ((Transform)value2).GetChild(i);
-                PsdLayerNode psdLayerNode = ((!((Object)(object)child != (Object)null)) ? null : ((Component)child).GetComponent<PsdLayerNode>());
-                if ((Object)(object)psdLayerNode == (Object)null || !LayerNodeIdUtility.IsGeneratedLayerGroup(psdLayerNode))
+                PsdLayerNode psdLayerNode = ((!(!Psd2UIFormTargetCompat.IsNull(child))) ? null : Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>());
+                if (Psd2UIFormTargetCompat.IsNull(psdLayerNode) || !LayerNodeIdUtility.IsGeneratedLayerGroup(psdLayerNode))
                 {
                     continue;
                 }
@@ -278,7 +278,7 @@ namespace AiPatchApplierNamespace
                     continue;
                 }
                 psdLayerNode.SetGeneratedNodeId((string)value3);
-                ((AiPatchApplyContext)value)._gameObjectsById[(string)value3] = ((Component)child).gameObject;
+                ((AiPatchApplyContext)value)._gameObjectsById[(string)value3] = Psd2UIFormTargetCompat.GameObjectOf(child);
                 ((AiPatchApplyContext)value)._layerNodesById[(string)value3] = psdLayerNode;
                 result = psdLayerNode;
                 return true;
@@ -288,9 +288,9 @@ namespace AiPatchApplierNamespace
 
         private static void ApplyMoveNode(object value3, object value4, List<string> texts)
         {
-            if (((AiPatchApplyContext)value3)._gameObjectsById.TryGetValue(((AiPatchOperation)value4).targetId, out var value) && !((Object)(object)value == (Object)null))
+            if (((AiPatchApplyContext)value3)._gameObjectsById.TryGetValue(((AiPatchOperation)value4).targetId, out var value) && !Psd2UIFormTargetCompat.IsNull(value))
             {
-                if (((AiPatchApplyContext)value3)._gameObjectsById.TryGetValue(((AiPatchOperation)value4).newParentId, out var value2) && !((Object)(object)value2 == (Object)null))
+                if (((AiPatchApplyContext)value3)._gameObjectsById.TryGetValue(((AiPatchOperation)value4).newParentId, out var value2) && !Psd2UIFormTargetCompat.IsNull(value2))
                 {
                     if (value2.transform.IsChildOf(value.transform))
                     {
@@ -317,7 +317,7 @@ namespace AiPatchApplierNamespace
 
         private static void ApplyRequestedSiblingIndex(object value, object value2, object value3, int value4)
         {
-            if ((Object)value2 == (Object)null || (Object)value3 == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value2) || Psd2UIFormTargetCompat.IsNull(value3))
             {
                 return;
             }
@@ -325,7 +325,7 @@ namespace AiPatchApplierNamespace
             for (int i = 0; i < ((Transform)value3).childCount; i++)
             {
                 Transform child = ((Transform)value3).GetChild(i);
-                if (!((Object)(object)child == (Object)null) && !((Object)(object)child == (Object)value2))
+                if (!Psd2UIFormTargetCompat.IsNull(child) && !((Object)(object)child == (Object)value2))
                 {
                     int num2 = GetRequestedSiblingIndex(value, child, i);
                     if (value4 < num2)
@@ -340,7 +340,7 @@ namespace AiPatchApplierNamespace
 
         private static int GetRequestedSiblingIndex(object value2, object value3, int value4)
         {
-            if (!((Object)value3 == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value3))
             {
                 if (value2 != null && ((AiPatchApplyContext)value2)._requestedSiblingIndices.TryGetValue((Transform)value3, out var value))
                 {
@@ -353,10 +353,10 @@ namespace AiPatchApplierNamespace
 
         private static void ApplyFlattenGroup(object value2, object value3, List<string> texts)
         {
-            if (((AiPatchApplyContext)value2)._gameObjectsById.TryGetValue(((AiPatchOperation)value3).targetId, out var value) && !((Object)(object)value == (Object)null))
+            if (((AiPatchApplyContext)value2)._gameObjectsById.TryGetValue(((AiPatchOperation)value3).targetId, out var value) && !Psd2UIFormTargetCompat.IsNull(value))
             {
                 PsdLayerNode component = value.GetComponent<PsdLayerNode>();
-                if (!((Object)(object)component == (Object)null) && (component.UIType == GUIType.Panel || component.UIType == GUIType.Null))
+                if (!Psd2UIFormTargetCompat.IsNull(component) && (component.UIType == GUIType.Panel || component.UIType == GUIType.Null))
                 {
                     if (HasDirectChildWithUiType(value.transform, GUIType.Background))
                     {
@@ -364,7 +364,7 @@ namespace AiPatchApplierNamespace
                         return;
                     }
                     Transform parent = value.transform.parent;
-                    if ((Object)(object)parent == (Object)null)
+                    if (Psd2UIFormTargetCompat.IsNull(parent))
                     {
                         texts?.Add("Skipped flatten_group '" + ((AiPatchOperation)value3).targetId + "': target has no parent.");
                         return;
@@ -379,7 +379,7 @@ namespace AiPatchApplierNamespace
                     for (int j = 0; j < array.Length; j++)
                     {
                         Transform val = array[j];
-                        if (!((Object)(object)val == (Object)null))
+                        if (!Psd2UIFormTargetCompat.IsNull(val))
                         {
                             val.SetParent(parent, true);
                             val.SetSiblingIndex(Mathf.Min(siblingIndex + j, parent.childCount - 1));
@@ -387,7 +387,7 @@ namespace AiPatchApplierNamespace
                     }
                     ((AiPatchApplyContext)value2)._gameObjectsById.Remove(((AiPatchOperation)value3).targetId);
                     ((AiPatchApplyContext)value2)._layerNodesById.Remove(((AiPatchOperation)value3).targetId);
-                    if ((Object)(object)component != (Object)null)
+                    if (!Psd2UIFormTargetCompat.IsNull(component))
                     {
                         ((AiPatchApplyContext)value2)._generatedLayerNodes.Remove(component);
                     }
@@ -411,7 +411,7 @@ namespace AiPatchApplierNamespace
             {
                 texts?.Add("Skipped set_ui_type: targetId is empty.");
             }
-            else if (((AiPatchApplyContext)value2)._layerNodesById.TryGetValue(((AiPatchOperation)value3).targetId, out value) && !((Object)(object)value == (Object)null))
+            else if (((AiPatchApplyContext)value2)._layerNodesById.TryGetValue(((AiPatchOperation)value3).targetId, out value) && !Psd2UIFormTargetCompat.IsNull(value))
             {
                 if (!AiPatchValidator.TryParsePatchUiType(((AiPatchOperation)value3).uiType, out var gUIType))
                 {
@@ -434,7 +434,7 @@ namespace AiPatchApplierNamespace
 
         private static void ApplyRenameNode(object value2, object value3, List<string> texts)
         {
-            if (((AiPatchApplyContext)value2)._gameObjectsById.TryGetValue(((AiPatchOperation)value3).targetId, out var value) && !((Object)(object)value == (Object)null))
+            if (((AiPatchApplyContext)value2)._gameObjectsById.TryGetValue(((AiPatchOperation)value3).targetId, out var value) && !Psd2UIFormTargetCompat.IsNull(value))
             {
                 if (string.IsNullOrWhiteSpace(((AiPatchOperation)value3).name))
                 {
@@ -453,7 +453,7 @@ namespace AiPatchApplierNamespace
 
         private static void ApplyDeleteGeneratedGroup(object value2, object value3, List<string> texts)
         {
-            if (((AiPatchApplyContext)value2)._gameObjectsById.TryGetValue(((AiPatchOperation)value3).targetId, out var value) && !((Object)(object)value == (Object)null))
+            if (((AiPatchApplyContext)value2)._gameObjectsById.TryGetValue(((AiPatchOperation)value3).targetId, out var value) && !Psd2UIFormTargetCompat.IsNull(value))
             {
                 PsdLayerNode component = value.GetComponent<PsdLayerNode>();
                 if (!LayerNodeIdUtility.IsGeneratedLayerGroup(component))
@@ -468,7 +468,7 @@ namespace AiPatchApplierNamespace
                 }
                 ((AiPatchApplyContext)value2)._gameObjectsById.Remove(((AiPatchOperation)value3).targetId);
                 ((AiPatchApplyContext)value2)._layerNodesById.Remove(((AiPatchOperation)value3).targetId);
-                if ((Object)(object)component != (Object)null)
+                if (!Psd2UIFormTargetCompat.IsNull(component))
                 {
                     ((AiPatchApplyContext)value2)._generatedLayerNodes.Remove(component);
                 }
@@ -482,7 +482,7 @@ namespace AiPatchApplierNamespace
 
         private static bool IsUiTypeCompatibleWithLayer(object value, GUIType uiType)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return false;
             }
@@ -550,7 +550,7 @@ namespace AiPatchApplierNamespace
 
         private static bool HasTextLayerDescendant(object value)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return false;
             }
@@ -560,8 +560,8 @@ namespace AiPatchApplierNamespace
                 if (num < ((Transform)value).childCount)
                 {
                     Transform child = ((Transform)value).GetChild(num);
-                    PsdLayerNode psdLayerNode = (((Object)(object)child != (Object)null) ? ((Component)child).GetComponent<PsdLayerNode>() : null);
-                    if (!((Object)(object)psdLayerNode != (Object)null) || psdLayerNode.LayerType != PsdLayerType.TextLayer)
+                    PsdLayerNode psdLayerNode = ((!Psd2UIFormTargetCompat.IsNull(child)) ? Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>() : null);
+                    if (!(!Psd2UIFormTargetCompat.IsNull(psdLayerNode)) || psdLayerNode.LayerType != PsdLayerType.TextLayer)
                     {
                         if (HasTextLayerDescendant(child))
                         {
@@ -579,7 +579,7 @@ namespace AiPatchApplierNamespace
 
         private static bool HasDirectChildWithUiType(object value, GUIType uiType)
         {
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 int num = 0;
                 while (true)
@@ -587,8 +587,8 @@ namespace AiPatchApplierNamespace
                     if (num < ((Transform)value).childCount)
                     {
                         Transform child = ((Transform)value).GetChild(num);
-                        PsdLayerNode psdLayerNode = (((object)child != null) ? ((Component)child).GetComponent<PsdLayerNode>() : null);
-                        if ((Object)(object)psdLayerNode != (Object)null && psdLayerNode.UIType == uiType)
+                        PsdLayerNode psdLayerNode = (((object)child != null) ? Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>() : null);
+                        if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode) && psdLayerNode.UIType == uiType)
                         {
                             break;
                         }
@@ -608,13 +608,13 @@ namespace AiPatchApplierNamespace
             {
                 return;
             }
-            layerNodes.Sort((PsdLayerNode a, PsdLayerNode b) => GetTransformDepth((b == null) ? null : ((Component)b).transform).CompareTo(GetTransformDepth((a != null) ? ((Component)a).transform : null)));
+            layerNodes.Sort((PsdLayerNode a, PsdLayerNode b) => GetTransformDepth((b == null) ? null : Psd2UIFormTargetCompat.TransformOf(b)).CompareTo(GetTransformDepth((a != null) ? Psd2UIFormTargetCompat.TransformOf(a) : null)));
             for (int num = 0; num < layerNodes.Count; num++)
             {
                 PsdLayerNode psdLayerNode = layerNodes[num];
-                if (!((Object)(object)psdLayerNode == (Object)null))
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
-                    if (!TryCalculateChildBounds(((Component)psdLayerNode).transform, out var zero))
+                    if (!TryCalculateChildBounds(Psd2UIFormTargetCompat.TransformOf(psdLayerNode), out var zero))
                     {
                         zero = Rect.zero;
                     }
@@ -627,7 +627,7 @@ namespace AiPatchApplierNamespace
         {
             int num = 0;
             Transform val = (Transform)value;
-            while ((Object)(object)val != (Object)null)
+            while (!Psd2UIFormTargetCompat.IsNull(val))
             {
                 num++;
                 val = val.parent;
@@ -639,8 +639,8 @@ namespace AiPatchApplierNamespace
         {
             Transform transform = (Transform)value;
             result = Rect.zero;
-            PsdLayerNode[] array = (from node in ((Component)transform).GetComponentsInChildren<PsdLayerNode>(true)
-                where (Object)(object)node != (Object)null && (Object)(object)((Component)node).transform.parent == (Object)(object)transform
+            PsdLayerNode[] array = (from node in Psd2UIFormTargetCompat.GameObjectOf(transform).GetComponentsInChildren<PsdLayerNode>(true)
+                where !Psd2UIFormTargetCompat.IsNull(node) && (Object)(object)Psd2UIFormTargetCompat.TransformOf(node).parent == (Object)(object)transform
                 select node).ToArray();
             if (array.Length < 1)
             {

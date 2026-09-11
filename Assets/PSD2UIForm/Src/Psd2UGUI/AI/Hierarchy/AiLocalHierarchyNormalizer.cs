@@ -36,25 +36,25 @@ namespace AiLocalHierarchyNormalizerNamespace
         internal static bool TryNormalizeHierarchy(object value, bool enabled, out LocalHierarchyNormalizationReport result)
         {
             result = new LocalHierarchyNormalizationReport();
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 int num = -1;
                 if (enabled)
                 {
                     num = Undo.GetCurrentGroup();
                     Undo.SetCurrentGroupName("PSD2UIForm Normalize Structure");
-                    Undo.RegisterCompleteObjectUndo((Object)(object)((Component)value).gameObject, "PSD2UIForm Normalize Structure");
+                    Undo.RegisterCompleteObjectUndo((Object)(object)Psd2UIFormTargetCompat.GameObjectOf(value), "PSD2UIForm Normalize Structure");
                 }
                 try
                 {
                     ((Psd2UIFormConverterEditor)value).NormalizeGroupGenerationState();
-                    PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+                    PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value).GetComponentsInChildren<PsdLayerNode>(true);
                     if (componentsInChildren != null && componentsInChildren.Length != 0)
                     {
                         MoveDependencyNodesToOwners(componentsInChildren, result, enabled);
                         FlattenEmptyNullGroups(value, result, enabled);
                         ((Psd2UIFormConverterEditor)value).RefreshAllHelperComponents();
-                        EditorUtility.SetDirty((Object)(object)((Component)value).gameObject);
+                        EditorUtility.SetDirty((Object)(object)Psd2UIFormTargetCompat.GameObjectOf(value));
                         return true;
                     }
                     return true;
@@ -78,12 +78,12 @@ namespace AiLocalHierarchyNormalizerNamespace
             for (int i = 0; i < ((Array)value).Length; i++)
             {
                 PsdLayerNode psdLayerNode = (PsdLayerNode)((object[])value)[i];
-                if ((Object)(object)psdLayerNode == (Object)null || !UGUIParser.CanOwnDependencyNodes(psdLayerNode.UIType))
+                if (Psd2UIFormTargetCompat.IsNull(psdLayerNode) || !UGUIParser.CanOwnDependencyNodes(psdLayerNode.UIType))
                 {
                     continue;
                 }
                 PsdLayerNode psdLayerNode2 = psdLayerNode.FindOwnerNode();
-                if ((Object)(object)psdLayerNode2 == (Object)null)
+                if (Psd2UIFormTargetCompat.IsNull(psdLayerNode2))
                 {
                     if (psdLayerNode.UIType == GUIType.Background)
                     {
@@ -101,13 +101,13 @@ namespace AiLocalHierarchyNormalizerNamespace
                         ((LocalHierarchyNormalizationReport)value2).Warnings.Add($"节点 '{((Object)psdLayerNode).name}' ({psdLayerNode.UIType}) 未找到兼容 owner，跳过结构修正。");
                     }
                 }
-                else if (!((Object)(object)((Component)psdLayerNode).transform.parent == (Object)(object)((Component)psdLayerNode2).transform))
+                else if (!((Object)(object)Psd2UIFormTargetCompat.TransformOf(psdLayerNode).parent == (Object)(object)Psd2UIFormTargetCompat.TransformOf(psdLayerNode2)))
                 {
                     list.Add(new NodeMovePlan
                     {
                         _node = psdLayerNode,
                         _ownerNode = psdLayerNode2,
-                        _originalOrder = GetOriginalTransformOrder(dictionary, ((Component)psdLayerNode).transform)
+                        _originalOrder = GetOriginalTransformOrder(dictionary, Psd2UIFormTargetCompat.TransformOf(psdLayerNode))
                     });
                 }
             }
@@ -145,7 +145,7 @@ namespace AiLocalHierarchyNormalizerNamespace
             if (value != null && ((Array)value).Length != 0)
             {
                 Transform val = (((Object)((object[])value)[0] != (Object)null) ? ((Component)((object[])value)[0]).transform.root : null);
-                if ((Object)(object)val == (Object)null)
+                if (Psd2UIFormTargetCompat.IsNull(val))
                 {
                     return dictionary;
                 }
@@ -158,7 +158,7 @@ namespace AiLocalHierarchyNormalizerNamespace
 
         private static void PopulateTransformOrderLookup(object value, Dictionary<Transform, int> lookup, ref int value2)
         {
-            if (!((Object)value == (Object)null) && lookup != null)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && lookup != null)
             {
                 lookup[(Transform)value] = value2++;
                 for (int i = 0; i < ((Transform)value).childCount; i++)
@@ -170,7 +170,7 @@ namespace AiLocalHierarchyNormalizerNamespace
 
         private static void SetSiblingIndexByOriginalOrder(object value, object value2, int value3, Dictionary<Transform, int> lookup)
         {
-            if ((Object)value == (Object)null || (Object)value2 == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value) || Psd2UIFormTargetCompat.IsNull(value2))
             {
                 return;
             }
@@ -178,7 +178,7 @@ namespace AiLocalHierarchyNormalizerNamespace
             for (int i = 0; i < ((Transform)value2).childCount; i++)
             {
                 Transform child = ((Transform)value2).GetChild(i);
-                if (!((Object)(object)child == (Object)null) && !((Object)(object)child == (Object)value) && value3 < GetOriginalTransformOrder(lookup, child))
+                if (!Psd2UIFormTargetCompat.IsNull(child) && !((Object)(object)child == (Object)value) && value3 < GetOriginalTransformOrder(lookup, child))
                 {
                     num = i;
                     break;
@@ -189,7 +189,7 @@ namespace AiLocalHierarchyNormalizerNamespace
 
         private static int GetOriginalTransformOrder(Dictionary<Transform, int> lookup, object value2)
         {
-            if ((Object)value2 == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value2))
             {
                 return int.MaxValue;
             }
@@ -206,19 +206,19 @@ namespace AiLocalHierarchyNormalizerNamespace
             do
             {
                 flag = false;
-                PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+                PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value).GetComponentsInChildren<PsdLayerNode>(true);
                 for (int num = componentsInChildren.Length - 1; num >= 0; num--)
                 {
                     PsdLayerNode psdLayerNode = componentsInChildren[num];
                     if (CanFlattenNullGroup(value, psdLayerNode))
                     {
-                        Transform parent = ((Component)psdLayerNode).transform.parent;
-                        if (!((Object)(object)parent == (Object)null))
+                        Transform parent = Psd2UIFormTargetCompat.TransformOf(psdLayerNode).parent;
+                        if (!Psd2UIFormTargetCompat.IsNull(parent))
                         {
-                            int siblingIndex = ((Component)psdLayerNode).transform.GetSiblingIndex();
-                            while (((Component)psdLayerNode).transform.childCount > 0)
+                            int siblingIndex = Psd2UIFormTargetCompat.TransformOf(psdLayerNode).GetSiblingIndex();
+                            while (Psd2UIFormTargetCompat.TransformOf(psdLayerNode).childCount > 0)
                             {
-                                Transform child = ((Component)psdLayerNode).transform.GetChild(0);
+                                Transform child = Psd2UIFormTargetCompat.TransformOf(psdLayerNode).GetChild(0);
                                 if (enabled)
                                 {
                                     Undo.SetTransformParent(child, parent, "Normalize PSD Structure");
@@ -231,11 +231,11 @@ namespace AiLocalHierarchyNormalizerNamespace
                             }
                             if (!enabled)
                             {
-                                Object.DestroyImmediate((Object)(object)((Component)psdLayerNode).gameObject);
+                                Object.DestroyImmediate((Object)(object)Psd2UIFormTargetCompat.GameObjectOf(psdLayerNode));
                             }
                             else
                             {
-                                Undo.DestroyObjectImmediate((Object)(object)((Component)psdLayerNode).gameObject);
+                                Undo.DestroyObjectImmediate((Object)(object)Psd2UIFormTargetCompat.GameObjectOf(psdLayerNode));
                             }
                             ((LocalHierarchyNormalizationReport)value2).FlattenedNullGroupCount++;
                             ((LocalHierarchyNormalizationReport)value2).Actions.Add("flatten_null");
@@ -250,20 +250,20 @@ namespace AiLocalHierarchyNormalizerNamespace
 
         private static bool CanFlattenNullGroup(object value, object value2)
         {
-            if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null) && !((Object)(object)((Component)value2).transform == (Object)(object)((Component)value).transform))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2) && !((Object)(object)Psd2UIFormTargetCompat.TransformOf(value2) == (Object)(object)Psd2UIFormTargetCompat.TransformOf(value)))
             {
                 if (((PsdLayerNode)value2).UIType == GUIType.Null && ((PsdLayerNode)value2).LayerType == PsdLayerType.LayerGroup)
                 {
                     if (!((PsdLayerNode)value2).HasAssetReference() && !((PsdLayerNode)value2).HasPrefabReference() && !((PsdLayerNode)value2).ShouldCollapseChildrenForGeneration())
                     {
-                        if (((Component)value2).transform.childCount > 1)
+                        if (Psd2UIFormTargetCompat.TransformOf(value2).childCount > 1)
                         {
                             return false;
                         }
-                        for (int i = 0; i < ((Component)value2).transform.childCount; i++)
+                        for (int i = 0; i < Psd2UIFormTargetCompat.TransformOf(value2).childCount; i++)
                         {
-                            PsdLayerNode component = ((Component)((Component)value2).transform.GetChild(i)).GetComponent<PsdLayerNode>();
-                            if ((Object)(object)component != (Object)null && component.UIType == GUIType.Background)
+                            PsdLayerNode component = ((Component)Psd2UIFormTargetCompat.TransformOf(value2).GetChild(i)).GetComponent<PsdLayerNode>();
+                            if (!Psd2UIFormTargetCompat.IsNull(component) && component.UIType == GUIType.Background)
                             {
                                 return false;
                             }

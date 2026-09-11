@@ -99,7 +99,7 @@ namespace AiAnalysisPackageBuilderNamespace
         {
             result = string.Empty;
             result2 = null;
-            if (!((Object)(object)value3 == (Object)null))
+            if (value3 != null)
             {
                 if (aiJobContext != null)
                 {
@@ -151,7 +151,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static AiPackagePaths BuildPackagePaths(object value)
         {
-            string text = Path.Combine(AiPathUtility.ResolvePath(Directory.GetParent(Application.dataPath).FullName, "Library/Psd2UIForm/AiShared"), AiPathUtility.SanitizePsdName((!((Object)value != (Object)null)) ? null : ((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath()));
+            string text = Path.Combine(AiPathUtility.ResolvePath(Directory.GetParent(Application.dataPath).FullName, "Library/Psd2UIForm/AiShared"), AiPathUtility.SanitizePsdName((!(!Psd2UIFormTargetCompat.IsNull(value))) ? null : ((Psd2UIFormConverterEditor)value).GetSourcePsdAssetPath()));
             return new AiPackagePaths
             {
                 _packageRootDirectory = text,
@@ -196,7 +196,7 @@ namespace AiAnalysisPackageBuilderNamespace
             else
             {
                 Sprite val = ((Psd2UIFormConverterEditor)value).GetPreviewSprite();
-                if ((Object)(object)val != (Object)null && (Object)(object)val.texture != (Object)null)
+                if (!Psd2UIFormTargetCompat.IsNull(val) && (Object)(object)val.texture != (Object)null)
                 {
                     EnsureTexturePng(val.texture, text);
                     num = ((Texture)val.texture).width;
@@ -234,7 +234,7 @@ namespace AiAnalysisPackageBuilderNamespace
         {
             AiAnalysisConfigInfo aiAnalysisConfigInfo = new AiAnalysisConfigInfo();
             UGUIParser uGUIParser = UGUIParser.Instance;
-            if ((Object)(object)uGUIParser == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(uGUIParser))
             {
                 return aiAnalysisConfigInfo;
             }
@@ -279,7 +279,7 @@ namespace AiAnalysisPackageBuilderNamespace
             for (int i = 0; i < ((Array)value).Length; i++)
             {
                 PsdLayerNode psdLayerNode = (PsdLayerNode)((object[])value)[i];
-                if (!((Object)(object)psdLayerNode == (Object)null) && !dictionary.ContainsKey(psdLayerNode))
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode) && !dictionary.ContainsKey(psdLayerNode))
                 {
                     dictionary[psdLayerNode] = "n" + i.ToString("000");
                 }
@@ -289,16 +289,16 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string BuildNodeIdPath(object value2, object value3, Dictionary<PsdLayerNode, string> lookup)
         {
-            if ((Object)value3 == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value3))
             {
                 return string.Empty;
             }
             Stack<string> stack = new Stack<string>();
             Transform val = (Transform)value3;
-            while ((Object)(object)val != (Object)null && ((Object)value2 == (Object)null || (Object)(object)val != (Object)(object)((Component)value2).transform))
+            while (!Psd2UIFormTargetCompat.IsNull(val) && (Psd2UIFormTargetCompat.IsNull(value2) || (Object)(object)val != (Object)(object)Psd2UIFormTargetCompat.TransformOf(value2)))
             {
-                PsdLayerNode component = ((Component)val).GetComponent<PsdLayerNode>();
-                if ((Object)(object)component != (Object)null && lookup != null && lookup.TryGetValue(component, out var value))
+                PsdLayerNode component = Psd2UIFormTargetCompat.GameObjectOf(val).GetComponent<PsdLayerNode>();
+                if (!Psd2UIFormTargetCompat.IsNull(component) && lookup != null && lookup.TryGetValue(component, out var value))
                 {
                     stack.Push(value);
                 }
@@ -313,11 +313,11 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string BuildNodeDisplayPath(object value, object value2)
         {
-            if (!((Object)value2 == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value2))
             {
                 Stack<string> stack = new Stack<string>();
                 Transform val = (Transform)value2;
-                while ((Object)(object)val != (Object)null && ((Object)value == (Object)null || (Object)(object)val != (Object)(object)((Component)value).transform))
+                while (!Psd2UIFormTargetCompat.IsNull(val) && (Psd2UIFormTargetCompat.IsNull(value) || (Object)(object)val != (Object)(object)Psd2UIFormTargetCompat.TransformOf(value)))
                 {
                     stack.Push(((Object)val).name ?? string.Empty);
                     val = val.parent;
@@ -333,11 +333,11 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string ResolveSuffixMatch(object value)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return string.Empty;
             }
-            string text = ExtractSuffixToken(((Object)((Component)value).gameObject).name);
+            string text = ExtractSuffixToken(((Object)Psd2UIFormTargetCompat.GameObjectOf(value)).name);
             if (string.IsNullOrWhiteSpace(text))
             {
                 text = ExtractSuffixToken(((PsdLayerNode)value).GetSourceLayerName());
@@ -347,7 +347,7 @@ namespace AiAnalysisPackageBuilderNamespace
                 return string.Empty;
             }
             UGUIParser uGUIParser = UGUIParser.Instance;
-            UGUIParseRule[] array = (((Object)(object)uGUIParser != (Object)null) ? uGUIParser.GetRules() : null);
+            UGUIParseRule[] array = ((!Psd2UIFormTargetCompat.IsNull(uGUIParser)) ? uGUIParser.GetRules() : null);
             if (array != null)
             {
                 foreach (UGUIParseRule uGUIParseRule in array)
@@ -407,7 +407,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static AiAnalysisNodeEntry BuildNodeEntry(object value3, object value4, object value5, object value6, AiDocumentBounds value7, Dictionary<PsdLayerNode, string> lookup)
         {
-            if ((Object)value6 == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value6))
             {
                 return null;
             }
@@ -422,14 +422,14 @@ namespace AiAnalysisPackageBuilderNamespace
             {
                 id = id,
                 shortId = (value ?? string.Empty),
-                parentId = GetParentNodeId(value3, ((Component)value6).transform.parent),
-                childIds = GetChildNodeIds(value3, ((Component)value6).transform),
-                onlyChildId = GetOnlyChildNodeId(value3, ((Component)value6).transform),
-                idPath = BuildNodeIdPath(value3, ((Component)value6).transform, lookup),
-                displayPath = BuildNodeDisplayPath(value3, ((Component)value6).transform),
-                name = ((Object)((Component)value6).gameObject).name,
+                parentId = GetParentNodeId(value3, Psd2UIFormTargetCompat.TransformOf(value6).parent),
+                childIds = GetChildNodeIds(value3, Psd2UIFormTargetCompat.TransformOf(value6)),
+                onlyChildId = GetOnlyChildNodeId(value3, Psd2UIFormTargetCompat.TransformOf(value6)),
+                idPath = BuildNodeIdPath(value3, Psd2UIFormTargetCompat.TransformOf(value6), lookup),
+                displayPath = BuildNodeDisplayPath(value3, Psd2UIFormTargetCompat.TransformOf(value6)),
+                name = ((Object)Psd2UIFormTargetCompat.GameObjectOf(value6)).name,
                 layerName = ((PsdLayerNode)value6).GetSourceLayerName(),
-                nameTokens = BuildNameTokens(((Object)((Component)value6).gameObject).name, ((PsdLayerNode)value6).GetSourceLayerName()),
+                nameTokens = BuildNameTokens(((Object)Psd2UIFormTargetCompat.GameObjectOf(value6)).name, ((PsdLayerNode)value6).GetSourceLayerName()),
                 layerType = ((PsdLayerNode)value6).LayerType.ToString(),
                 isGroupLayer = (((PsdLayerNode)value6).LayerType == PsdLayerType.LayerGroup),
                 isTextLayer = isTextLayer,
@@ -448,14 +448,14 @@ namespace AiAnalysisPackageBuilderNamespace
                 visualHash = (value2._visualHash ?? string.Empty),
                 renderLeafCount = CountRenderLeaves(value6),
                 suffixMatch = ResolveSuffixMatch(value6),
-                siblingIndex = ((Component)value6).transform.GetSiblingIndex(),
-                childCount = ((Component)value6).transform.childCount
+                siblingIndex = Psd2UIFormTargetCompat.TransformOf(value6).GetSiblingIndex(),
+                childCount = Psd2UIFormTargetCompat.TransformOf(value6).childCount
             };
         }
 
         private static string[] GetChildNodeIds(object value, object value2)
         {
-            if ((Object)value == (Object)null || (Object)value2 == (Object)null || ((Transform)value2).childCount < 1)
+            if (Psd2UIFormTargetCompat.IsNull(value) || Psd2UIFormTargetCompat.IsNull(value2) || ((Transform)value2).childCount < 1)
             {
                 return Array.Empty<string>();
             }
@@ -463,7 +463,7 @@ namespace AiAnalysisPackageBuilderNamespace
             for (int i = 0; i < ((Transform)value2).childCount; i++)
             {
                 PsdLayerNode component = ((Component)((Transform)value2).GetChild(i)).GetComponent<PsdLayerNode>();
-                if (!((Object)(object)component == (Object)null))
+                if (!Psd2UIFormTargetCompat.IsNull(component))
                 {
                     string text = LayerNodeIdUtility.GetStableNodeId(value, component);
                     if (!string.IsNullOrWhiteSpace(text))
@@ -481,22 +481,22 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string GetOnlyChildNodeId(object value, object value2)
         {
-            if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2))
             {
                 PsdLayerNode psdLayerNode = null;
                 for (int i = 0; i < ((Transform)value2).childCount; i++)
                 {
                     PsdLayerNode component = ((Component)((Transform)value2).GetChild(i)).GetComponent<PsdLayerNode>();
-                    if (!((Object)(object)component == (Object)null))
+                    if (!Psd2UIFormTargetCompat.IsNull(component))
                     {
-                        if ((Object)(object)psdLayerNode != (Object)null)
+                        if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                         {
                             return string.Empty;
                         }
                         psdLayerNode = component;
                     }
                 }
-                if ((Object)(object)psdLayerNode != (Object)null)
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
                     return LayerNodeIdUtility.GetStableNodeId(value, psdLayerNode);
                 }
@@ -571,7 +571,7 @@ namespace AiAnalysisPackageBuilderNamespace
             result2 = 0f;
             result3 = 0f;
             result4 = 0f;
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 PsdLayer psdLayer = ((PsdLayerNode)value).GetBoundPsdLayer();
                 if (psdLayer != null)
@@ -596,10 +596,10 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string GetParentNodeId(object value, object value2)
         {
-            if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null) && !((Object)value2 == (Object)(object)((Component)value).transform))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2) && !((Object)value2 == (Object)(object)Psd2UIFormTargetCompat.TransformOf(value)))
             {
-                PsdLayerNode component = ((Component)value2).GetComponent<PsdLayerNode>();
-                if ((Object)(object)component != (Object)null)
+                PsdLayerNode component = Psd2UIFormTargetCompat.GameObjectOf(value2).GetComponent<PsdLayerNode>();
+                if (!Psd2UIFormTargetCompat.IsNull(component))
                 {
                     return LayerNodeIdUtility.GetStableNodeId(value, component);
                 }
@@ -610,7 +610,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string BuildNodePreviewImage(object value3, object value4, object value5, object value6)
         {
-            if (!((Object)value4 == (Object)null) && value5 != null && !string.IsNullOrWhiteSpace(((AiPackagePaths)value5)._nodePreviewDirectory))
+            if (!Psd2UIFormTargetCompat.IsNull(value4) && value5 != null && !string.IsNullOrWhiteSpace(((AiPackagePaths)value5)._nodePreviewDirectory))
             {
                 if (value6 == null || !((AiPackageBuildContext)value6)._nodeAssetsByNode.TryGetValue((PsdLayerNode)value4, out var value))
                 {
@@ -633,7 +633,7 @@ namespace AiAnalysisPackageBuilderNamespace
                     string text5 = "empty";
                     try
                     {
-                        if (TryGetNodePreviewTexture(value4, out val, out flag, out text5) && !((Object)(object)val == (Object)null))
+                        if (TryGetNodePreviewTexture(value4, out val, out flag, out text5) && !Psd2UIFormTargetCompat.IsNull(val))
                         {
                             string text2 = SanitizeFileName(LayerNodeIdUtility.GetStableNodeId(value3, value4));
                             if (string.IsNullOrWhiteSpace(text2))
@@ -664,7 +664,7 @@ namespace AiAnalysisPackageBuilderNamespace
                     }
                     finally
                     {
-                        if (flag && (Object)(object)val != (Object)null)
+                        if (flag && !Psd2UIFormTargetCompat.IsNull(val))
                         {
                             Object.DestroyImmediate((Object)(object)val);
                         }
@@ -680,7 +680,7 @@ namespace AiAnalysisPackageBuilderNamespace
             result = null;
             result2 = false;
             result3 = "empty";
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return false;
             }
@@ -701,9 +701,9 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static bool CanRenderCompositePreview(object value)
         {
-            if ((Object)value != (Object)null && ((PsdLayerNode)value).LayerType == PsdLayerType.LayerGroup && (Object)(object)((Component)value).transform != (Object)null)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && ((PsdLayerNode)value).LayerType == PsdLayerType.LayerGroup && (Object)(object)Psd2UIFormTargetCompat.TransformOf(value) != (Object)null)
             {
-                return ((Component)value).transform.childCount > 0;
+                return Psd2UIFormTargetCompat.TransformOf(value).childCount > 0;
             }
             return false;
         }
@@ -711,7 +711,7 @@ namespace AiAnalysisPackageBuilderNamespace
         private static bool TryRenderCompositePreview(object value, out Texture2D result)
         {
             result = null;
-            List<PsdLayer> list = new List<PsdLayer>(Mathf.Max(1, ((Component)value).transform.childCount * 2));
+            List<PsdLayer> list = new List<PsdLayer>(Mathf.Max(1, Psd2UIFormTargetCompat.TransformOf(value).childCount * 2));
             CollectCompositeLayers(value, list);
             if (list.Count < 1)
             {
@@ -719,21 +719,21 @@ namespace AiAnalysisPackageBuilderNamespace
             }
             PsdRenderedImage psdRenderedImage = PsdLayerRenderer.MergeLayers(list, includeHiddenLayers: false, applyClippingMasks: true, isPreviewRender: true);
             result = CreateTextureFromRenderedImage(psdRenderedImage);
-            return (Object)(object)result != (Object)null;
+            return !Psd2UIFormTargetCompat.IsNull(result);
         }
 
         private static void CollectCompositeLayers(object value, List<PsdLayer> psdLayers)
         {
-            if ((Object)value == (Object)null || psdLayers == null || !((Component)value).gameObject.activeSelf)
+            if (Psd2UIFormTargetCompat.IsNull(value) || psdLayers == null || !Psd2UIFormTargetCompat.GameObjectOf(value).activeSelf)
             {
                 return;
             }
             bool flag = false;
             int i = 0;
-            for (int childCount = ((Component)value).transform.childCount; i < childCount; i++)
+            for (int childCount = Psd2UIFormTargetCompat.TransformOf(value).childCount; i < childCount; i++)
             {
-                PsdLayerNode component = ((Component)((Component)value).transform.GetChild(i)).GetComponent<PsdLayerNode>();
-                if (!((Object)(object)component == (Object)null))
+                PsdLayerNode component = ((Component)Psd2UIFormTargetCompat.TransformOf(value).GetChild(i)).GetComponent<PsdLayerNode>();
+                if (!Psd2UIFormTargetCompat.IsNull(component))
                 {
                     flag = true;
                     CollectCompositeLayers(component, psdLayers);
@@ -774,7 +774,7 @@ namespace AiAnalysisPackageBuilderNamespace
         private static bool TryGetPreviewPassthroughChild(object value, out PsdLayerNode result)
         {
             result = null;
-            if (!((Object)value == (Object)null) && ((PsdLayerNode)value).LayerType == PsdLayerType.LayerGroup && (((PsdLayerNode)value).UIType == GUIType.Panel || ((PsdLayerNode)value).UIType == GUIType.Null) && !((PsdLayerNode)value).ShouldCollapseChildrenForGeneration())
+            if (!Psd2UIFormTargetCompat.IsNull(value) && ((PsdLayerNode)value).LayerType == PsdLayerType.LayerGroup && (((PsdLayerNode)value).UIType == GUIType.Panel || ((PsdLayerNode)value).UIType == GUIType.Null) && !((PsdLayerNode)value).ShouldCollapseChildrenForGeneration())
             {
                 PsdLayer psdLayer = ((PsdLayerNode)value).GetBoundPsdLayer();
                 if (psdLayer == null || !psdLayer.IsPreviewPassthroughGroup())
@@ -785,12 +785,12 @@ namespace AiAnalysisPackageBuilderNamespace
                 int num = 0;
                 while (true)
                 {
-                    if (num < ((Component)value).transform.childCount)
+                    if (num < Psd2UIFormTargetCompat.TransformOf(value).childCount)
                     {
-                        PsdLayerNode component = ((Component)((Component)value).transform.GetChild(num)).GetComponent<PsdLayerNode>();
-                        if (!((Object)(object)component == (Object)null) && ((Component)component).gameObject.activeSelf && (component.GetBoundPsdLayer() == null || component.GetBoundPsdLayer().IsVisible))
+                        PsdLayerNode component = ((Component)Psd2UIFormTargetCompat.TransformOf(value).GetChild(num)).GetComponent<PsdLayerNode>();
+                        if (!Psd2UIFormTargetCompat.IsNull(component) && Psd2UIFormTargetCompat.GameObjectOf(component).activeSelf && (component.GetBoundPsdLayer() == null || component.GetBoundPsdLayer().IsVisible))
                         {
-                            if ((Object)(object)psdLayerNode != (Object)null)
+                            if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                             {
                                 break;
                             }
@@ -800,7 +800,7 @@ namespace AiAnalysisPackageBuilderNamespace
                         continue;
                     }
                     result = psdLayerNode;
-                    return (Object)(object)result != (Object)null;
+                    return !Psd2UIFormTargetCompat.IsNull(result);
                 }
                 return false;
             }
@@ -809,7 +809,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void RecordNodeAssetInfo(object value, object value2, AiNodeAssetInfo value3, object value4)
         {
-            if (value != null && !((Object)value2 == (Object)null))
+            if (value != null && !Psd2UIFormTargetCompat.IsNull(value2))
             {
                 ((AiPackageBuildContext)value)._nodeAssetsByNode[(PsdLayerNode)value2] = value3;
                 if (!string.IsNullOrWhiteSpace(value3._imageFile))
@@ -822,16 +822,16 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static int CountRenderLeaves(object value)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return 0;
             }
             int num = 0;
             int num2 = 0;
-            for (int i = 0; i < ((Component)value).transform.childCount; i++)
+            for (int i = 0; i < Psd2UIFormTargetCompat.TransformOf(value).childCount; i++)
             {
-                PsdLayerNode component = ((Component)((Component)value).transform.GetChild(i)).GetComponent<PsdLayerNode>();
-                if (!((Object)(object)component == (Object)null))
+                PsdLayerNode component = ((Component)Psd2UIFormTargetCompat.TransformOf(value).GetChild(i)).GetComponent<PsdLayerNode>();
+                if (!Psd2UIFormTargetCompat.IsNull(component))
                 {
                     num++;
                     num2 += CountRenderLeaves(component);
@@ -922,7 +922,7 @@ namespace AiAnalysisPackageBuilderNamespace
             if (!string.IsNullOrWhiteSpace(text) && File.Exists(text))
             {
                 Texture2D val = LoadTextureFromFile(text);
-                if ((Object)(object)val == (Object)null)
+                if (Psd2UIFormTargetCompat.IsNull(val))
                 {
                     return false;
                 }
@@ -957,7 +957,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void DrawNodeLabel(object value, object value2, int value3, int value4)
         {
-            if (!((Object)value == (Object)null) && !string.IsNullOrWhiteSpace((string)value2))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !string.IsNullOrWhiteSpace((string)value2))
             {
                 int num = Mathf.Clamp(value3, 0, Mathf.Max(0, ((Texture)value).width - 38));
                 int num2 = value4 - 13;
@@ -1063,7 +1063,7 @@ namespace AiAnalysisPackageBuilderNamespace
                 w = 0f,
                 h = 0f
             };
-            if ((Object)value == (Object)null || value2 == null || string.IsNullOrWhiteSpace(((AiAnalysisNodeEntry)value2).imageFile))
+            if (Psd2UIFormTargetCompat.IsNull(value) || value2 == null || string.IsNullOrWhiteSpace(((AiAnalysisNodeEntry)value2).imageFile))
             {
                 return;
             }
@@ -1073,7 +1073,7 @@ namespace AiAnalysisPackageBuilderNamespace
                 return;
             }
             Texture2D val = LoadTextureFromFile(text);
-            if ((Object)(object)val == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(val))
             {
                 return;
             }
@@ -1249,7 +1249,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void DrawRectangleOutline(object value, int value2, int value3, int value4, int value5, Color32 value6)
         {
-            if (!((Object)value == (Object)null) && value4 > 0 && value5 > 0)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && value4 > 0 && value5 > 0)
             {
                 for (int i = 0; i < value4; i++)
                 {
@@ -1266,7 +1266,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void DrawRectangleBorder(object value, int value2, int value3, int value4, int value5, Color32 value6, int value7)
         {
-            if (!((Object)value == (Object)null) && value4 > 0 && value5 > 0 && value7 > 0)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && value4 > 0 && value5 > 0 && value7 > 0)
             {
                 for (int i = 0; i < value7; i++)
                 {
@@ -1277,7 +1277,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void FillRectangle(object value, int value2, int value3, int value4, int value5, Color32 value6)
         {
-            if ((Object)value == (Object)null || value4 <= 0 || value5 <= 0)
+            if (Psd2UIFormTargetCompat.IsNull(value) || value4 <= 0 || value5 <= 0)
             {
                 return;
             }
@@ -1292,7 +1292,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void DrawScaledTexture(object value, object value2, int value3, int value4, int value5, int value6)
         {
-            if ((Object)value == (Object)null || (Object)value2 == (Object)null || value5 <= 0 || value6 <= 0)
+            if (Psd2UIFormTargetCompat.IsNull(value) || Psd2UIFormTargetCompat.IsNull(value2) || value5 <= 0 || value6 <= 0)
             {
                 return;
             }
@@ -1367,7 +1367,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static Color GetTopLeftPixel(object value, int value2, int value3)
         {
-            if (!((Object)value == (Object)null) && value2 >= 0 && value3 >= 0 && value2 < ((Texture)value).width && value3 < ((Texture)value).height)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && value2 >= 0 && value3 >= 0 && value2 < ((Texture)value).width && value3 < ((Texture)value).height)
             {
                 return ((Texture2D)value).GetPixel(value2, ((Texture)value).height - 1 - value3);
             }
@@ -1376,7 +1376,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void SetTopLeftPixel(object value, int value2, int value3, Color color)
         {
-            if (!((Object)value == (Object)null) && value2 >= 0 && value3 >= 0 && value2 < ((Texture)value).width && value3 < ((Texture)value).height)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && value2 >= 0 && value3 >= 0 && value2 < ((Texture)value).width && value3 < ((Texture)value).height)
             {
                 ((Texture2D)value).SetPixel(value2, ((Texture)value).height - 1 - value3, color);
             }
@@ -1384,7 +1384,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void DrawBitmapText(object value, object value2, int value3, int value4, Color32 value5, int value6)
         {
-            if ((Object)value == (Object)null || string.IsNullOrEmpty((string)value2))
+            if (Psd2UIFormTargetCompat.IsNull(value) || string.IsNullOrEmpty((string)value2))
             {
                 return;
             }
@@ -1430,7 +1430,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void DrawBitmapTextClipped(object value, object value2, int value3, int value4, int value5, Color32 value6, int value7)
         {
-            if ((Object)value == (Object)null || string.IsNullOrEmpty((string)value2) || value5 <= 0)
+            if (Psd2UIFormTargetCompat.IsNull(value) || string.IsNullOrEmpty((string)value2) || value5 <= 0)
             {
                 return;
             }
@@ -1561,7 +1561,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string EnsureTexturePng(object value, object value2, AiPackageBuildContext value3 = null, int value4 = 0)
         {
-            if ((Object)value == (Object)null || string.IsNullOrWhiteSpace((string)value2))
+            if (Psd2UIFormTargetCompat.IsNull(value) || string.IsNullOrWhiteSpace((string)value2))
             {
                 return (string)value2;
             }
@@ -1575,7 +1575,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static string WriteTexturePng(object value2, object value3, object value4, int value5 = 0)
         {
-            if ((Object)value2 == (Object)null || string.IsNullOrWhiteSpace((string)value3))
+            if (Psd2UIFormTargetCompat.IsNull(value2) || string.IsNullOrWhiteSpace((string)value3))
             {
                 return (string)value3;
             }
@@ -1619,7 +1619,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static Texture2D AddTransparentPadding(object value, int value2)
         {
-            if (!((Object)value == (Object)null) && value2 > 0)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && value2 > 0)
             {
                 int width = ((Texture)value).width;
                 int height = ((Texture)value).height;
@@ -1642,7 +1642,7 @@ namespace AiAnalysisPackageBuilderNamespace
 
         private static void NormalizeTransparentPixels(object value)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return;
             }

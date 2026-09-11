@@ -368,7 +368,7 @@ namespace AiPatchLocalNormalizerNamespace
 
         internal static void AddMissingSetUiTypeOperations(object unityObject, object aiPatchDocument)
         {
-            if ((Object)unityObject == (Object)null || aiPatchDocument == null || ((AiPatchDocument)aiPatchDocument).analysis == null)
+            if (Psd2UIFormTargetCompat.IsNull(unityObject) || aiPatchDocument == null || ((AiPatchDocument)aiPatchDocument).analysis == null)
             {
                 return;
             }
@@ -406,7 +406,7 @@ namespace AiPatchLocalNormalizerNamespace
 
         private static void AddFlattenGroupOperations(object value, object value2, Dictionary<string, PsdLayerNode> lookup, HashSet<string> texts)
         {
-            if ((Object)value == (Object)null || value2 == null || lookup == null || lookup.Count == 0)
+            if (Psd2UIFormTargetCompat.IsNull(value) || value2 == null || lookup == null || lookup.Count == 0)
             {
                 return;
             }
@@ -446,7 +446,7 @@ namespace AiPatchLocalNormalizerNamespace
                 }
             }
             List<PsdLayerNode> list = new List<PsdLayerNode>(lookup.Values);
-            list.Sort((PsdLayerNode a, PsdLayerNode b) => GetTransformDepth((!((Object)(object)a != (Object)null)) ? null : ((Component)a).transform).CompareTo(GetTransformDepth((!((Object)(object)b != (Object)null)) ? null : ((Component)b).transform)));
+            list.Sort((PsdLayerNode a, PsdLayerNode b) => GetTransformDepth((!(!Psd2UIFormTargetCompat.IsNull(a))) ? null : Psd2UIFormTargetCompat.TransformOf(a)).CompareTo(GetTransformDepth((!(!Psd2UIFormTargetCompat.IsNull(b))) ? null : Psd2UIFormTargetCompat.TransformOf(b))));
             for (int num = 0; num < list.Count; num++)
             {
                 PsdLayerNode psdLayerNode = list[num];
@@ -460,7 +460,7 @@ namespace AiPatchLocalNormalizerNamespace
                     continue;
                 }
                 string text2;
-                if (((Component)psdLayerNode).transform.childCount == 0)
+                if (Psd2UIFormTargetCompat.TransformOf(psdLayerNode).childCount == 0)
                 {
                     text2 = "本地结构归一化：删除无图像意义的空 Null/Panel 节点";
                 }
@@ -486,13 +486,13 @@ namespace AiPatchLocalNormalizerNamespace
 
         private static bool IsFlattenableContainerNode(object value, object value2)
         {
-            if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null) && !((Object)(object)((Component)value2).transform == (Object)null) && !((Object)(object)((Component)value2).transform == (Object)(object)((Component)value).transform))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2) && !((Object)(object)Psd2UIFormTargetCompat.TransformOf(value2) == (Object)null) && !((Object)(object)Psd2UIFormTargetCompat.TransformOf(value2) == (Object)(object)Psd2UIFormTargetCompat.TransformOf(value)))
             {
                 if (((PsdLayerNode)value2).LayerType == PsdLayerType.LayerGroup && (((PsdLayerNode)value2).UIType == GUIType.Panel || ((PsdLayerNode)value2).UIType == GUIType.Null))
                 {
                     if (!((PsdLayerNode)value2).ShouldExportImage() && !((PsdLayerNode)value2).HasAssetReference() && !((PsdLayerNode)value2).HasPrefabReference())
                     {
-                        if (HasChildOfUiType(((Component)value2).transform, GUIType.Background))
+                        if (HasChildOfUiType(Psd2UIFormTargetCompat.TransformOf(value2), GUIType.Background))
                         {
                             return false;
                         }
@@ -507,11 +507,11 @@ namespace AiPatchLocalNormalizerNamespace
 
         private static bool IsSingleChildRedundantWrapper(object value)
         {
-            if (!((Object)value == (Object)null) && !((Object)(object)((Component)value).transform == (Object)null) && ((Component)value).transform.childCount == 1)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !((Object)(object)Psd2UIFormTargetCompat.TransformOf(value) == (Object)null) && Psd2UIFormTargetCompat.TransformOf(value).childCount == 1)
             {
-                Transform child = ((Component)value).transform.GetChild(0);
-                PsdLayerNode psdLayerNode = (((object)child != null) ? ((Component)child).GetComponent<PsdLayerNode>() : null);
-                if (!((Object)(object)psdLayerNode == (Object)null))
+                Transform child = Psd2UIFormTargetCompat.TransformOf(value).GetChild(0);
+                PsdLayerNode psdLayerNode = (((object)child != null) ? Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>() : null);
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
                     if (AreRectsApproximatelyEqual(((PsdLayerNode)value).GetLayerRect(), psdLayerNode.GetLayerRect()))
                     {
@@ -527,7 +527,7 @@ namespace AiPatchLocalNormalizerNamespace
 
         private static bool HasChildOfUiType(object value, GUIType uiType)
         {
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 int num = 0;
                 while (true)
@@ -535,8 +535,8 @@ namespace AiPatchLocalNormalizerNamespace
                     if (num < ((Transform)value).childCount)
                     {
                         Transform child = ((Transform)value).GetChild(num);
-                        PsdLayerNode psdLayerNode = (((object)child != null) ? ((Component)child).GetComponent<PsdLayerNode>() : null);
-                        if ((Object)(object)psdLayerNode != (Object)null && psdLayerNode.UIType == uiType)
+                        PsdLayerNode psdLayerNode = (((object)child != null) ? Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>() : null);
+                        if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode) && psdLayerNode.UIType == uiType)
                         {
                             break;
                         }
@@ -563,7 +563,7 @@ namespace AiPatchLocalNormalizerNamespace
         {
             int num = 0;
             Transform val = (Transform)value;
-            while ((Object)(object)val != (Object)null)
+            while (!Psd2UIFormTargetCompat.IsNull(val))
             {
                 num++;
                 val = val.parent;
@@ -669,18 +669,18 @@ namespace AiPatchLocalNormalizerNamespace
         private static Dictionary<string, PsdLayerNode> BuildLayerNodeLookup(object value)
         {
             Dictionary<string, PsdLayerNode> dictionary = new Dictionary<string, PsdLayerNode>(StringComparer.OrdinalIgnoreCase);
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return dictionary;
             }
-            PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+            PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value).GetComponentsInChildren<PsdLayerNode>(true);
             if (componentsInChildren == null)
             {
                 return dictionary;
             }
             foreach (PsdLayerNode psdLayerNode in componentsInChildren)
             {
-                if (!((Object)(object)psdLayerNode == (Object)null))
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
                     string text = LayerNodeIdUtility.GetStableNodeId(value, psdLayerNode);
                     if (!string.IsNullOrWhiteSpace(text))
@@ -694,10 +694,10 @@ namespace AiPatchLocalNormalizerNamespace
 
         private static string GetParentNodeId(object value, object value2)
         {
-            if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null) && !((Object)value2 == (Object)(object)((Component)value).transform))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2) && !((Object)value2 == (Object)(object)Psd2UIFormTargetCompat.TransformOf(value)))
             {
-                PsdLayerNode component = ((Component)value2).GetComponent<PsdLayerNode>();
-                if ((Object)(object)component != (Object)null)
+                PsdLayerNode component = Psd2UIFormTargetCompat.GameObjectOf(value2).GetComponent<PsdLayerNode>();
+                if (!Psd2UIFormTargetCompat.IsNull(component))
                 {
                     return LayerNodeIdUtility.GetStableNodeId(value, component);
                 }

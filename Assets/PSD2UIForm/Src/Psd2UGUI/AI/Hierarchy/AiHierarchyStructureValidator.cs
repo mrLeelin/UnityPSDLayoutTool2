@@ -18,7 +18,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         internal void ValidateHierarchy(Psd2UIFormConverterEditor value, List<string> ids)
         {
-            if ((Object)(object)value == (Object)null)
+            if (value == null)
             {
                 ids?.Add("Skipped AI structure validation: converter is null.");
                 return;
@@ -30,7 +30,7 @@ namespace AiHierarchyStructureValidatorNamespace
             }
             foreach (PsdLayerNode psdLayerNode in componentsInChildren)
             {
-                if (!((Object)(object)psdLayerNode == (Object)null))
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
                     ValidateUnsupportedMainType(psdLayerNode, ids);
                     ValidateCompositeStructure(psdLayerNode, ids);
@@ -40,7 +40,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static void ValidateUnsupportedMainType(object value, List<string> texts)
         {
-            if (!((Object)value == (Object)null) && UiTypeCompatibilityRules.IsUiTypeAlias(((PsdLayerNode)value).UIType))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && UiTypeCompatibilityRules.IsUiTypeAlias(((PsdLayerNode)value).UIType))
             {
                 texts?.Add($"Node '{((Object)value).name}' still uses unsupported AI main type '{((PsdLayerNode)value).UIType}'. The patch was kept, but this node may not parse as ordinary uGUI.");
             }
@@ -48,7 +48,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static void ValidateCompositeStructure(object value, List<string> texts)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return;
             }
@@ -96,7 +96,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static void ValidateRequiredRoleNode(object value, List<string> texts, GUIType uiType, object value2, RoleBackingKind value3)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return;
             }
@@ -106,11 +106,11 @@ namespace AiHierarchyStructureValidatorNamespace
                 texts?.Add($"Protocol violation: {((PsdLayerNode)value).UIType} '{((Object)value).name}' contains {num} '{value2}' nodes. AI should keep exactly one primary role candidate and leave other content as ordinary Image/Text/Panel.");
             }
             PsdLayerNode psdLayerNode = FindDescendantByUiType(value, uiType);
-            if ((Object)(object)psdLayerNode == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(psdLayerNode))
             {
                 return;
             }
-            if ((Object)(object)((Component)psdLayerNode).transform.parent != (Object)(object)((Component)value).transform)
+            if ((Object)(object)Psd2UIFormTargetCompat.TransformOf(psdLayerNode).parent != (Object)(object)Psd2UIFormTargetCompat.TransformOf(value))
             {
                 texts?.Add($"Protocol violation: {((PsdLayerNode)value).UIType} '{((Object)value).name}' has '{value2}' at '{GetRelativeNodePath(value, psdLayerNode)}', but composite role nodes must be direct children. AI should move_node it under '{((Object)value).name}' or tag the direct outer Panel as '{value2}'.");
             }
@@ -139,7 +139,7 @@ namespace AiHierarchyStructureValidatorNamespace
                 texts?.Add($"Protocol violation: {((PsdLayerNode)value).UIType} '{((Object)value).name}' contains {num} '{value2}' nodes. AI should keep exactly one primary child candidate and leave other content as ordinary Image/Text/Panel.");
             }
             PsdLayerNode psdLayerNode = FindDescendantByUiType(value, uiType);
-            if ((Object)(object)psdLayerNode != (Object)null && (Object)(object)((Component)psdLayerNode).transform.parent != (Object)(object)((Component)value).transform)
+            if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode) && (Object)(object)Psd2UIFormTargetCompat.TransformOf(psdLayerNode).parent != (Object)(object)Psd2UIFormTargetCompat.TransformOf(value))
             {
                 texts?.Add($"Protocol violation: {((PsdLayerNode)value).UIType} '{((Object)value).name}' has '{value2}' at '{GetRelativeNodePath(value, psdLayerNode)}', but composite child controls must be direct children. AI should move_node it under '{((Object)value).name}'.");
             }
@@ -147,10 +147,10 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static void ValidateNestedDuplicateMainControl(object value, List<string> texts, GUIType uiType, object value2)
         {
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 PsdLayerNode psdLayerNode = FindNestedNodeByUiType(value, uiType);
-                if (!((Object)(object)psdLayerNode == (Object)null))
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
                     texts?.Add("Protocol suspicion: " + (string)value2 + " '" + ((Object)value).name + "' still contains nested " + (string)value2 + " '" + ((Object)psdLayerNode).name + "' at '" + GetRelativeNodePath(value, psdLayerNode) + "'. Prefer the nearest complete main-control boundary and avoid tagging both parent and child as the same main control.");
                 }
@@ -159,10 +159,10 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static int CountDescendantsByUiType(object value, GUIType uiType)
         {
-            if (!((Object)value == (Object)null) && uiType != GUIType.Null)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && uiType != GUIType.Null)
             {
                 int result = 0;
-                CountDescendantsRecursive(((Component)value).transform, uiType, ref result);
+                CountDescendantsRecursive(Psd2UIFormTargetCompat.TransformOf(value), uiType, ref result);
                 return result;
             }
             return 0;
@@ -170,33 +170,33 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static PsdLayerNode FindDescendantByUiType(object value, GUIType uiType)
         {
-            if (!((Object)value == (Object)null) && uiType != GUIType.Null)
+            if (!Psd2UIFormTargetCompat.IsNull(value) && uiType != GUIType.Null)
             {
-                return FindDescendantRecursive(((Component)value).transform, uiType);
+                return FindDescendantRecursive(Psd2UIFormTargetCompat.TransformOf(value), uiType);
             }
             return null;
         }
 
         private static PsdLayerNode FindNestedNodeByUiType(object value, GUIType uiType)
         {
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
-                return FindNestedNodeRecursive(((Component)value).transform, uiType);
+                return FindNestedNodeRecursive(Psd2UIFormTargetCompat.TransformOf(value), uiType);
             }
             return null;
         }
 
         private static void CountDescendantsRecursive(object value, GUIType uiType, ref int value2)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return;
             }
             for (int i = 0; i < ((Transform)value).childCount; i++)
             {
                 Transform child = ((Transform)value).GetChild(i);
-                PsdLayerNode psdLayerNode = (((Object)(object)child != (Object)null) ? ((Component)child).GetComponent<PsdLayerNode>() : null);
-                if (!((Object)(object)psdLayerNode == (Object)null))
+                PsdLayerNode psdLayerNode = ((!Psd2UIFormTargetCompat.IsNull(child)) ? Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>() : null);
+                if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
                     if (psdLayerNode.UIType == uiType)
                     {
@@ -216,7 +216,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static PsdLayerNode FindDescendantRecursive(object value, GUIType uiType)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return null;
             }
@@ -227,11 +227,11 @@ namespace AiHierarchyStructureValidatorNamespace
                 if (num < ((Transform)value).childCount)
                 {
                     Transform child = ((Transform)value).GetChild(num);
-                    PsdLayerNode psdLayerNode = ((!((Object)(object)child != (Object)null)) ? null : ((Component)child).GetComponent<PsdLayerNode>());
-                    if ((Object)(object)psdLayerNode == (Object)null)
+                    PsdLayerNode psdLayerNode = ((!(!Psd2UIFormTargetCompat.IsNull(child))) ? null : Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>());
+                    if (Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                     {
                         PsdLayerNode psdLayerNode2 = FindDescendantRecursive(child, uiType);
-                        if ((Object)(object)psdLayerNode2 != (Object)null)
+                        if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode2))
                         {
                             return psdLayerNode2;
                         }
@@ -245,7 +245,7 @@ namespace AiHierarchyStructureValidatorNamespace
                         if (!IsControlBoundary(psdLayerNode))
                         {
                             psdLayerNode3 = FindDescendantRecursive(child, uiType);
-                            if ((Object)(object)psdLayerNode3 != (Object)null)
+                            if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode3))
                             {
                                 break;
                             }
@@ -261,13 +261,13 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static PsdLayerNode FindNestedNodeRecursive(object value, GUIType uiType)
         {
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 for (int i = 0; i < ((Transform)value).childCount; i++)
                 {
                     Transform child = ((Transform)value).GetChild(i);
-                    PsdLayerNode psdLayerNode = ((!((Object)(object)child != (Object)null)) ? null : ((Component)child).GetComponent<PsdLayerNode>());
-                    if (!((Object)(object)psdLayerNode == (Object)null))
+                    PsdLayerNode psdLayerNode = ((!(!Psd2UIFormTargetCompat.IsNull(child))) ? null : Psd2UIFormTargetCompat.GameObjectOf(child).GetComponent<PsdLayerNode>());
+                    if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                     {
                         if (psdLayerNode.UIType == uiType)
                         {
@@ -276,7 +276,7 @@ namespace AiHierarchyStructureValidatorNamespace
                         if (!IsControlBoundary(psdLayerNode))
                         {
                             PsdLayerNode psdLayerNode2 = FindNestedNodeRecursive(child, uiType);
-                            if ((Object)(object)psdLayerNode2 != (Object)null)
+                            if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode2))
                             {
                                 return psdLayerNode2;
                             }
@@ -285,7 +285,7 @@ namespace AiHierarchyStructureValidatorNamespace
                     else
                     {
                         PsdLayerNode psdLayerNode3 = FindNestedNodeRecursive(child, uiType);
-                        if ((Object)(object)psdLayerNode3 != (Object)null)
+                        if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode3))
                         {
                             return psdLayerNode3;
                         }
@@ -298,7 +298,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static bool IsControlBoundary(object value)
         {
-            if (!((Object)value != (Object)null) || !((PsdLayerNode)value).IsPrimaryUIType() || ((PsdLayerNode)value).UIType == GUIType.Null)
+            if (!(!Psd2UIFormTargetCompat.IsNull(value)) || !((PsdLayerNode)value).IsPrimaryUIType() || ((PsdLayerNode)value).UIType == GUIType.Null)
             {
                 return false;
             }
@@ -307,12 +307,12 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static string GetRelativeNodePath(object value, object value2)
         {
-            if (!((Object)value == (Object)null) && !((Object)value2 == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value) && !Psd2UIFormTargetCompat.IsNull(value2))
             {
                 Stack<string> stack = new Stack<string>();
-                Transform transform = ((Component)value).transform;
-                Transform val = ((Component)value2).transform;
-                while ((Object)(object)val != (Object)null && (Object)(object)val != (Object)(object)transform)
+                Transform transform = Psd2UIFormTargetCompat.TransformOf(value);
+                Transform val = Psd2UIFormTargetCompat.TransformOf(value2);
+                while (!Psd2UIFormTargetCompat.IsNull(val) && (Object)(object)val != (Object)(object)transform)
                 {
                     stack.Push(((Object)val).name);
                     val = val.parent;
@@ -328,16 +328,16 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static int CountDirectChildrenByUiType(object value, GUIType uiType)
         {
-            if ((Object)value == (Object)null)
+            if (Psd2UIFormTargetCompat.IsNull(value))
             {
                 return 0;
             }
             int num = 0;
-            Transform transform = ((Component)value).transform;
+            Transform transform = Psd2UIFormTargetCompat.TransformOf(value);
             for (int i = 0; i < transform.childCount; i++)
             {
                 PsdLayerNode component = ((Component)transform.GetChild(i)).GetComponent<PsdLayerNode>();
-                if ((Object)(object)component != (Object)null && component.UIType == uiType)
+                if (!Psd2UIFormTargetCompat.IsNull(component) && component.UIType == uiType)
                 {
                     num++;
                 }
@@ -347,7 +347,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static bool IsLayerGroup(object value)
         {
-            if ((Object)value != (Object)null)
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 return ((PsdLayerNode)value).LayerType == PsdLayerType.LayerGroup;
             }
@@ -356,7 +356,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static bool HasImageBacking(object value)
         {
-            if ((Object)value == (Object)null || ((PsdLayerNode)value).LayerType == PsdLayerType.Unknown || ((PsdLayerNode)value).LayerType == PsdLayerType.TextLayer)
+            if (Psd2UIFormTargetCompat.IsNull(value) || ((PsdLayerNode)value).LayerType == PsdLayerType.Unknown || ((PsdLayerNode)value).LayerType == PsdLayerType.TextLayer)
             {
                 return false;
             }
@@ -365,7 +365,7 @@ namespace AiHierarchyStructureValidatorNamespace
 
         private static bool HasTextBacking(object value)
         {
-            if (!((Object)value == (Object)null))
+            if (!Psd2UIFormTargetCompat.IsNull(value))
             {
                 if (((PsdLayerNode)value).LayerType == PsdLayerType.TextLayer)
                 {
@@ -375,12 +375,12 @@ namespace AiHierarchyStructureValidatorNamespace
                 {
                     return false;
                 }
-                PsdLayerNode[] componentsInChildren = ((Component)value).GetComponentsInChildren<PsdLayerNode>(true);
+                PsdLayerNode[] componentsInChildren = Psd2UIFormTargetCompat.GameObjectOf(value).GetComponentsInChildren<PsdLayerNode>(true);
                 if (componentsInChildren != null && componentsInChildren.Length >= 1)
                 {
                     foreach (PsdLayerNode psdLayerNode in componentsInChildren)
                     {
-                        if ((Object)(object)psdLayerNode != (Object)null && (Object)(object)psdLayerNode != (Object)value && psdLayerNode.LayerType == PsdLayerType.TextLayer)
+                        if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode) && (Object)(object)psdLayerNode != (Object)value && psdLayerNode.LayerType == PsdLayerType.TextLayer)
                         {
                             return true;
                         }

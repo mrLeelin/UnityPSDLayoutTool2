@@ -49,6 +49,9 @@ namespace UGF.EditorTools.Psd2UGUI
             btHeight = GUILayout.Height(30f);
             targetLogic = ((Editor)this).target as Psd2UIFormConverter;
             targetEditor = Psd2UIFormConverterEditor.GetOrCreate(targetLogic);
+            // 关键：Inspector 选中 converter 就要把生成期逻辑挂上（不能只依赖壳的 OnEnable 时机）。
+            // 不挂的话 IsDocumentLoaded() 恒为 false，面板会一直显示"请打开Prefab…"。
+            targetEditor?.Attach();
             parsePsd2NodesBt = new GUIContent("解析psd图层", "把psd图层解析为可编辑节点树");
             exportUISpritesBt = new GUIContent("导出Images", "导出勾选的psd图层为碎图");
             aiAutoFixBt = new GUIContent("AI自动识别UI类型", "导出当前节点树和预览图，调用AI自动识别并修正UI类型与结构");
@@ -70,6 +73,7 @@ namespace UGF.EditorTools.Psd2UGUI
         private void OnDisable()
         {
             ScriptableSingleton<Psd2UIFormSettings>.SaveInstance();
+            targetEditor?.Detach();
         }
 
         public override void OnInspectorGUI()

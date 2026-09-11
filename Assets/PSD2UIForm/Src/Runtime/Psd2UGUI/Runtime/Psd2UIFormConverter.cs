@@ -144,7 +144,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private void OnDestroy()
         {
-            Psd2UIFormEditorHost.Current?.DetachConverter(this);
+            Psd2UIFormEditorHost.Current?.DisposeConverter(this);
         }
 
         private void OnDrawGizmos()

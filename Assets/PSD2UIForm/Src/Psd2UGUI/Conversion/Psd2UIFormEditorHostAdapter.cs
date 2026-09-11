@@ -142,6 +142,12 @@ namespace UGF.EditorTools.Psd2UGUI
 			Psd2UIFormConverterEditor.GetAttached(converter)?.Detach();
 		}
 
+		public void DisposeConverter(Psd2UIFormConverter converter)
+		{
+			// OnDestroy 阶段壳已被 Unity 判为 null，只能按实例 ID 找回逻辑对象。
+			Psd2UIFormConverterEditor.GetAttached(converter)?.Dispose();
+		}
+
 		public void DrawConverterGizmos(Psd2UIFormConverter converter)
 		{
 			Psd2UIFormConverterEditor.GetOrCreate(converter)?.DrawGizmos();
@@ -155,7 +161,7 @@ namespace UGF.EditorTools.Psd2UGUI
 		public void RefreshAllHelperComponents()
 		{
 			Psd2UIFormConverterEditor converter = Psd2UIFormConverterEditor.Instance;
-			if ((Object)(object)converter != (Object)null)
+			if (converter != null)
 			{
 				converter.RefreshAllHelperComponents();
 			}
