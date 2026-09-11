@@ -1,0 +1,27 @@
+{
+    "name": "Psd2UIForm.Editor.Tests",
+    "rootNamespace": "Psd2UIForm.Tests",
+    "references": [
+        "cn.efunstudio.psd2ugui",
+        "cn.efunstudio.psd2ugui.Editor",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

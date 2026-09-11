@@ -35,6 +35,10 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private static Psd2UIFormConverterEditor s_Instance;
 
+        // 按壳实例 ID 索引：OnDestroy 期间 Unity 的 == 已把 owner 判为 null，
+        // 那时 GetOrCreate 的存在性判断会失败，Detach 就退订不到回调。
+        private static readonly Dictionary<int, Psd2UIFormConverterEditor> s_byOwnerInstanceId = new Dictionary<int, Psd2UIFormConverterEditor>();
+
         internal Psd2UIFormConverterEditor(Psd2UIFormConverter owner)
         {
             _owner = owner ?? throw new ArgumentNullException(nameof(owner));
@@ -62,7 +66,26 @@ namespace UGF.EditorTools.Psd2UGUI
                 editor = new Psd2UIFormConverterEditor(owner);
                 s_Instance = editor;
             }
+            s_byOwnerInstanceId[owner.GetInstanceID()] = editor;
             return editor;
+        }
+
+        /// <summary>
+        /// Detach 专用：按实例 ID 找到已挂接的逻辑对象，不依赖 "壳是否仍然存活" 的判断，
+        /// 因为 OnDestroy 阶段壳已经被 Unity 判为 null。
+        /// </summary>
+        internal static Psd2UIFormConverterEditor GetAttached(Psd2UIFormConverter owner)
+        {
+            if ((Object)owner == (Object)null)
+            {
+                return null;
+            }
+            Psd2UIFormConverterEditor editor;
+            if (s_byOwnerInstanceId.TryGetValue(owner.GetInstanceID(), out editor) && (Object)(object)editor._owner == (Object)(object)owner)
+            {
+                return editor;
+            }
+            return null;
         }
 
         // ---- 壳的组件成员转发 ----
@@ -701,17 +724,21 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal void Detach()
         {
-            if (!_attached)
+            if (_attached)
             {
-                return;
+                _attached = false;
+                SceneView.duringSceneGui -= OnSceneGUI;
+                EditorApplication.hierarchyWindowItemOnGUI = (EditorApplication.HierarchyWindowItemCallback)Delegate.Remove((Delegate)(object)EditorApplication.hierarchyWindowItemOnGUI, (Delegate)new EditorApplication.HierarchyWindowItemCallback(OnHierarchyWindowItemGUI));
             }
-            _attached = false;
-            SceneView.duringSceneGui -= OnSceneGUI;
-            EditorApplication.hierarchyWindowItemOnGUI = (EditorApplication.HierarchyWindowItemCallback)Delegate.Remove((Delegate)(object)EditorApplication.hierarchyWindowItemOnGUI, (Delegate)new EditorApplication.HierarchyWindowItemCallback(OnHierarchyWindowItemGUI));
             if (_psdDocument != null)
             {
                 _psdDocument.Dispose();
                 _psdDocument = null;
+            }
+            s_byOwnerInstanceId.Remove(_owner.GetInstanceID());
+            if (s_Instance == this)
+            {
+                s_Instance = null;
             }
         }
 

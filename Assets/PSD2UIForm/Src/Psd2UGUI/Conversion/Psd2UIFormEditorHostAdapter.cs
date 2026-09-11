@@ -138,7 +138,8 @@ namespace UGF.EditorTools.Psd2UGUI
 
 		public void DetachConverter(Psd2UIFormConverter converter)
 		{
-			Psd2UIFormConverterEditor.GetOrCreate(converter)?.Detach();
+			// 不走 GetOrCreate：OnDestroy 阶段壳已被 Unity 判为 null。
+			Psd2UIFormConverterEditor.GetAttached(converter)?.Detach();
 		}
 
 		public void DrawConverterGizmos(Psd2UIFormConverter converter)
