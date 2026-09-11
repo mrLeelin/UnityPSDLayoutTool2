@@ -3,7 +3,8 @@ using System.IO;
 using UGF.EditorTools.Psd2UGUI;
 using UnityEditor;
 using UnityEngine;
-
+
+
 using Object = UnityEngine.Object;
 namespace Psd2UIFormPluginPathResolverNamespace
 {
@@ -19,7 +20,14 @@ namespace Psd2UIFormPluginPathResolverNamespace
         {
             if (string.IsNullOrWhiteSpace(s_PluginAssetRoot))
             {
-                if (!string.Equals(typeof(UGUIParser).Assembly.GetName().Name, "cn.efunstudio.psd2ugui", StringComparison.Ordinal) || !TryResolveFromScript(out s_PluginAssetRoot))
+                // 注意：这里用前缀匹配而不是等于旧程序集名。
+                // 拆分后 UGUIParser 从 cn.efunstudio.psd2ugui 搬到了 cn.efunstudio.psd2ugui.Editor，
+                // 若仍按旧名等于比较，下面的 TryResolveFromScript 会被短路跳过，
+                // 插件根解析为空 -> 找不到 AIPrompts/TaskPrompt.md -> AI 提示词写成 0 字节而报错。
+                string assemblyName = typeof(UGUIParser).Assembly.GetName().Name;
+                bool isPluginAssembly = !string.IsNullOrEmpty(assemblyName)
+                    && assemblyName.StartsWith("cn.efunstudio.psd2ugui", StringComparison.Ordinal);
+                if (!isPluginAssembly || !TryResolveFromScript(out s_PluginAssetRoot))
                 {
                     if (TryResolveFromAssembly(out s_PluginAssetRoot))
                     {
@@ -100,7 +108,10 @@ namespace Psd2UIFormPluginPathResolverNamespace
             }
             if (!AssetDatabase.IsValidFolder(text + "/AIPrompts") && !AssetDatabase.IsValidFolder(text + "/Scripts"))
             {
-                return AssetDatabase.IsValidFolder(text + "/PSDReader");
+                // PSDReader 的位置在历史版本里搬过：根目录 / Src/PsdReader / Src/Runtime/PsdReader，都接受
+                return AssetDatabase.IsValidFolder(text + "/PSDReader")
+                    || AssetDatabase.IsValidFolder(text + "/Src/PsdReader")
+                    || AssetDatabase.IsValidFolder(text + "/Src/Runtime/PsdReader");
             }
             return true;
         }
