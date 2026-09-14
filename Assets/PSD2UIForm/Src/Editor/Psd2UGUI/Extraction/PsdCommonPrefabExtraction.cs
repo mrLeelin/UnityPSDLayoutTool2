@@ -49,6 +49,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 throw new InvalidOperationException("公共 Prefab 已存在，请使用其他名称：" + output);
             if (sources == null || sources.Length < 2 || sources.Distinct().Count() != sources.Length)
                 throw new InvalidOperationException("请选择至少两个不同的同结构组件根节点。");
+            PsdCommonPrefabPersistence.ValidateOutput(prefabPath);
             var root = PrefabUtility.LoadPrefabContents(prefabPath);
             try
             {
@@ -106,6 +107,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 targetSaveStarted = true;
                 if (PrefabUtility.SaveAsPrefabAsset(root, plan.PrefabPath) == null)
                     throw new InvalidOperationException("保存 UI Prefab 失败。");
+                PsdCommonPrefabPersistence.RecordExtraction(plan.PrefabPath, plan.OutputPath, plan.Sources.ToArray());
             }
             catch
             {

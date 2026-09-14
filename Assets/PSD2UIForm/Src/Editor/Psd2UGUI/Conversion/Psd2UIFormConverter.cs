@@ -2208,9 +2208,33 @@ namespace UGF.EditorTools.Psd2UGUI
             }
         }
 
-        private bool GenerateAndSaveUIFormPrefab(Transform transform3, string text4)
+        internal bool GenerateAndSaveUIFormPrefab(Transform transform3, string text4)
         {
             PrefabGenerationScope value = new PrefabGenerationScope();
+            if (string.IsNullOrWhiteSpace(uiFormName))
+            {
+                Debug.LogError((object)"导出UI Prefab失败: UI Form Name为空, 请填写UI Form Name.");
+                return false;
+            }
+            string text = Path.Combine(text4, uiFormName + ".prefab").Replace('\\', '/');
+            byte[] previousPrefab = File.Exists(text) ? File.ReadAllBytes(text) : null;
+            byte[] previousPrefabMeta = File.Exists(text + ".meta") ? File.ReadAllBytes(text + ".meta") : null;
+            try
+            {
+                // Check durable extraction identities before any delete, image export, or overwrite.
+                if (PsdCommonPrefabPersistence.TryReuse(_owner.gameObject, text, out var extractedAsset))
+                {
+                    Selection.activeGameObject = extractedAsset;
+                    Debug.Log("输入未变化，已保留公共 Prefab 和嵌套实例：" + text);
+                    return true;
+                }
+                PsdCommonPrefabPersistence.ValidateGeneration(_owner.gameObject, text);
+            }
+            catch (InvalidOperationException ex)
+            {
+                Debug.LogError("公共 Prefab 生成冲突：" + ex.Message);
+                return false;
+            }
             if (!string.IsNullOrWhiteSpace(text4) && !Directory.Exists(text4))
             {
                 try
@@ -2224,13 +2248,7 @@ namespace UGF.EditorTools.Psd2UGUI
                     return false;
                 }
             }
-            if (string.IsNullOrWhiteSpace(uiFormName))
-            {
-                Debug.LogError((object)"导出UI Prefab失败: UI Form Name为空, 请填写UI Form Name.");
-                return false;
-            }
             LoadDocumentAndRebindNodes();
-            string text = Path.Combine(text4, uiFormName + ".prefab");
             if ((Object)(object)transform3 == (Object)(object)_owner.transform && File.Exists(text))
             {
                 switch (EditorUtility.DisplayDialogComplex("警告", "prefab文件已存在, 请选择生成方式:" + text, "覆盖生成(不丢失引用)", "取消", "重新生成"))
@@ -2438,7 +2456,27 @@ namespace UGF.EditorTools.Psd2UGUI
             List<GeneratedKeySnapshot> list3 = CaptureGeneratedKeySnapshots(val2);
             RemoveGeneratedKeyComponents(val2);
             ((Object)val2).name = Path.GetFileNameWithoutExtension(text);
-            GameObject val10 = PrefabUtility.SaveAsPrefabAsset(val2, text);
+            GameObject val10;
+            try
+            {
+                val10 = PrefabUtility.SaveAsPrefabAsset(val2, text);
+                if (val10 == null) throw new InvalidOperationException("保存 UI Prefab 失败。");
+                PsdCommonPrefabPersistence.RecordGeneration(transform3.gameObject, text);
+            }
+            catch (Exception ex)
+            {
+                if (previousPrefab == null) AssetDatabase.DeleteAsset(text);
+                else
+                {
+                    File.WriteAllBytes(text, previousPrefab);
+                    if (previousPrefabMeta != null) File.WriteAllBytes(text + ".meta", previousPrefabMeta);
+                    AssetDatabase.ImportAsset(text, ImportAssetOptions.ForceUpdate);
+                }
+                Object.DestroyImmediate(val2);
+                EditorUtility.ClearProgressBar();
+                Debug.LogError("保存 UI 或抽取来源失败，已恢复目标 Prefab：" + ex.Message);
+                return false;
+            }
             if ((Object)(object)val10 != (Object)null)
             {
                 SaveGeneratedKeyMetadata(text, val10, list3, value.ScopedNodePath);

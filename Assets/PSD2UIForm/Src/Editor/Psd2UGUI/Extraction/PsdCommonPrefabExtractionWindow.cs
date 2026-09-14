@@ -12,6 +12,7 @@ namespace UGF.EditorTools.Psd2UGUI
         PsdCommonPrefabPlan _plan;
         string _error;
         Vector2 _scroll;
+        bool _hasGenerationSource;
 
         [MenuItem("Tools/PSD2UIForm/抽取公共 Prefab…")]
         [MenuItem("GameObject/PSD2UIForm/抽取公共 Prefab…", false, 49)]
@@ -26,13 +27,15 @@ namespace UGF.EditorTools.Psd2UGUI
         {
             EditorGUILayout.LabelField("手动抽取同结构组件", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox("打开生成后的 UI Prefab，保存修改，再在 Hierarchy 中多选重复组件的根节点。预览后会将它们替换为公共 Prefab 实例。", MessageType.Info);
-            EditorGUILayout.HelpBox("此阶段只处理已生成的 UI。重新从 PSD 生成时恢复抽取规则的功能尚未实现。", MessageType.Warning);
+            EditorGUILayout.HelpBox("抽取规则会保存到界面旁的 .extraction.asset。记录过来源的界面可在输入不变时重复生成；源更新合并尚未实现，检测到变化会停止生成。旧版输出需先重新生成一次以记录来源，再抽取。", MessageType.Info);
             EditorGUI.BeginChangeCheck();
             _componentName = EditorGUILayout.TextField("公共组件名称", _componentName);
             if (EditorGUI.EndChangeCheck()) { _plan = null; _error = null; }
             if (GUILayout.Button("预览当前选区")) BuildPreview();
             if (!string.IsNullOrEmpty(_error)) EditorGUILayout.HelpBox(_error, MessageType.Error);
             if (_plan == null) return;
+            if (!_hasGenerationSource)
+                EditorGUILayout.HelpBox("当前界面没有生成来源记录。本次仍可手动抽取，但无法从 PSD 重复生成；如需重复生成，请先在已保存的 PSD 编辑 Prefab 中生成一次新 UI，再抽取。", MessageType.Warning);
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
             EditorGUILayout.LabelField("目标界面", _plan.PrefabPath, EditorStyles.wordWrappedLabel);
             EditorGUILayout.LabelField("新公共资产", _plan.OutputPath, EditorStyles.wordWrappedLabel);
@@ -57,6 +60,8 @@ namespace UGF.EditorTools.Psd2UGUI
                     throw new InvalidOperationException("选区必须来自当前 Prefab。");
                 _plan = PsdCommonPrefabExtraction.Preview(stage.assetPath,
                     selected.Select(go => PsdCommonPrefabExtraction.GetNodeAddress(stage.prefabContentsRoot.transform, go.transform)).ToArray(), _componentName);
+                var rules = PsdCommonPrefabPersistence.Find(stage.assetPath);
+                _hasGenerationSource = rules != null && !string.IsNullOrEmpty(rules.sourceGuid) && !string.IsNullOrEmpty(rules.sourceFingerprint);
             }
             catch (Exception ex) { _error = ex.Message; }
         }

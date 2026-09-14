@@ -158,5 +158,148 @@ namespace Psd2UIForm.Tests
             PsdCommonPrefabExtraction.Apply(plan);
             Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(Folder + "/Common/签到奖励项.prefab"), Is.Not.Null);
         }
+
+        [Test] public void RepeatGeneration_AfterReloadRetainsAssetAndInstanceIdentities()
+        {
+            const string sourcePath = Folder + "/Source.prefab";
+            AssetDatabase.CopyAsset(Target, sourcePath);
+            var editing = PrefabUtility.LoadPrefabContents(sourcePath);
+            try
+            {
+                foreach (Transform child in editing.transform)
+                {
+                    var node = child.gameObject.AddComponent<PsdLayerNode>();
+                    node.UIType = GUIType.Image;
+                    node.markToExport = true;
+                    child.gameObject.AddComponent<ImageHelper>();
+                }
+                PrefabUtility.SaveAsPrefabAsset(editing, sourcePath);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(editing); }
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePath);
+            PsdCommonPrefabPersistence.RecordGeneration(source, Target);
+            var plan = PsdCommonPrefabExtraction.Preview(Target, new[] { "0", "1" }, "RewardItem");
+            PsdCommonPrefabExtraction.Apply(plan);
+            var targetBytes = System.IO.File.ReadAllBytes(Target);
+            var commonBytes = System.IO.File.ReadAllBytes(plan.OutputPath);
+            var targetGuid = AssetDatabase.AssetPathToGUID(Target);
+            var commonGuid = AssetDatabase.AssetPathToGUID(plan.OutputPath);
+            AssetDatabase.ImportAsset(Folder + "/Screen.extraction.asset", ImportAssetOptions.ForceUpdate);
+            source = PrefabUtility.LoadPrefabContents(sourcePath);
+            try
+            {
+                for (int i = 0; i < 2; i++)
+                {
+                    Assert.That(PsdCommonPrefabPersistence.TryReuse(source, Target, out var reused), Is.True);
+                    Assert.That(reused.transform.childCount, Is.EqualTo(2));
+                }
+            }
+            finally { PrefabUtility.UnloadPrefabContents(source); }
+            Assert.That(System.IO.File.ReadAllBytes(Target), Is.EqualTo(targetBytes));
+            Assert.That(System.IO.File.ReadAllBytes(plan.OutputPath), Is.EqualTo(commonBytes));
+            Assert.That(AssetDatabase.AssetPathToGUID(Target), Is.EqualTo(targetGuid));
+            Assert.That(AssetDatabase.AssetPathToGUID(plan.OutputPath), Is.EqualTo(commonGuid));
+        }
+
+        [TestCase("rename")]
+        [TestCase("reorder")]
+        [TestCase("remove")]
+        public void RepeatGeneration_RejectsChangedSourceWithoutWriting(string change)
+        {
+            const string sourcePath = Folder + "/Source.prefab";
+            AssetDatabase.CopyAsset(Target, sourcePath);
+            PsdCommonPrefabPersistence.RecordGeneration(AssetDatabase.LoadAssetAtPath<GameObject>(sourcePath), Target);
+            var plan = PsdCommonPrefabExtraction.Preview(Target, new[] { "0", "1" }, "RewardItem");
+            PsdCommonPrefabExtraction.Apply(plan);
+            var before = System.IO.File.ReadAllBytes(Target);
+            var source = PrefabUtility.LoadPrefabContents(sourcePath);
+            try
+            {
+                if (change == "rename") source.transform.GetChild(0).name = "Changed";
+                if (change == "reorder") source.transform.GetChild(0).SetAsLastSibling();
+                if (change == "remove") Object.DestroyImmediate(source.transform.GetChild(0).gameObject);
+                StringAssert.Contains("已变化", Assert.Throws<System.InvalidOperationException>(() =>
+                    PsdCommonPrefabPersistence.TryReuse(source, Target, out _)).Message);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(source); }
+            Assert.That(System.IO.File.ReadAllBytes(Target), Is.EqualTo(before));
+        }
+
+        [Test] public void RepeatGeneration_MovedAssetsAndRenamedInstancesUsePersistentIds()
+        {
+            const string sourcePath = Folder + "/Source.prefab";
+            AssetDatabase.CopyAsset(Target, sourcePath);
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePath);
+            PsdCommonPrefabPersistence.RecordGeneration(source, Target);
+            var plan = PsdCommonPrefabExtraction.Preview(Target, new[] { "0", "1" }, "RewardItem");
+            PsdCommonPrefabExtraction.Apply(plan);
+            var root = PrefabUtility.LoadPrefabContents(Target);
+            try
+            {
+                root.transform.GetChild(0).name = "同名";
+                root.transform.GetChild(1).name = "同名";
+                root.transform.GetChild(0).SetAsLastSibling();
+                PrefabUtility.SaveAsPrefabAsset(root, Target);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+            Assert.That(AssetDatabase.MoveAsset(plan.OutputPath, Folder + "/Common/Renamed.prefab"), Is.Empty);
+            Assert.That(AssetDatabase.MoveAsset(Target, Folder + "/Moved.prefab"), Is.Empty);
+            Assert.That(PsdCommonPrefabPersistence.TryReuse(source, Folder + "/Moved.prefab", out _), Is.True);
+        }
+
+        [Test] public void RepeatGeneration_UsesConverterEntryBeforeDestructiveGeneration()
+        {
+            const string sourcePath = Folder + "/Source.prefab";
+            var source = new GameObject("Source", typeof(RectTransform), typeof(Psd2UIFormConverter));
+            try
+            {
+                source.GetComponent<Psd2UIFormConverter>().uiFormName = "Screen";
+                PrefabUtility.SaveAsPrefabAsset(source, sourcePath);
+            }
+            finally { Object.DestroyImmediate(source); }
+            source = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePath);
+            PsdCommonPrefabPersistence.RecordGeneration(source, Target);
+            PsdCommonPrefabExtraction.Apply(PsdCommonPrefabExtraction.Preview(Target, new[] { "0", "1" }, "RewardItem"));
+            var before = System.IO.File.ReadAllBytes(Target);
+            var editor = Psd2UIFormConverterEditor.GetOrCreate(source.GetComponent<Psd2UIFormConverter>());
+            Assert.That(editor.GenerateAndSaveUIFormPrefab(source.transform, Folder), Is.True);
+            Assert.That(System.IO.File.ReadAllBytes(Target), Is.EqualTo(before));
+            UnityEngine.TestTools.LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex("公共 Prefab 生成冲突.*目标名称或输出目录已改变"));
+            Assert.That(editor.GenerateAndSaveUIFormPrefab(source.transform, Folder + "/NewOutput"), Is.False);
+            Assert.That(System.IO.Directory.Exists(Folder + "/NewOutput"), Is.False);
+        }
+
+        [Test] public void RepeatGeneration_RejectsLostTargetAndUnpackedInstances()
+        {
+            const string sourcePath = Folder + "/Source.prefab";
+            AssetDatabase.CopyAsset(Target, sourcePath);
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePath);
+            PsdCommonPrefabPersistence.RecordGeneration(source, Target);
+            PsdCommonPrefabExtraction.Apply(PsdCommonPrefabExtraction.Preview(Target, new[] { "0", "1" }, "RewardItem"));
+            var root = PrefabUtility.LoadPrefabContents(Target);
+            try
+            {
+                PrefabUtility.UnpackPrefabInstance(root.transform.GetChild(0).gameObject, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+                PrefabUtility.SaveAsPrefabAsset(root, Target);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+            Assert.Throws<System.InvalidOperationException>(() => PsdCommonPrefabPersistence.TryReuse(source, Target, out _));
+            AssetDatabase.DeleteAsset(Target);
+            Assert.Throws<System.InvalidOperationException>(() => PsdCommonPrefabPersistence.TryReuse(source, Target, out _));
+            Assert.That(System.IO.File.Exists(Target), Is.False);
+        }
+
+        [Test] public void Generation_RefreshesBaselineAfterExplicitUnextractedReplacement()
+        {
+            const string sourcePath = Folder + "/Source.prefab";
+            AssetDatabase.CopyAsset(Target, sourcePath);
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePath);
+            PsdCommonPrefabPersistence.RecordGeneration(source, Target);
+            AssetDatabase.DeleteAsset(Target);
+            Assert.That(PsdCommonPrefabPersistence.TryReuse(source, Target, out _), Is.False);
+            AssetDatabase.CopyAsset(sourcePath, Target);
+            PsdCommonPrefabPersistence.RecordGeneration(source, Target);
+            Assert.That(PsdCommonPrefabPersistence.Find(Target).targetGuid, Is.EqualTo(AssetDatabase.AssetPathToGUID(Target)));
+        }
     }
 }
