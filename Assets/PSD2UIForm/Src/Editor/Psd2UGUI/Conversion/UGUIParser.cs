@@ -882,8 +882,16 @@ namespace UGF.EditorTools.Psd2UGUI
 
         internal Image.Type ResolveImageType(PsdLayerNode layerNode, Image.Type type)
         {
+            layerNode = Psd2UiNineSliceNodeState.ResolveSourceNode(layerNode);
             if (!((Object)(object)layerNode == (Object)null))
             {
+                // Hierarchy 上九宫格标识亮着的节点 → 强制 Sliced，
+                // 否则 spriteBorder 设置了也不会生效。
+                if (layerNode.NineSliceEnabled)
+                {
+                    return Image.Type.Sliced;
+                }
+
                 string text = ((!string.IsNullOrWhiteSpace(layerNode.GetSourceLayerName())) ? layerNode.GetSourceLayerName() : layerNode.GetBoundPsdLayer()?.GetLayerName());
                 ParseLayerNameTags(text, layerNode.LayerType, out var value);
                 if (value.HasImageTypeOverride)
@@ -916,8 +924,11 @@ namespace UGF.EditorTools.Psd2UGUI
                 {
                     if (enabled)
                     {
-                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text, node.GetSourceLayerName());
-                        if (ScriptableSingleton<Psd2UIFormSettings>.Instance.AutoCropMinimalNineSlice)
+                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text, node);
+
+                        // 手动九宫格的边距是照着当前这张图量的，自动裁剪会改变像素尺寸，
+                        // 两者同时启用会互相打架 —— 有手动边距时跳过自动裁剪。
+                        if (!Psd2UiNineSliceNodeState.ResolveSourceNode(node).NineSliceEnabled && ScriptableSingleton<Psd2UIFormSettings>.Instance.AutoCropMinimalNineSlice)
                         {
                             RightClickExtension.TryCropMinimalNineSlice(text);
                         }

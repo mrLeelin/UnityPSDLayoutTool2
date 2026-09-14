@@ -58,6 +58,35 @@ namespace UGF.EditorTools.Psd2UGUI
         [SerializeField]
         internal int textSourceBindPsdLayerIndex = -1;
 
+        /// <summary>
+        /// 手动九宫格（9-slice）开关。
+        /// 勾选后，导出该节点图片时使用 <see cref="nineSliceLeft"/> / Top / Right / Bottom 记录的边距，
+        /// 而不是命名规则或像素推断的结果。由 Hierarchy 行上的九宫格标识与九宫格设置窗口写入。
+        /// </summary>
+        [SerializeField]
+        [HideInInspector]
+        internal bool nineSliceEnabled;
+
+        /// <summary>手动九宫格左边距（源图像素）。</summary>
+        [SerializeField]
+        [HideInInspector]
+        internal int nineSliceLeft;
+
+        /// <summary>手动九宫格上边距（源图像素）。</summary>
+        [SerializeField]
+        [HideInInspector]
+        internal int nineSliceTop;
+
+        /// <summary>手动九宫格右边距（源图像素）。</summary>
+        [SerializeField]
+        [HideInInspector]
+        internal int nineSliceRight;
+
+        /// <summary>手动九宫格下边距（源图像素）。</summary>
+        [SerializeField]
+        [HideInInspector]
+        internal int nineSliceBottom;
+
         [CompilerGenerated]
         private Texture2D _previewTexture;
 
@@ -88,6 +117,23 @@ namespace UGF.EditorTools.Psd2UGUI
         }
 
         internal PsdLayerType LayerType => mLayerType;
+
+        /// <summary>
+        /// 该节点是否支持九宫格。只有 Image 与 Background 会参与九宫格，
+        /// Hierarchy 上的九宫格标识也只对这两种类型显示。
+        /// </summary>
+        internal bool SupportsNineSlice => UIType == GUIType.Image || UIType == GUIType.Background ||
+                                           UIType == GUIType.Slider_Fill || UIType == GUIType.Slider_Handle;
+
+        /// <summary>
+        /// 是否手动启用了九宫格。Hierarchy 行上那颗九宫标识的亮 / 暗两态取的就是这个值。
+        /// 写入统一走 <c>Psd2UiNineSliceNodeState.SetEnabled</c>（带 Undo 与 SetDirty）。
+        /// </summary>
+        internal bool NineSliceEnabled => nineSliceEnabled;
+
+        /// <summary>是否已经记录了非零的手动九宫格边距。</summary>
+        internal bool HasNineSliceBorder =>
+            nineSliceLeft > 0 || nineSliceTop > 0 || nineSliceRight > 0 || nineSliceBottom > 0;
 
         [SpecialName]
         internal string GetLayerInfo()

@@ -687,13 +687,19 @@ namespace UGF.EditorTools.Psd2UGUI
                     }
                 }).ShowAsContext();
             }
-            if (!layerNode.HasAssetReference() && !layerNode.HasPrefabReference())
+            // 引用按钮（"ref xxx"）的宽度；没有引用时按 0 计算 —— 九宫格标识要贴在它左侧。
+            GUIContent referenceContent = new GUIContent(((Object)layerNode).name);
+            bool hasReference = layerNode.HasAssetReference() || layerNode.HasPrefabReference();
+            float num = hasReference ? Mathf.Min(GUI.skin.button.CalcSize(referenceContent).x + 8f, 100f) : 0f;
+
+            DrawNineSliceToggle(layerNode, rect, val2.x - num - 6f);
+
+            if (!hasReference)
             {
                 return;
             }
-            GUIContent val3 = new GUIContent(((Object)layerNode).name);
-            float num = Mathf.Min(GUI.skin.button.CalcSize(val3).x + 8f, 100f);
-            if (!GUI.Button(new Rect(rect.xMax - val2.width - num, rect.y, num, rect.height), val3))
+
+            if (!GUI.Button(new Rect(rect.xMax - val2.width - num, rect.y, num, rect.height), referenceContent))
             {
                 return;
             }
@@ -730,6 +736,199 @@ namespace UGF.EditorTools.Psd2UGUI
                 });
             }
             return val;
+        }
+
+        // ——————————————————————————————————————————————————————————————
+        // 九宫格标识（Hierarchy 行内）
+        //
+        // UIType 为 Image / Background 的节点，会在 UIType 下拉框左侧多出一颗九宫格开关：
+        //   暗色 = 未启用手动九宫格；亮色 = 已启用。
+        //   左键 → 打开九宫格设置窗口（与 PSDLayoutTool2 的九宫格窗口一致）；
+        //   Ctrl/Shift + 左键 → 直接开关（开启时自动推断一次边距）；
+        //   右键 → 推断 / 启用 / 禁用 / 清除。
+        // 状态本体存在 PsdLayerNode 上，随 Prefab 序列化。
+        // ——————————————————————————————————————————————————————————————
+
+        private static GUIStyle s_NineSliceIndicatorStyle;
+
+        private void DrawNineSliceToggle(PsdLayerNode layerNode, Rect rowRect, float rightEdge)
+        {
+            if (!Psd2UiNineSliceNodeState.IsCandidate(layerNode))
+            {
+                return;
+            }
+
+            // 点击区域保持在当前行内，图形另留边距，避免相邻行连成一条。
+            float size = Mathf.Min(rowRect.height, 18f);
+            Rect indicatorRect = new Rect(
+                rightEdge - size,
+                rowRect.y + ((rowRect.height - size) * 0.5f),
+                size,
+                size);
+
+            // 面板太窄时不再挤占名字区域
+            if (indicatorRect.x < 44f)
+            {
+                return;
+            }
+
+            layerNode = Psd2UiNineSliceNodeState.ResolveSourceNode(layerNode);
+            bool enabled = layerNode.NineSliceEnabled;
+            DrawNineSliceGlyph(indicatorRect, enabled);
+
+            if (s_NineSliceIndicatorStyle == null)
+            {
+                s_NineSliceIndicatorStyle = new GUIStyle(GUIStyle.none)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    fontSize = 9,
+                    fontStyle = FontStyle.Bold,
+                    clipping = TextClipping.Clip
+                };
+            }
+
+            GUIContent content = new GUIContent(string.Empty, BuildNineSliceTooltip(layerNode, enabled));
+
+            Event current = Event.current;
+            // 右键：GUI.Button 只吃左键，右键菜单得自己判事件（ContextClick 或 MouseUp+右键）
+            bool isContextClick = current != null && indicatorRect.Contains(current.mousePosition) &&
+                (current.type == EventType.ContextClick || (current.type == EventType.MouseUp && current.button == 1));
+            if (isContextClick)
+            {
+                BuildNineSliceMenu(layerNode).ShowAsContext();
+                current.Use();
+                return;
+            }
+
+            if (!GUI.Button(indicatorRect, content, s_NineSliceIndicatorStyle))
+            {
+                return;
+            }
+
+            if (current != null && (current.control || current.shift || current.command))
+            {
+                Psd2UiNineSliceNodeState.Toggle(layerNode);
+            }
+            else
+            {
+                Psd2UiNineSliceWindow.Open(layerNode);
+            }
+
+            if (current != null)
+            {
+                current.Use();
+            }
+        }
+
+        private static string BuildNineSliceTooltip(PsdLayerNode layerNode, bool enabled)
+        {
+            string header = enabled
+                ? "九宫格：已启用（边距 左" + layerNode.nineSliceLeft + " 上" + layerNode.nineSliceTop +
+                  " 右" + layerNode.nineSliceRight + " 下" + layerNode.nineSliceBottom + "）"
+                : "九宫格：未启用";
+            return header + "\n左键：打开九宫格设置　Ctrl/Shift+左键：直接开关　右键：更多操作";
+        }
+
+        /// <summary>无底板的细线九宫格，按物理像素对齐。</summary>
+        private static void DrawNineSliceGlyph(Rect rect, bool enabled)
+        {
+            if (Event.current.type != EventType.Repaint)
+            {
+                return;
+            }
+
+            bool dark = EditorGUIUtility.isProSkin;
+            Color glyph = enabled
+                ? (dark ? new Color(0.42f, 0.78f, 0.57f) : new Color(0.16f, 0.48f, 0.28f))
+                : (dark ? new Color(0.56f, 0.56f, 0.56f) : new Color(0.43f, 0.43f, 0.43f));
+            float pixels = EditorGUIUtility.pixelsPerPoint;
+            float thickness = 1f / pixels;
+            float size = Mathf.Min(12f, rect.height - 4f);
+            float cell = Mathf.Max(1f, Mathf.Floor((size * pixels - 1f) / 3f)) / pixels;
+            float extent = cell * 3f + thickness;
+            float left = Mathf.Round((rect.center.x - extent * 0.5f) * pixels) / pixels;
+            float top = Mathf.Round((rect.center.y - extent * 0.5f) * pixels) / pixels;
+
+            for (int i = 0; i <= 3; i++)
+            {
+                EditorGUI.DrawRect(new Rect(left + i * cell, top, thickness, extent), glyph);
+                EditorGUI.DrawRect(new Rect(left, top + i * cell, extent, thickness), glyph);
+            }
+        }
+
+        private static GenericMenu BuildNineSliceMenu(PsdLayerNode layerNode)
+        {
+            GenericMenu menu = new GenericMenu();
+            menu.AddItem(new GUIContent("打开九宫格设置…"), false, delegate { Psd2UiNineSliceWindow.Open(layerNode); });
+            menu.AddSeparator(string.Empty);
+
+            if (layerNode.NineSliceEnabled)
+            {
+                menu.AddItem(new GUIContent("关闭九宫格"), true, delegate
+                {
+                    Psd2UiNineSliceNodeState.SetEnabled(layerNode, false, "关闭九宫格");
+                });
+            }
+            else
+            {
+                menu.AddItem(new GUIContent("启用九宫格（自动推断边距）"), false, delegate
+                {
+                    EnableNineSliceWithInference(layerNode);
+                });
+                // GenericMenu 没有 (content, on, disabled, func) 这个重载，想置灰只能用 AddDisabledItem
+                if (layerNode.HasNineSliceBorder)
+                {
+                    menu.AddItem(new GUIContent("启用九宫格（沿用已记录边距）"), false, delegate
+                    {
+                        Psd2UiNineSliceNodeState.SetEnabled(layerNode, true, "启用九宫格");
+                    });
+                }
+                else
+                {
+                    menu.AddDisabledItem(new GUIContent("启用九宫格（沿用已记录边距）"));
+                }
+            }
+
+            menu.AddSeparator(string.Empty);
+            menu.AddItem(new GUIContent("按当前图像重新推断边距"), false, delegate
+            {
+                AutoInferNineSliceBorder(layerNode);
+            });
+            menu.AddItem(new GUIContent("清除该节点的九宫格数据"), false, delegate
+            {
+                Psd2UiNineSliceNodeState.Clear(layerNode);
+            });
+            return menu;
+        }
+
+        private static void EnableNineSliceWithInference(PsdLayerNode layerNode)
+        {
+            string method;
+            string error;
+            if (Psd2UiNineSliceNodeState.TryAutoFillBorder(layerNode, out method, out error))
+            {
+                Debug.Log("[Psd2UIForm] 九宫格已启用，边距自动推断（" + method + "）。");
+            }
+            else
+            {
+                Debug.LogWarning("[Psd2UIForm] 九宫格自动推断失败，先用零边距启用：" + error);
+            }
+
+            Psd2UiNineSliceNodeState.SetEnabled(layerNode, true, "启用九宫格");
+        }
+
+        private static void AutoInferNineSliceBorder(PsdLayerNode layerNode)
+        {
+            string method;
+            string error;
+            if (Psd2UiNineSliceNodeState.TryAutoFillBorder(layerNode, out method, out error))
+            {
+                Debug.Log("[Psd2UIForm] 九宫格边距重新推断完成（" + method + "）：左" + layerNode.nineSliceLeft +
+                    " 上" + layerNode.nineSliceTop + " 右" + layerNode.nineSliceRight + " 下" + layerNode.nineSliceBottom);
+                return;
+            }
+
+            Debug.LogWarning("[Psd2UIForm] 九宫格边距推断失败：" + error);
         }
 
         private void SetExportImageTg(GameObject[] gameObjects, bool enabled)
@@ -4557,6 +4756,41 @@ namespace UGF.EditorTools.Psd2UGUI
         internal static void EnsureNineSliceBorder(object text)
         {
             EnsureNineSliceBorder((string)text, layerName: null);
+        }
+
+        /// <summary>
+        /// 节点级九宫格应用。
+        ///
+        /// 节点勾选了手动九宫格（Hierarchy 行上那颗九宫格标识亮着）时，
+        /// 用节点记录的四个边距直接覆盖 TextureImporter.spriteBorder，
+        /// 不再走"图层名标签 → 像素推断"；否则行为与原来完全一致。
+        /// </summary>
+        internal static void EnsureNineSliceBorder(string texturePath, PsdLayerNode node)
+        {
+            node = Psd2UiNineSliceNodeState.ResolveSourceNode(node);
+            if (node == null)
+            {
+                EnsureNineSliceBorder(texturePath, (string)null);
+                return;
+            }
+
+            if (!node.NineSliceEnabled)
+            {
+                EnsureNineSliceBorder(texturePath, node.GetSourceLayerName());
+                return;
+            }
+
+            string error;
+            if (Psd2UiNineSliceNodeState.ApplyBorderToImportedSprite(
+                    node, texturePath, Psd2UiNineSliceNodeState.GetBorder(node), out error))
+            {
+                Debug.Log("[Psd2UIForm] 九宫格：使用节点手动边距 左" + node.nineSliceLeft + " 上" + node.nineSliceTop +
+                    " 右" + node.nineSliceRight + " 下" + node.nineSliceBottom + " → " + texturePath);
+            }
+            else
+            {
+                Debug.LogWarning("[Psd2UIForm] 九宫格：手动边距写入失败 - " + error);
+            }
         }
 
         /// <summary>

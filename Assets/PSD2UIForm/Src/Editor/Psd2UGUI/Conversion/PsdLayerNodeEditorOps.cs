@@ -185,6 +185,29 @@ namespace UGF.EditorTools.Psd2UGUI
             return null;
         }
 
+        /// <summary>
+        /// 供九宫格窗口使用的预览纹理：走与导出完全相同的 <c>Render()</c>，
+        /// 所以边距的像素坐标和最终导出的 PNG 是同一个空间。
+        ///
+        /// 与 <see cref="CreatePreviewTexture"/> 的差别：不用 <c>RenderPreview()</c>，
+        /// 也不经过 PsdLayerPreviewCache —— 宿主在 Prefab 隔离模式下可能取不到，
+        /// 那正是"窗口打得开却提示无可用图像"的原因。调用方负责销毁返回的纹理。
+        /// </summary>
+        internal static Texture2D CreateNineSliceSourceTexture(PsdLayerNode node)
+        {
+            if ((Object)node == (Object)null)
+            {
+                return null;
+            }
+
+            PsdRenderedImage psdRenderedImage = RenderNodeImage(node, false);
+            if (psdRenderedImage != null && !psdRenderedImage.IsEmpty)
+            {
+                return ConvertRenderedImageToTexture(psdRenderedImage, true);
+            }
+            return null;
+        }
+
         private static Texture2D ConvertRenderedImageToTexture(PsdRenderedImage value, bool enabled)
         {
             if (value != null && !value.IsEmpty)
@@ -280,7 +303,7 @@ namespace UGF.EditorTools.Psd2UGUI
                     Psd2UIFormConverterEditor.ConvertTexturesType(new string[1] { text9 }, flag2 || enabled, psdRenderedImage.IsHighBitDepth);
                     if (enabled3)
                     {
-                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text9, node.GetSourceLayerName());
+                        Psd2UIFormConverterEditor.EnsureNineSliceBorder(text9, node);
                     }
                     if (flag && value != null)
                     {

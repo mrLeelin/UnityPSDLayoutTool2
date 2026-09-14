@@ -3,10 +3,11 @@ using System.Globalization;
 using TMPro;
 using UnityEditor;
 using UnityEditorInternal;
-using UnityEngine;
+using UnityEngine;
 using Object = UnityEngine.Object;
 using TextGradientColorStopNamespace;
 using PsdTextStyleInfoNamespace;
+using UGF.EditorTools.Psd2UGUI.NineSlice;
 
 namespace UGF.EditorTools.Psd2UGUI
 {
@@ -75,6 +76,46 @@ namespace UGF.EditorTools.Psd2UGUI
             {
                 Psd2UIFormConverterEditor.Instance.ExportReusablePrefab(targetLogic);
             }
+
+            // 九宫格区块：只有 Image / Background 需要，和 Hierarchy 行上那颗九宫格标识是同一份数据
+            if (Psd2UiNineSliceNodeState.IsCandidate(targetLogic))
+            {
+                var nineSliceNode = Psd2UiNineSliceNodeState.ResolveSourceNode(targetLogic);
+                EditorGUILayout.Space();
+                if (nineSliceNode != targetLogic)
+                {
+                    EditorGUILayout.HelpBox("九宫格沿用引用源：" + nineSliceNode.name + "，修改会影响共用此图片的节点。", MessageType.Info);
+                }
+                EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
+                EditorGUILayout.LabelField("九宫格（9-Slice）", EditorStyles.boldLabel, Array.Empty<GUILayoutOption>());
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.LabelField(
+                    nineSliceNode.NineSliceEnabled
+                        ? "左" + nineSliceNode.nineSliceLeft + " 上" + nineSliceNode.nineSliceTop +
+                          " 右" + nineSliceNode.nineSliceRight + " 下" + nineSliceNode.nineSliceBottom
+                        : "未启用（导出时按图层名/像素推断）",
+                    EditorStyles.miniLabel,
+                    (GUILayoutOption[])(object)new GUILayoutOption[1] { GUILayout.Width(220f) });
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
+                bool nineSliceEnabled = EditorGUILayout.ToggleLeft("使用手动九宫格", nineSliceNode.NineSliceEnabled, (GUILayoutOption[])(object)new GUILayoutOption[1] { GUILayout.Width(150f) });
+                if (nineSliceEnabled != nineSliceNode.NineSliceEnabled)
+                {
+                    Psd2UiNineSliceNodeState.SetEnabled(nineSliceNode, nineSliceEnabled);
+                }
+
+                if (GUILayout.Button("九宫格设置…", Array.Empty<GUILayoutOption>()))
+                {
+                    Psd2UiNineSliceWindow.Open(nineSliceNode);
+                }
+
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.HelpBox(
+                    "勾选后 Hierarchy 上的九宫格标识会亮起，导出该节点图片时使用手动边距。" +
+                    "「九宫格设置…」里可以预览、拖动参考线、自动推断或手填四边距。",
+                    MessageType.None);
+            }
+
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Layer Data", EditorStyles.boldLabel, Array.Empty<GUILayoutOption>());
             Rect val3 = targetLogic.GetLayerRect();
