@@ -165,6 +165,10 @@ namespace AiRecognitionResultParserNamespace
             result2 = null;
             if (value != null && ((AiAnalysisPackageDocument)value).nodes != null && value2 != null)
             {
+                var organizer = (AiRecognitionCombinedResultDocument)value2;
+                if (!string.IsNullOrEmpty(organizer.organizerVersion) &&
+                    (organizer.organizerVersion != "1.0" || string.IsNullOrWhiteSpace(organizer.treeHash)))
+                { result2 = "整理方案版本或输入指纹无效。"; return false; }
                 if (!string.IsNullOrWhiteSpace(((AiAnalysisPackageDocument)value).treeHash) && !string.IsNullOrWhiteSpace(((AiRecognitionCombinedResultDocument)value2).treeHash) && !string.Equals(((AiAnalysisPackageDocument)value).treeHash, ((AiRecognitionCombinedResultDocument)value2).treeHash, StringComparison.OrdinalIgnoreCase))
                 {
                     result2 = "RecognitionCombined result treeHash mismatch.";
@@ -199,7 +203,10 @@ namespace AiRecognitionResultParserNamespace
                     treeHash = (((AiAnalysisPackageDocument)value).treeHash ?? string.Empty),
                     owners = list,
                     roles = list2,
-                    nodeLabels = nodeLabels
+                    nodeLabels = nodeLabels,
+                    organizerVersion = organizer.organizerVersion,
+                    renames = organizer.renames,
+                    components = organizer.components
                 };
                 return true;
             }

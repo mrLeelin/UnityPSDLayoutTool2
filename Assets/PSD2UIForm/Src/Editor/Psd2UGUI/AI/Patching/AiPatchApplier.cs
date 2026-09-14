@@ -41,7 +41,7 @@ namespace AiPatchApplierNamespace
 
         private static AiPatchApplier s_ObfuscationSentinel;
 
-        internal bool ApplyPatch(Psd2UIFormConverterEditor value5, AiPatchDocument aiPatchDocument, out string result)
+        internal bool ApplyPatch(Psd2UIFormConverterEditor value5, AiPatchDocument aiPatchDocument, out string result, bool strict = false, bool recordUndo = true)
         {
             result = null;
             if (value5 == null)
@@ -64,10 +64,14 @@ namespace AiPatchApplierNamespace
                 AiPatchApplyContext value = BuildApplyContext(value5);
                 List<string> list = new List<string>(16);
                 HashSet<int> hashSet = new HashSet<int>();
-                Undo.IncrementCurrentGroup();
-                int currentGroup = Undo.GetCurrentGroup();
-                Undo.SetCurrentGroupName("Apply AI Patch");
-                Undo.RegisterFullObjectHierarchyUndo(value5.gameObject, "Apply AI Patch");
+                int currentGroup = -1;
+                if (recordUndo)
+                {
+                    Undo.IncrementCurrentGroup();
+                    currentGroup = Undo.GetCurrentGroup();
+                    Undo.SetCurrentGroupName("Apply AI Patch");
+                    Undo.RegisterFullObjectHierarchyUndo(value5.gameObject, "Apply AI Patch");
+                }
                 for (int i = 0; i < aiPatchDocument.operations.Count; i++)
                 {
                     AiPatchOperation aiPatchOperation = aiPatchDocument.operations[i];
@@ -137,9 +141,10 @@ namespace AiPatchApplierNamespace
                 RefreshGeneratedGroupBounds(value._generatedLayerNodes);
                 new AiHierarchyStructureValidator().ValidateHierarchy(value5, list);
                 EditorUtility.SetDirty(value5.gameObject);
-                Undo.CollapseUndoOperations(currentGroup);
+                if (recordUndo) Undo.CollapseUndoOperations(currentGroup);
                 if (list.Count > 0)
                 {
+                    if (strict) { result = string.Join("\n", list); return false; }
                     Debug.LogWarning((object)("Apply AI Patch completed with warnings:\n- " + string.Join("\n- ", list)));
                 }
                 return true;

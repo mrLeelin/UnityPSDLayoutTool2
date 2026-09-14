@@ -181,7 +181,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
         static string RulesPath(string targetPath) => Path.ChangeExtension(targetPath, ".extraction.asset").Replace('\\', '/');
 
-        static string SourcePath(GameObject source)
+        internal static string SourcePath(GameObject source)
         {
             if (source == null) return null;
             string path = AssetDatabase.GetAssetPath(source);

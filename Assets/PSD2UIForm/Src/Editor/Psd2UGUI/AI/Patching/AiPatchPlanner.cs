@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AiPatchValidatorNamespace;
 using UGF.EditorTools.Psd2UGUI;
 using UiTypeCompatibilityRulesNamespace;
@@ -160,6 +161,24 @@ namespace AiPatchPlannerNamespace
                     AddNodeMoveOperations(result.operations, list3);
                     AddUiTypeOperations(result.operations, dictionary2, list, list2);
                     AddAuditEntries(result.analysis, dictionary2, list, list2);
+                    if (!string.IsNullOrEmpty(aiRecognitionCombinedResultDocument.organizerVersion))
+                    {
+                        if (aiRecognitionCombinedResultDocument.organizerVersion != "1.0")
+                        { result2 = "不支持的整理方案版本。"; return false; }
+                        var owners = list.ToDictionary(owner => "owner:" + owner._ownerId, owner => owner._targetNodeId, StringComparer.Ordinal);
+                        Func<string, string> resolve = id => id != null && owners.TryGetValue(id, out var target) ? target : id;
+                        foreach (var rename in aiRecognitionCombinedResultDocument.renames ?? new List<AiOrganizerRename>())
+                        {
+                            if (rename == null) { result2 = "改名建议为空。"; return false; }
+                            result.operations.Add(new AiPatchOperation { op = "rename_node", targetId = resolve(rename.nodeId), name = rename.name, confidence = 1, reason = rename.reason ?? "整理命名" });
+                        }
+                        foreach (var component in aiRecognitionCombinedResultDocument.components ?? new List<AiOrganizerComponent>())
+                        {
+                            if (component == null) { result2 = "公共组件建议为空。"; return false; }
+                            result.components.Add(new AiOrganizerComponent { name = component.name, mode = component.mode,
+                                rootIds = component.rootIds?.Select(resolve).ToArray(), reason = component.reason });
+                        }
+                    }
                     AiPatchValidator.NormalizeOperationOrder(result);
                     return true;
                 }

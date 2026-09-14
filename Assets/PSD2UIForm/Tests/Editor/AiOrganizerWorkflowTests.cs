@@ -1,0 +1,225 @@
+using System;
+using System.IO;
+using System.Linq;
+using LayerNodeIdUtilityNamespace;
+using NUnit.Framework;
+using UGF.EditorTools.Psd2UGUI;
+using UnityEditor;
+using UnityEngine;
+using Object = UnityEngine.Object;
+using System.Collections;
+using AiHierarchyAnalysisOrchestratorNamespace;
+using AiJobFileStoreNamespace;
+using IAiJobListenerNamespace;
+using UnityEngine.TestTools;
+
+namespace Psd2UIForm.Tests
+{
+    public class AiOrganizerWorkflowTests
+    {
+        const string Folder = "Assets/__AiOrganizerTests";
+        const string Source = Folder + "/Source.prefab";
+        const string Fixture = "Assets/UnityPSDLayoutTool2/Assets/PSD2UIForm/Examples/Psd2UguiForm_UIFormEditor.prefab";
+        GameObject _source;
+        bool _ownsFolder;
+        string _images, _forms;
+        bool _useForms;
+
+        [SetUp] public void Setup()
+        {
+            _ownsFolder = false;
+            var settings = UGF.EditorTools.Psd2UGUI.ScriptableSingleton<Psd2UIFormSettings>.Instance;
+            _images = settings.UIImagesOutputDir; _forms = settings.UIFormOutputDir; _useForms = settings.UseUIFormOutputDir;
+            Assert.That(AssetDatabase.IsValidFolder(Folder), Is.False);
+            AssetDatabase.CreateFolder("Assets", "__AiOrganizerTests"); _ownsFolder = true;
+            Assert.That(AssetDatabase.CopyAsset(Fixture, Source), Is.True);
+            _source = PrefabUtility.LoadPrefabContents(Source);
+            var nodes = _source.GetComponentsInChildren<PsdLayerNode>(true);
+            var selected = nodes.Where(node => node.name == "Gradient" || node.name == "Glow").ToArray();
+            Assert.That(selected.Length, Is.EqualTo(2));
+            foreach (var node in selected) node.transform.SetParent(_source.transform, true);
+            foreach (Transform child in _source.transform.Cast<Transform>().ToArray())
+                if (!selected.Any(node => node.transform == child)) Object.DestroyImmediate(child.gameObject);
+            _source.GetComponent<Psd2UIFormConverter>().uiFormName = "OrganizedTest";
+            PrefabUtility.SaveAsPrefabAsset(_source, Source);
+        }
+
+        [TearDown] public void Cleanup()
+        {
+            if (_source != null) PrefabUtility.UnloadPrefabContents(_source);
+            var settings = UGF.EditorTools.Psd2UGUI.ScriptableSingleton<Psd2UIFormSettings>.Instance;
+            settings.UIImagesOutputDir = _images; settings.UIFormOutputDir = _forms; settings.UseUIFormOutputDir = _useForms;
+            UGF.EditorTools.Psd2UGUI.ScriptableSingleton<Psd2UIFormSettings>.SaveInstance();
+            if (_ownsFolder) AssetDatabase.DeleteAsset(Folder);
+        }
+
+        void Documents(out AiAnalysisPackageDocument package, out AiPatchDocument patch)
+        {
+            var editor = Psd2UIFormConverterEditor.GetOrCreate(_source.GetComponent<Psd2UIFormConverter>());
+            package = new AiAnalysisPackageDocument { version = "4.0", treeHash = "controlled-input" };
+            patch = new AiPatchDocument { version = "2.0", treeHash = package.treeHash };
+            foreach (var node in _source.GetComponentsInChildren<PsdLayerNode>(true))
+            {
+                string id = LayerNodeIdUtility.GetStableNodeId(editor, node);
+                package.nodes.Add(new AiAnalysisNodeEntry { id = id, name = node.name, uiType = node.UIType.ToString(), layerType = "Layer", parentId = "" });
+                patch.analysis.Add(new AiAuditEntry { targetId = id, currentUIType = node.UIType.ToString(), predictedUIType = node.UIType.ToString(), verdict = "correct", confidence = 1, reason = "Controlled fixture" });
+                patch.operations.Add(new AiPatchOperation { op = "rename_node", targetId = id, name = "Organized_" + node.name, reason = "Readable name", confidence = 1 });
+            }
+            patch.components.Add(new AiOrganizerComponent { name = "SharedDecoration", mode = "same", rootIds = package.nodes.Select(node => node.id).ToArray() });
+        }
+
+        [Test] public void PreviewPublish_PreservesSourceUntilApplyAndProducesReusableGraph()
+        {
+            Documents(out var package, out var patch);
+            byte[] original = File.ReadAllBytes(Source);
+            var editor = Psd2UIFormConverterEditor.GetOrCreate(_source.GetComponent<Psd2UIFormConverter>());
+            using (var preview = AiOrganizerPreview.Build(editor, patch, package, Folder + "/Published"))
+            {
+                Assert.That(File.ReadAllBytes(Source), Is.EqualTo(original));
+                Assert.That(preview.Extractions.Count, Is.EqualTo(1));
+                Assert.That(AssetDatabase.IsValidFolder(Folder + "/Published"), Is.False);
+                preview.Publish(editor);
+                var savedSource = AssetDatabase.LoadAssetAtPath<GameObject>(Source);
+                Assert.That(savedSource.GetComponentsInChildren<PsdLayerNode>(true).All(node => node.name.StartsWith("Organized_")), Is.True);
+                Assert.That(PsdCommonPrefabPersistence.TryReuse(savedSource, preview.TargetPath, out var reused), Is.True);
+                Assert.That(reused, Is.Not.Null);
+                Assert.That(PsdCommonPrefabPersistence.Find(preview.TargetPath).rules.Count, Is.EqualTo(1));
+                var settings = UGF.EditorTools.Psd2UGUI.ScriptableSingleton<Psd2UIFormSettings>.Instance;
+                Assert.That(settings.UIImagesOutputDir, Is.EqualTo(_images));
+                Assert.That(settings.UIFormOutputDir, Is.EqualTo(_forms));
+                Assert.That(settings.UseUIFormOutputDir, Is.EqualTo(_useForms));
+            }
+        }
+
+        [Test] public void ChangedSinceAnalysis_RejectsPreviewBeforeWriting()
+        {
+            Documents(out var package, out var patch);
+            var editor = Psd2UIFormConverterEditor.GetOrCreate(_source.GetComponent<Psd2UIFormConverter>());
+            string fingerprint = PsdExtractionSourceFingerprint.Capture(_source);
+            byte[] bytes = File.ReadAllBytes(Source);
+            _source.transform.GetChild(0).name = "ChangedAfterAnalysis";
+            PrefabUtility.SaveAsPrefabAsset(_source, Source);
+            byte[] changed = File.ReadAllBytes(Source);
+            Assert.Throws<InvalidOperationException>(() => AiOrganizerPreview.Build(editor, patch, package, Folder + "/Published", fingerprint, bytes));
+            Assert.That(File.ReadAllBytes(Source), Is.EqualTo(changed));
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Published"), Is.False);
+        }
+
+        [Test] public void GroupThenExtract_UsesNewGroupIdentity()
+        {
+            Documents(out var package, out var patch);
+            var ids = package.nodes.Select(node => node.id).ToArray();
+            for (int i = 0; i < ids.Length; i++)
+            {
+                string groupId = "gen:organizer:" + i;
+                patch.operations.Insert(i, new AiPatchOperation { op = "create_group", id = groupId, parentId = "root", name = "DecorationGroup" + i, uiType = "Null", confidence = 1, reason = "Functional grouping" });
+                patch.operations.Add(new AiPatchOperation { op = "move_node", targetId = ids[i], newParentId = groupId, insertIndex = 0, confidence = 1, reason = "Group membership" });
+                patch.components[0].rootIds[i] = groupId;
+            }
+            AiPatchValidatorNamespace.AiPatchValidator.NormalizeOperationOrder(patch);
+            var editor = Psd2UIFormConverterEditor.GetOrCreate(_source.GetComponent<Psd2UIFormConverter>());
+            using (var preview = AiOrganizerPreview.Build(editor, patch, package, Folder + "/Published"))
+            {
+                preview.Publish(editor);
+                var saved = AssetDatabase.LoadAssetAtPath<GameObject>(Source);
+                Assert.That(saved.transform.childCount, Is.EqualTo(2));
+                Assert.That(saved.transform.GetChild(0).name, Does.StartWith("DecorationGroup"));
+                Assert.That(saved.transform.GetChild(0).GetChild(0).name, Does.StartWith("Organized_"));
+                Assert.That(PsdCommonPrefabPersistence.Find(preview.TargetPath).rules.Count, Is.EqualTo(1));
+            }
+        }
+
+        [Test] public void InvalidExtraction_DoesNotSavePartialRenames()
+        {
+            Documents(out var package, out var patch);
+            patch.components[0].rootIds[1] = "psd:does-not-exist";
+            byte[] original = File.ReadAllBytes(Source);
+            Assert.Throws<InvalidOperationException>(() => AiOrganizerPreview.Build(
+                Psd2UIFormConverterEditor.GetOrCreate(_source.GetComponent<Psd2UIFormConverter>()), patch, package, Folder + "/Published"));
+            Assert.That(File.ReadAllBytes(Source), Is.EqualTo(original));
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Published"), Is.False);
+        }
+
+        [Test] public void ChangedSource_RejectsPublishAndDisposeRemovesCandidate()
+        {
+            Documents(out var package, out var patch);
+            var editor = Psd2UIFormConverterEditor.GetOrCreate(_source.GetComponent<Psd2UIFormConverter>());
+            string candidate;
+            byte[] original = File.ReadAllBytes(Source);
+            using (var preview = AiOrganizerPreview.Build(editor, patch, package, Folder + "/Published"))
+            {
+                candidate = preview.PreviewPath;
+                _source.transform.GetChild(0).name = "ChangedWhilePreviewing";
+                Assert.Throws<InvalidOperationException>(() => preview.Publish(editor));
+                Assert.That(File.ReadAllBytes(Source), Is.EqualTo(original));
+            }
+            Assert.That(File.Exists(candidate), Is.False);
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Published"), Is.False);
+        }
+
+        sealed class Listener : IAiJobListener
+        {
+            internal bool Done;
+            internal string Error;
+            public void OnJobCompleted(AiJobContext context) { Done = true; }
+            public void OnJobFailed(AiJobContext context, string error) { Error = error; Done = true; }
+        }
+
+        [Test] public void RecognitionNormalization_RetainsNamesAndOwnerExtractionIds()
+        {
+            Documents(out var package, out var ignored);
+            var combined = new AiRecognitionCombinedResultDocument { version = "2.0", treeHash = package.treeHash, organizerVersion = "1.0" };
+            foreach (var node in package.nodes)
+            {
+                combined.owners.Add(new AiRecognitionOwnerEntry { ownerId = node.id, ownerType = "Image", carrierNodeId = node.id, memberNodeIds = new[] { node.id }, confidence = 1, reason = "Image" });
+                combined.nodeLabels.Add(new AiRecognitionNodeLabelEntry { nodeId = node.id, currentUIType = "Image", labelType = "Image", confidence = 1, reason = "Image" });
+                combined.renames.Add(new AiOrganizerRename { nodeId = "owner:" + node.id, name = "New_" + node.name });
+            }
+            combined.components.Add(new AiOrganizerComponent { name = "Shared", mode = "same", rootIds = package.nodes.Select(node => "owner:" + node.id).ToArray() });
+            string path = Folder + "/combined.json";
+            File.WriteAllText(path, JsonUtility.ToJson(combined));
+            var parser = new AiRecognitionResultParserNamespace.AiRecognitionResultParser();
+            Assert.That(parser.TryLoadCombinedRecognitionResult(new AiJobContext { RecognitionCombinedPath = path }, package, out var normalized, out string error), Is.True, error);
+            Assert.That(new AiPatchPlannerNamespace.AiPatchPlanner().TryBuildPatchFromCombinedRecognition(package, normalized, out var patch, out error), Is.True, error);
+            Assert.That(patch.components.Count, Is.EqualTo(1));
+            Assert.That(patch.components[0].rootIds, Is.EqualTo(package.nodes.Select(node => node.id).ToArray()));
+            Assert.That(patch.operations.Count(operation => operation.op == "rename_node"), Is.EqualTo(2));
+        }
+
+        [UnityTest, Explicit("Invokes the configured external AI CLI; requires its existing authentication.")]
+        public IEnumerator RealCli_ReturnsUnifiedPlanAndPublishes()
+        {
+            var listener = new Listener();
+            AiJobContext job = null;
+            var editor = Psd2UIFormConverterEditor.GetOrCreate(_source.GetComponent<Psd2UIFormConverter>());
+            string fixtureCopy = Folder + "/OrganizerCliFixture.psd";
+            Assert.That(AssetDatabase.CopyAsset(editor.GetSourcePsdAssetPath(), fixtureCopy), Is.True);
+            var shell = _source.GetComponent<Psd2UIFormConverter>();
+            shell.psdAssetPath = fixtureCopy;
+            shell.psdAsset = AssetDatabase.LoadAssetAtPath<Sprite>(fixtureCopy);
+            PrefabUtility.SaveAsPrefabAsset(_source, Source);
+            string instructions = File.ReadAllText("Assets/UnityPSDLayoutTool2/Assets/PSD2UIForm/AIPrompts/UIOrganizer/SKILL.md") +
+                "\nIntegration smoke: only two decorative Image nodes exist. Keep their Image types; propose meaningful distinct renames and exactly one same-structure component using their two real node IDs. Do not create extra owners or roles.";
+            Assert.That(AiHierarchyAnalysisOrchestrator.StartRecognitionJob(editor, out string error, listener, true,
+                instructions, context => job = context), Is.True, error);
+            try
+            {
+                DateTime deadline = DateTime.UtcNow.AddSeconds(180);
+                while (!listener.Done && DateTime.UtcNow < deadline) yield return null;
+                Assert.That(listener.Done, Is.True, "CLI did not finish in 180 seconds");
+                Assert.That(listener.Error, Is.Null);
+                Assert.That(AiJobFileStore.TryReadJson<AiPatchDocument>(job.PatchPath, out var patch), Is.True);
+                Assert.That(AiJobFileStore.TryReadJson<AiAnalysisPackageDocument>(job.AnalysisPackagePath, out var package), Is.True);
+                Assert.That(patch.components.Count, Is.EqualTo(1));
+                Assert.That(patch.operations.Any(operation => operation.op == "rename_node"), Is.True);
+                using (var preview = AiOrganizerPreview.Build(editor, patch, package, Folder + "/Published"))
+                {
+                    preview.Publish(editor);
+                    Assert.That(File.Exists(preview.TargetPath), Is.True);
+                    Assert.That(PsdCommonPrefabPersistence.Find(preview.TargetPath).rules.Count, Is.EqualTo(1));
+                }
+            }
+            finally { AiHierarchyAnalysisOrchestrator.CancelOrganizerJob(job); }
+        }
+    }
+}

@@ -122,7 +122,7 @@ namespace AiJobManagerNamespace
             return Path.Combine((string)name, path);
         }
 
-        internal void StartJob(AiJobContext aiJobContext, IAiCliProvider aiCliProvider, IAiJobListener aiJobListener, AiJobAction aiJobAction)
+        internal void StartJob(AiJobContext aiJobContext, IAiCliProvider aiCliProvider, IAiJobListener aiJobListener, AiJobAction aiJobAction, bool showTerminal = true)
         {
             if (aiJobContext != null)
             {
@@ -141,7 +141,7 @@ namespace AiJobManagerNamespace
                 AiJobFileStore.WriteJobStatus(aiJobContext, (AiJobState)1, "Preparing provider execution.");
                 AiJobFileStore.LogDebug(aiJobContext, "StartJob requested. provider=" + aiCliProvider.GetProviderId() + ", analysisPackage=" + aiJobContext.AnalysisPackagePath + ", mainTypePath=" + aiJobContext.MainTypePath + ", childRelationPath=" + aiJobContext.ChildRelationPath + ", structuralPath=" + aiJobContext.StructuralPath + ", patchPath=" + aiJobContext.PatchPath);
                 VisibleCliTerminalLauncher.VisibleTerminalHandle value = null;
-                if (aiCliProvider.GetCapabilities() != null && !aiCliProvider.GetCapabilities().UsesVisibleCliExecution)
+                if (showTerminal && aiCliProvider.GetCapabilities() != null && !aiCliProvider.GetCapabilities().UsesVisibleCliExecution)
                 {
                     value = VisibleCliTerminalLauncher.LaunchForJob(aiJobContext, aiCliProvider.GetProviderId());
                 }

@@ -17,6 +17,7 @@ namespace UGF.EditorTools.Psd2UGUI
         public List<AiAuditEntry> analysis = new List<AiAuditEntry>();
 
         public List<AiPatchOperation> operations = new List<AiPatchOperation>();
+        public List<AiOrganizerComponent> components = new List<AiOrganizerComponent>();
 
         private static AiPatchDocument s_ObfuscationSentinel;
 

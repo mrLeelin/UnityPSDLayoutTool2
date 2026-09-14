@@ -15,6 +15,9 @@ namespace UGF.EditorTools.Psd2UGUI
         public List<AiRecognitionRoleEntry> roles = new List<AiRecognitionRoleEntry>();
 
         public List<AiRecognitionNodeLabelEntry> nodeLabels = new List<AiRecognitionNodeLabelEntry>();
+        public string organizerVersion;
+        public List<AiOrganizerRename> renames = new List<AiOrganizerRename>();
+        public List<AiOrganizerComponent> components = new List<AiOrganizerComponent>();
 
         private static AiRecognitionCombinedResultDocument s_ObfuscationSentinel;
 

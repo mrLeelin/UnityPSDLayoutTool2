@@ -378,7 +378,8 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
         internal static AiHierarchyAnalysisOrchestrator s_ObfuscationSentinel;
 
-        internal static bool StartRecognitionJob(object value2, out string result)
+        internal static bool StartRecognitionJob(object value2, out string result, IAiJobListener listener = null, bool background = false,
+            string organizerInstructions = null, Action<AiJobContext> created = null)
         {
             result = null;
             if (Psd2UIFormTargetCompat.IsNull(value2))
@@ -425,18 +426,27 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                     previewHash = string.Empty
                 };
                 string text3 = GetRecognitionPromptPath(text2);
-                bool flag = ShouldUseVisibleCliExecution(cliProvider, uGUIParser.GetAiProviderConfig());
+                if (organizerInstructions != null)
+                {
+                    string organizerPrompt = Path.Combine(aiJobContext.RequestDirectory, "organizer-task.md");
+                    File.WriteAllText(organizerPrompt, File.ReadAllText(text3) + "\n\n" + organizerInstructions);
+                    text3 = organizerPrompt;
+                }
+                bool flag = !background && ShouldUseVisibleCliExecution(cliProvider, uGUIParser.GetAiProviderConfig());
                 AiJobFileStore.WriteJsonAtomic(aiJobContext.MetaPath, value);
                 AiJobFileStore.LogDebug(aiJobContext, "Workflow prepared. provider=" + cliProvider.GetProviderId() + ", projectRoot=" + text2 + ", recognitionPrompt=" + text3);
-                _jobManager.StartJob(aiJobContext, cliProvider, new ConverterAiJobListener((Psd2UIFormConverterEditor)value2), delegate(AiJobContext jobContext, CancellationToken cancellationToken)
+                created?.Invoke(aiJobContext);
+                _jobManager.StartJob(aiJobContext, cliProvider, listener ?? new ConverterAiJobListener((Psd2UIFormConverterEditor)value2), delegate(AiJobContext jobContext, CancellationToken cancellationToken)
                 {
                     ExecuteRecognitionWorkflow(jobContext, cliProvider, text2, cancellationToken, text3, flag);
-                });
+                }, !background);
                 return true;
             }
             result = "当前 AI Provider 配置无效。";
             return false;
         }
+
+        internal static void CancelOrganizerJob(AiJobContext job) { if (job != null) _jobManager.CancelJob(job.JobId); }
 
         internal static bool TryApplyLatestPatchWithUndo(object value, out string result)
         {

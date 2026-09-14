@@ -24,8 +24,6 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private GUIContent aiAutoFixBt;
 
-        private GUIContent applyAiResultBt;
-
         private GUIContent normalizeStructureBt;
 
         private GUIContent generateUIFormBt;
@@ -54,8 +52,7 @@ namespace UGF.EditorTools.Psd2UGUI
             targetEditor?.Attach();
             parsePsd2NodesBt = new GUIContent("解析psd图层", "把psd图层解析为可编辑节点树");
             exportUISpritesBt = new GUIContent("导出Images", "导出勾选的psd图层为碎图");
-            aiAutoFixBt = new GUIContent("AI自动识别UI类型", "导出当前节点树和预览图，调用AI自动识别并修正UI类型与结构");
-            applyAiResultBt = new GUIContent("应用AI结果", "应用当前 AI 识别数据 到节点树");
+            aiAutoFixBt = new GUIContent("AI 整理 UI", "统一分析控件类型、层级、命名和公共 Prefab，预览后应用");
             normalizeStructureBt = new GUIContent("修正树结构", "按本地 owner 规则修正层级，并刷新主控件对子控件的引用");
             generateUIFormBt = new GUIContent("生成UIForm", "根据解析后的节点树生成UIForm Prefab");
             openParserConfigBt = new GUIContent("打开设置", "选中并定位PSD2UIForm全局解析和生成规则配置");
@@ -146,13 +143,9 @@ namespace UGF.EditorTools.Psd2UGUI
                 }
                 EditorGUILayout.EndHorizontal();
                 EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
-                if (GUILayout.Button(aiAutoFixBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }) && !AiHierarchyAnalysisOrchestrator.StartRecognitionJob(targetEditor, out var text3))
+                if (GUILayout.Button(aiAutoFixBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }))
                 {
-                    EditorUtility.DisplayDialog("AI修正启动失败", text3, "确定");
-                }
-                if (GUILayout.Button(applyAiResultBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }) && !AiHierarchyAnalysisOrchestrator.TryApplyLatestPatchWithUndo(targetEditor, out var text4))
-                {
-                    EditorUtility.DisplayDialog("应用AI结果失败", text4, "确定");
+                    AiOrganizerWindow.Open(targetLogic);
                 }
                 if (GUILayout.Button(normalizeStructureBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }))
                 {

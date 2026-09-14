@@ -3273,7 +3273,7 @@ namespace UGF.EditorTools.Psd2UGUI
             }
         }
 
-        private string BuildNormalizedNodePath(GameObject gameObject, Transform transform)
+        internal string BuildNormalizedNodePath(GameObject gameObject, Transform transform)
         {
             if (!((Object)(object)gameObject == (Object)null))
             {

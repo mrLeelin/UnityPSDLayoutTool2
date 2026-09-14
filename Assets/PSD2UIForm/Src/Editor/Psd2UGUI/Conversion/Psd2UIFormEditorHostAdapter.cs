@@ -128,7 +128,7 @@ namespace UGF.EditorTools.Psd2UGUI
 
 		public bool HasConverterInstance()
 		{
-			return (Object)(object)Psd2UIFormConverterEditor.Instance != (Object)null;
+			return !Psd2UIFormTargetCompat.IsNull(Psd2UIFormConverterEditor.Instance);
 		}
 
 		public void AttachConverter(Psd2UIFormConverter converter)
