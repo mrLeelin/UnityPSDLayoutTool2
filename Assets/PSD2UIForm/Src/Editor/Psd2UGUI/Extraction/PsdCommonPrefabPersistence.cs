@@ -11,6 +11,8 @@ namespace UGF.EditorTools.Psd2UGUI
     /// <summary>Unchanged-input regeneration reuses the saved graph; changed inputs require a later merge decision.</summary>
     internal static class PsdCommonPrefabPersistence
     {
+        // Asset-writing boundary: tests can simulate an I/O exception after a partial write.
+        internal static Action<PsdCommonPrefabRules> SaveRules = rules => AssetDatabase.SaveAssetIfDirty(rules);
         internal static PsdCommonPrefabRules Find(string targetPath, bool allowUnextractedReplacement = false)
         {
             string guid = AssetDatabase.AssetPathToGUID(targetPath);
@@ -62,7 +64,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 rules.sourceGuid = AssetDatabase.AssetPathToGUID(sourcePath);
                 rules.sourceFingerprint = fingerprint;
                 EditorUtility.SetDirty(rules);
-                AssetDatabase.SaveAssetIfDirty(rules);
+                SaveRules(rules);
             }
             catch
             {
@@ -90,7 +92,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 rules.rules.Add(rule);
                 ValidateInstances(rules, root);
                 EditorUtility.SetDirty(rules);
-                AssetDatabase.SaveAssetIfDirty(rules);
+                SaveRules(rules);
             }
             catch
             {

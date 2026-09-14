@@ -301,5 +301,41 @@ namespace Psd2UIForm.Tests
             PsdCommonPrefabPersistence.RecordGeneration(source, Target);
             Assert.That(PsdCommonPrefabPersistence.Find(Target).targetGuid, Is.EqualTo(AssetDatabase.AssetPathToGUID(Target)));
         }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void Extraction_RestoresAssetsWhenRulesWriteFails(bool existingBaseline)
+        {
+            string rulesPath = Folder + "/Screen.extraction.asset";
+            if (existingBaseline)
+            {
+                AssetDatabase.CopyAsset(Target, Folder + "/Source.prefab");
+                PsdCommonPrefabPersistence.RecordGeneration(AssetDatabase.LoadAssetAtPath<GameObject>(Folder + "/Source.prefab"), Target);
+            }
+            byte[] before = System.IO.File.ReadAllBytes(Target);
+            byte[] metaBefore = System.IO.File.ReadAllBytes(Target + ".meta");
+            byte[] rulesBefore = existingBaseline ? System.IO.File.ReadAllBytes(rulesPath) : null;
+            var plan = PsdCommonPrefabExtraction.Preview(Target, new[] { "0", "1" }, "RewardItem");
+            var save = PsdCommonPrefabPersistence.SaveRules;
+            try
+            {
+                PsdCommonPrefabPersistence.SaveRules = rules =>
+                {
+                    save(rules);
+                    throw new System.IO.IOException("Injected failure after rules write");
+                };
+                Assert.Throws<System.IO.IOException>(() => PsdCommonPrefabExtraction.Apply(plan));
+            }
+            finally { PsdCommonPrefabPersistence.SaveRules = save; }
+            Assert.That(System.IO.File.ReadAllBytes(Target), Is.EqualTo(before));
+            Assert.That(System.IO.File.ReadAllBytes(Target + ".meta"), Is.EqualTo(metaBefore));
+            Assert.That(AssetDatabase.IsValidFolder(Folder + "/Common"), Is.False);
+            if (existingBaseline)
+            {
+                Assert.That(System.IO.File.ReadAllBytes(rulesPath), Is.EqualTo(rulesBefore));
+                Assert.That(PsdCommonPrefabPersistence.Find(Target).rules, Is.Empty);
+            }
+            else Assert.That(System.IO.File.Exists(rulesPath), Is.False);
+        }
     }
 }
