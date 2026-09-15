@@ -11,6 +11,10 @@ namespace PsdLayoutTool2
     using UnityEditor.Compilation;
     using UnityEditor.Callbacks;
     using UnityEngine;
+    using UnityEditor.SceneManagement;
+    using UnityEngine.SceneManagement;
+    using UnityEngine.Rendering;
+    using UnityEngine.UI;
 
     internal static class PsdCommonAssetPreviewServer
     {
@@ -175,7 +179,10 @@ namespace PsdLayoutTool2
                 if (entry == null || entry.prefab == null || string.IsNullOrEmpty(entry.guid)) continue;
                 Item item = Add(result, paths, entry.guid, "Prefab", entry.key, entry.assetPath, 0, 0, root);
                 live.Add(entry.guid);
-                EnsurePreview(entry.guid, item, paths, ref budget, () => AssetPreview.GetAssetPreview(entry.prefab), Rect.zero);
+                if (entry.prefab.transform is RectTransform)
+                    EnsureUiPreview(entry.guid, item, entry.prefab, ref budget);
+                else
+                    EnsurePreview(entry.guid, item, paths, ref budget, () => AssetPreview.GetAssetPreview(entry.prefab), Rect.zero);
             }
 
             foreach (PsdCommonTextureCatalogEntry entry in catalog.textures)
@@ -238,6 +245,115 @@ namespace PsdLayoutTool2
                 return info.Length + ":" + info.LastWriteTimeUtc.Ticks;
             }
             catch { return "0"; }
+        }
+
+        // AssetPreview does not reliably render Canvas graphics. Render UI in an isolated
+        // preview scene and cache the PNG, including changes to referenced sprites/materials.
+        private static void EnsureUiPreview(string id, Item item, GameObject prefab, ref int budget)
+        {
+            string version = AssetDatabase.GetAssetDependencyHash(item.path).ToString();
+            PreviewEntry cached;
+            lock (Sync) { PreviewCache.TryGetValue(id, out cached); }
+            if (cached != null && cached.version == version)
+            {
+                item.image = "/asset/" + Uri.EscapeDataString(id);
+                return;
+            }
+            if (budget <= 0) return;
+            budget--;
+            try
+            {
+                byte[] png = CaptureUiPrefab(prefab);
+                lock (Sync) { PreviewCache[id] = new PreviewEntry { png = png, version = version }; }
+                item.image = "/asset/" + Uri.EscapeDataString(id);
+            }
+            catch (Exception exception) { Error = item.path + ": " + exception.Message; }
+        }
+
+        private static byte[] CaptureUiPrefab(GameObject prefab)
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            RenderTexture target = null;
+            Texture2D image = null;
+            RenderTexture previous = RenderTexture.active;
+            try
+            {
+                var root = new GameObject("Common Prefab Preview", typeof(RectTransform), typeof(Canvas));
+                SceneManager.MoveGameObjectToScene(root, scene);
+                var canvas = root.GetComponent<Canvas>();
+                canvas.renderMode = RenderMode.WorldSpace;
+                var sourceRect = (RectTransform)prefab.transform;
+                root.GetComponent<RectTransform>().sizeDelta = new Vector2(
+                    Mathf.Max(1, sourceRect.rect.width), Mathf.Max(1, sourceRect.rect.height));
+                var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, scene);
+                instance.transform.SetParent(root.transform, false);
+                instance.transform.localPosition = Vector3.zero;
+                instance.SetActive(true);
+                foreach (var nested in instance.GetComponentsInChildren<Canvas>(true))
+                    nested.renderMode = RenderMode.WorldSpace;
+                foreach (var scaler in instance.GetComponentsInChildren<CanvasScaler>(true))
+                    scaler.enabled = false;
+                Canvas.ForceUpdateCanvases();
+                LayoutRebuilder.ForceRebuildLayoutImmediate((RectTransform)instance.transform);
+                Canvas.ForceUpdateCanvases();
+
+                var bounds = new Bounds();
+                bool hasBounds = false;
+                var corners = new Vector3[4];
+                foreach (var graphic in instance.GetComponentsInChildren<Graphic>())
+                {
+                    if (!graphic.isActiveAndEnabled) continue;
+                    graphic.rectTransform.GetWorldCorners(corners);
+                    foreach (var corner in corners)
+                    {
+                        if (!hasBounds) { bounds = new Bounds(corner, Vector3.zero); hasBounds = true; }
+                        else bounds.Encapsulate(corner);
+                    }
+                }
+                if (!hasBounds) throw new InvalidOperationException("Prefab has no visible UI graphics.");
+                float width = Mathf.Max(1, bounds.size.x) * 1.1f;
+                float height = Mathf.Max(1, bounds.size.y) * 1.1f;
+                float scale = Mathf.Min(1, 512f / Mathf.Max(width, height));
+                target = RenderTexture.GetTemporary(Mathf.Max(1, Mathf.CeilToInt(width * scale)),
+                    Mathf.Max(1, Mathf.CeilToInt(height * scale)), 24, RenderTextureFormat.ARGB32);
+                var cameraObject = new GameObject("Common Prefab Camera", typeof(Camera));
+                SceneManager.MoveGameObjectToScene(cameraObject, scene);
+                var camera = cameraObject.GetComponent<Camera>();
+                camera.enabled = false;
+                camera.scene = scene;
+                camera.orthographic = true;
+                camera.orthographicSize = height / 2;
+                camera.transform.position = bounds.center - Vector3.forward * 1000;
+                camera.nearClipPlane = 0.1f;
+                camera.farClipPlane = 2000 + bounds.size.z;
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = Color.clear;
+                camera.allowHDR = false;
+                camera.allowMSAA = false;
+                camera.targetTexture = target;
+                canvas.worldCamera = camera;
+                Canvas.ForceUpdateCanvases();
+                if (GraphicsSettings.currentRenderPipeline == null) camera.Render();
+                else
+                {
+                    var request = new RenderPipeline.StandardRequest { destination = target };
+                    if (!RenderPipeline.SupportsRenderRequest(camera, request))
+                        throw new InvalidOperationException("Render pipeline does not support preview rendering.");
+                    RenderPipeline.SubmitRenderRequest(camera, request);
+                }
+                RenderTexture.active = target;
+                image = new Texture2D(target.width, target.height, TextureFormat.RGBA32, false);
+                image.ReadPixels(new Rect(0, 0, target.width, target.height), 0, 0);
+                image.Apply();
+                return image.EncodeToPNG();
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                EditorSceneManager.ClosePreviewScene(scene);
+                if (image != null) UnityEngine.Object.DestroyImmediate(image);
+                if (target != null) RenderTexture.ReleaseTemporary(target);
+            }
         }
 
         /// <summary>Re-encodes any readable or unreadable texture to PNG through the GPU.
