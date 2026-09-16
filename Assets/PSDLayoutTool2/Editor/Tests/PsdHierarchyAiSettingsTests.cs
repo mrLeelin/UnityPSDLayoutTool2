@@ -318,5 +318,117 @@ namespace PsdLayoutTool2.Tests
             // 提示词不在参数里，只能经 stdin 交给 --print；此前这里断言的是 False，与实现不符。
             Assert.That(invocation.writePromptToStandardInput, Is.True);
         }
+
+        // ---- Pi 模型目录解析（候选必须来自 ~/.pi/agent/，静态示例会和用户实际用的对不上）----
+
+        private const string PiCatalogSettingsJson = @"{
+  ""defaultProvider"": ""deepseek"",
+  ""defaultModel"": ""deepseek-v4-flash"",
+  ""defaultThinkingLevel"": ""high""
+}";
+
+        private const string PiCatalogModelsJson = @"{
+  ""providers"": {
+    ""cc-switch-deep-seek"": {
+      ""name"": ""DeepSeek"",
+      ""models"": [
+        {
+          ""id"": ""deepseek-v4-pro"",
+          ""thinkingLevelMap"": { ""minimal"": null, ""low"": null, ""medium"": null, ""high"": ""high"", ""max"": ""max"" }
+        },
+        {
+          ""id"": ""deepseek-flash"",
+          ""thinkingLevelMap"": { ""minimal"": null, ""low"": null, ""medium"": null, ""high"": ""high"", ""max"": ""max"" }
+        }
+      ]
+    }
+  }
+}";
+
+        [Test]
+        public void PiCatalogReadsCustomProviderModelsAndEffectiveEffortLevels()
+        {
+            // 本机实测形态：cc-switch 配的 DeepSeek 自定义 provider，默认模型甚至不在目录 id 里。
+            bool parsed = PsdHierarchyAiPiCatalog.TryParse(
+                PiCatalogSettingsJson,
+                PiCatalogModelsJson,
+                out string[] models,
+                out string[] levels,
+                out string defaultModel);
+
+            Assert.That(parsed, Is.True);
+            // 默认模型排在第一位，其余按目录顺序去重。
+            Assert.That(models, Is.EqualTo(new[] { "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-flash" }));
+            // 映射为 null 的档位对这个模型不起作用，只能列出真正生效的 high / max。
+            Assert.That(levels, Is.EqualTo(new[] { "high", "max" }));
+            Assert.That(defaultModel, Is.EqualTo("deepseek-v4-flash"));
+        }
+
+        [Test]
+        public void PiCatalogUsesExactModelMapWhenDefaultModelMatches()
+        {
+            // 默认模型能精确匹配目录项时，以它自己的档位映射为准，即使别的模型不一致。
+            const string settingsJson = @"{ ""defaultModel"": ""model-a"" }";
+            const string modelsJson = @"{
+  ""providers"": {
+    ""p"": {
+      ""models"": [
+        { ""id"": ""model-a"", ""thinkingLevelMap"": { ""low"": ""low"", ""high"": ""high"" } },
+        { ""id"": ""model-b"", ""thinkingLevelMap"": { ""max"": ""max"" } }
+      ]
+    }
+  }
+}";
+
+            bool parsed = PsdHierarchyAiPiCatalog.TryParse(
+                settingsJson,
+                modelsJson,
+                out string[] models,
+                out string[] levels,
+                out _);
+
+            Assert.That(parsed, Is.True);
+            Assert.That(models, Is.EqualTo(new[] { "model-a", "model-b" }));
+            Assert.That(levels, Is.EqualTo(new[] { "low", "high" }));
+        }
+
+        [Test]
+        public void PiCatalogOmitsEffortLevelsWhenMapsDisagreeAndDefaultIsUnknown()
+        {
+            // 档位映射不一致又定位不到默认模型时，宁可不给档位（回退静态全集），别瞎猜。
+            const string modelsJson = @"{
+  ""providers"": {
+    ""p"": {
+      ""models"": [
+        { ""id"": ""model-a"", ""thinkingLevelMap"": { ""low"": ""low"" } },
+        { ""id"": ""model-b"", ""thinkingLevelMap"": { ""max"": ""max"" } }
+      ]
+    }
+  }
+}";
+
+            bool parsed = PsdHierarchyAiPiCatalog.TryParse(
+                null,
+                modelsJson,
+                out string[] models,
+                out string[] levels,
+                out string defaultModel);
+
+            Assert.That(parsed, Is.True);
+            Assert.That(models, Is.EqualTo(new[] { "model-a", "model-b" }));
+            Assert.That(levels, Is.Empty);
+            Assert.That(defaultModel, Is.Empty);
+        }
+
+        [Test]
+        public void PiCatalogFallsBackWhenCatalogIsMissingOrBroken()
+        {
+            Assert.That(
+                PsdHierarchyAiPiCatalog.TryParse(null, null, out _, out _, out _),
+                Is.False);
+            Assert.That(
+                PsdHierarchyAiPiCatalog.TryParse(null, "not json at all", out _, out _, out _),
+                Is.False);
+        }
     }
 }

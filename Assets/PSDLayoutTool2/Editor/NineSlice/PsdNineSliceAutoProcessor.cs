@@ -25,6 +25,22 @@ namespace PsdLayoutTool2
             out PsdNineSliceBorder border,
             out string reason)
         {
+            return TryProcess(source, rule, horizontalScale, verticalScale, true, out png, out border, out reason);
+        }
+
+        /// <summary>
+        /// <paramref name="cropEnabled"/> 为 false 时只推断九宫边框并返回未裁剪的 PNG。
+        /// </summary>
+        public static bool TryProcess(
+            Texture2D source,
+            PsdNineSliceNameRule rule,
+            float horizontalScale,
+            float verticalScale,
+            bool cropEnabled,
+            out byte[] png,
+            out PsdNineSliceBorder border,
+            out string reason)
+        {
             png = null;
             border = null;
             reason = string.Empty;
@@ -36,13 +52,20 @@ namespace PsdLayoutTool2
 
             if (Mathf.Approximately(horizontalScale, 1f) && Mathf.Approximately(verticalScale, 1f))
             {
-                return TryProcess(source, rule, out png, out border, out reason);
+                return TryProcess(source, rule, cropEnabled, out png, out border, out reason);
             }
 
             PsdNineSliceRaster sourceRaster;
             PsdNineSliceRaster sourceResult;
             PsdNineSliceBorder sourceBorder;
-            if (!TryBuildSourceConversion(source, rule, out sourceRaster, out sourceResult, out sourceBorder, out reason))
+            if (!TryBuildSourceConversion(
+                    source,
+                    rule,
+                    cropEnabled,
+                    out sourceRaster,
+                    out sourceResult,
+                    out sourceBorder,
+                    out reason))
             {
                 return false;
             }
@@ -69,7 +92,7 @@ namespace PsdLayoutTool2
                 }
 
                 PsdNineSliceNameRule scaledRule = new PsdNineSliceNameRule(rule.Mode, border);
-                return TryProcess(scaled, scaledRule, out png, out border, out reason);
+                return TryProcess(scaled, scaledRule, cropEnabled, out png, out border, out reason);
             }
             finally
             {
@@ -80,6 +103,7 @@ namespace PsdLayoutTool2
         private static bool TryBuildSourceConversion(
             Texture2D source,
             PsdNineSliceNameRule rule,
+            bool cropEnabled,
             out PsdNineSliceRaster sourceRaster,
             out PsdNineSliceRaster sourceResult,
             out PsdNineSliceBorder sourceBorder,
@@ -95,6 +119,7 @@ namespace PsdLayoutTool2
                 return PsdNineSliceAutoProcessor.TryProcessRaster(
                     sourceRaster,
                     rule,
+                    cropEnabled,
                     out sourceResult,
                     out sourceBorder,
                     out reason);
@@ -113,6 +138,21 @@ namespace PsdLayoutTool2
         public static bool TryProcess(
             Texture2D source,
             PsdNineSliceNameRule rule,
+            out byte[] png,
+            out PsdNineSliceBorder border,
+            out string reason)
+        {
+            return TryProcess(source, rule, true, out png, out border, out reason);
+        }
+
+        /// <summary>
+        /// 推断或套用九宫边框，并按需裁剪到 Unity 最小切片源尺寸。
+        /// <paramref name="cropEnabled"/> 为 false 时保留原始像素，只返回边框。
+        /// </summary>
+        public static bool TryProcess(
+            Texture2D source,
+            PsdNineSliceNameRule rule,
+            bool cropEnabled,
             out byte[] png,
             out PsdNineSliceBorder border,
             out string reason)
@@ -140,7 +180,13 @@ namespace PsdLayoutTool2
             try
             {
                 PsdNineSliceRaster cropped;
-                if (!PsdNineSliceAutoProcessor.TryProcessRaster(raster, rule, out cropped, out border, out reason))
+                if (!PsdNineSliceAutoProcessor.TryProcessRaster(
+                        raster,
+                        rule,
+                        cropEnabled,
+                        out cropped,
+                        out border,
+                        out reason))
                 {
                     return false;
                 }

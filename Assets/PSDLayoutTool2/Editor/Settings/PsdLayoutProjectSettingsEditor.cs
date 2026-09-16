@@ -16,6 +16,7 @@ namespace PsdLayoutTool2
         private const string CleanupExecutionSectionName = "psd-project-settings-cleanup-execution";
         private const string OutputSectionName = "psd-project-settings-output";
         private const string UiComponentSectionName = "psd-project-settings-ui-components";
+        private const string NineSliceSectionName = "psd-project-settings-nine-slice";
         private const string FontSectionName = "psd-project-settings-font";
         private const string CommonNamingSectionName = "psd-project-settings-common-naming";
         private const string FixedOutputContentName = "psd-project-settings-fixed-output";
@@ -51,6 +52,7 @@ namespace PsdLayoutTool2
             root.Add(CreateHierarchyCleanupExecutionSection(settings));
             root.Add(CreateOutputSection(settings));
             root.Add(CreateUiComponentSection(settings));
+            root.Add(CreateNineSliceSection(settings));
             root.Add(CreateFontSection(settings));
             root.Add(CreatePreviewServerSection(settings));
             root.Add(CreateCommonNamingSection(settings));
@@ -182,6 +184,82 @@ namespace PsdLayoutTool2
             return field;
         }
 
+        /// <summary>
+        /// 带候选下拉、但**仍可手填**的文本框。
+        ///
+        /// 用 PopupField 而不是 TextField 的理由：思考程度是封闭枚举，
+        /// 档位会原样拼进命令行（PsdHierarchyChatClient.BuildReasoningEffortArguments），
+        /// 写错不会报错、只会被 CLI 忽略，所以最好能直接选。
+        ///
+        /// 用 PopupField 而不是普通 DropdownField 的理由：模型名是开放集合
+        /// （hint 里写的是「例如 …」），纯下拉会把用户锁死在预设里。
+        /// PopupField 的 text 元素本身就是 UIElements 的 TextField，
+        /// 所以「下拉可选 + 手填其它值」可以同时成立，不必再自绘一个控件。
+        /// </summary>
+        private static PopupField<string> CreateEditablePopupField(
+            string label,
+            string value,
+            string name,
+            string tooltip,
+            IReadOnlyList<string> suggestions)
+        {
+            string current = value ?? string.Empty;
+            var choices = new List<string>();
+            if (!string.IsNullOrEmpty(current) && !choices.Contains(current))
+            {
+                // 配置里的值不在候选里（旧配置 / 手填的模型名）也要能显示出来，
+                // 否则 PopupField 会把 index 落到 -1，界面直接变成空白。
+                choices.Add(current);
+            }
+
+            if (suggestions != null)
+            {
+                for (int index = 0; index < suggestions.Count; index++)
+                {
+                    string candidate = suggestions[index];
+                    if (!string.IsNullOrEmpty(candidate) && !choices.Contains(candidate))
+                    {
+                        choices.Add(candidate);
+                    }
+                }
+            }
+
+            var field = new PopupField<string>(label, choices, 0)
+            {
+                name = name,
+                tooltip = tooltip,
+            };
+            // 面板外的区域一律走文本框行为，这样手填任意值仍然有效。
+            // 注意：BasePopupField.textElement 是 internal，外部程序集拿不到，
+            // 只能从视觉树里把孩子 TextField 查出来。
+            TextField text = field.Q<TextField>();
+            if (text != null)
+            {
+                text.isDelayed = true;
+            }
+
+            return field;
+        }
+
+        /// <summary>
+        /// 读「可手填下拉」的当前值。
+        ///
+        /// PopupField 的 value 只在从候选里选时更新；用户直接在文本区打字时
+        /// 变的只有内部 TextField 的文本，value 仍是上一次选中的项。
+        /// 所以以文本框为准，为空时才退回候选项。
+        /// </summary>
+        private static string ReadEditablePopupValue(PopupField<string> field, string selected)
+        {
+            string typed = string.Empty;
+            TextField text = field.Q<TextField>();
+            if (text != null)
+            {
+                typed = text.value ?? string.Empty;
+            }
+
+            return string.IsNullOrWhiteSpace(typed) ? (selected ?? string.Empty) : typed;
+        }
+
         private static VisualElement CreateHierarchyCleanupExecutionSection(PsdLayoutProjectSettings settings)
         {
             VisualElement section = CreateSection(CleanupExecutionSectionName, "Prefab Cleanup Execution");
@@ -296,20 +374,50 @@ namespace PsdLayoutTool2
             PsdHierarchyAiCliDiscovery.TryGetSupported(snapshot.provider, out PsdHierarchyAiCliDescriptor supported);
             bool usesCustomApi = snapshot.connectionMode == PsdHierarchyAiConnectionMode.CustomApi;
 
-            var modelField = CreateDelayedTextField(
+            // Pi 的模型目录每台机器不同（支持 cc-switch 之类的自定义 provider，本机是 DeepSeek），
+            // 运行时读 ~/.pi/agent/ 覆盖静态示例；读不到时数组为空、自然回退静态值。
+            string[] modelChoices = supported.modelSuggestions;
+            string[] effortChoices = supported.reasoningEffortLevels;
+            string modelHintSource = supported.defaultModelHint;
+            string effortHintSource = supported.reasoningEffortHint;
+            string defaultModelSuffix = string.Empty;
+            if (snapshot.provider == PsdHierarchyAiProvider.Pi &&
+                PsdHierarchyAiPiCatalog.TryLoad(out string[] piModels, out string[] piLevels, out string piDefault))
+            {
+                if (piModels.Length > 0)
+                {
+                    modelChoices = piModels;
+                    modelHintSource = "例如 " + string.Join("、", piModels);
+                }
+
+                if (piLevels.Length > 0)
+                {
+                    effortChoices = piLevels;
+                    effortHintSource = string.Join(" / ", piLevels);
+                }
+
+                if (!string.IsNullOrEmpty(piDefault))
+                {
+                    defaultModelSuffix = "（当前默认 " + piDefault + "）";
+                }
+            }
+
+            var modelField = CreateEditablePopupField(
                 "模型名称",
                 snapshot.customModel,
                 "psd-project-settings-ai-model",
-                string.IsNullOrEmpty(supported.defaultModelHint)
+                string.IsNullOrEmpty(modelHintSource)
                     ? "留空时使用该 CLI 自身的模型配置。"
-                    : "留空时使用该 CLI 自身的模型配置。例如 " + supported.defaultModelHint);
-            var effortField = CreateDelayedTextField(
+                    : "留空时使用该 CLI 自身的模型配置" + defaultModelSuffix + "。" + modelHintSource,
+                modelChoices);
+            var effortField = CreateEditablePopupField(
                 "思考程度",
                 snapshot.reasoningEffort,
                 "psd-project-settings-ai-effort",
-                string.IsNullOrEmpty(supported.reasoningEffortHint)
+                string.IsNullOrEmpty(effortHintSource)
                     ? "留空时使用该 CLI 自身的配置。"
-                    : "留空时使用该 CLI 自身的配置。可选：" + supported.reasoningEffortHint);
+                    : "留空时使用该 CLI 自身的配置。可选：" + effortHintSource,
+                effortChoices);
             var endpointField = CreateDelayedTextField(
                 "API 地址（留空走本机 CLI）",
                 snapshot.customEndpoint,
@@ -320,10 +428,21 @@ namespace PsdLayoutTool2
             section.Add(effortField);
             section.Add(endpointField);
 
+            /* PopupField 的 change.newValue 是「选中的候选项」，不是文本框里打的字。
+               手填时它一直是旧的选中项，所以要连 textElement.text 一起读，
+               否则手填的模型名/档位会被静默丢回上一次选择。 */
             modelField.RegisterValueChangedCallback(change =>
-                ApplySettings(snapshot.provider, endpointField.value, change.newValue, effortField.value));
+                ApplySettings(
+                    snapshot.provider,
+                    endpointField.value,
+                    ReadEditablePopupValue(modelField, change.newValue),
+                    ReadEditablePopupValue(effortField, effortField.value)));
             effortField.RegisterValueChangedCallback(change =>
-                ApplySettings(snapshot.provider, endpointField.value, modelField.value, change.newValue));
+                ApplySettings(
+                    snapshot.provider,
+                    endpointField.value,
+                    ReadEditablePopupValue(modelField, modelField.value),
+                    ReadEditablePopupValue(effortField, change.newValue)));
             endpointField.RegisterValueChangedCallback(change =>
                 ApplySettings(snapshot.provider, change.newValue, modelField.value, effortField.value));
 
@@ -708,6 +827,90 @@ namespace PsdLayoutTool2
             parent.Add(field);
             parent.Add(suggestions);
             return field;
+        }
+
+        private static VisualElement CreateNineSliceSection(PsdLayoutProjectSettings settings)
+        {
+            VisualElement section = CreateSection(NineSliceSectionName, "九宫格检测");
+            PsdLayoutProjectNineSliceSnapshot snapshot = settings.ResolveNineSliceSettings();
+            section.Add(new HelpBox(
+                "PSD 图层名带九宫标签时，导入会先推断边框再生成 Sprite。自动裁剪关闭时边框照常生效，" +
+                "但 PNG 保持原始尺寸 —— 这样手动量的边距和烘焙美术不会因裁剪而错位。",
+                HelpBoxMessageType.Info));
+
+            var autoCropField = new Toggle("导出时自动裁剪")
+            {
+                name = "psd-project-settings-nine-slice-auto-crop",
+                value = snapshot.autoCropOnExport,
+                tooltip = "开启后按九宫边框把 PNG 裁剪到最小可拉伸尺寸，节省图集空间。" +
+                          "关闭则保留原始像素（更安全，推荐留空）。",
+            };
+            section.Add(autoCropField);
+            autoCropField.RegisterValueChangedCallback(change =>
+            {
+                settings.SetNineSliceAutoCrop(change.newValue);
+                ReplaceSection(section, CreateNineSliceSection(settings));
+            });
+
+            section.Add(new HelpBox(
+                snapshot.autoCropOnExport
+                    ? "自动裁剪已开启：导入时会按推断出的边框裁剪 PNG。名称驱动的裁剪碰到烘焙美术会保留原图。"
+                    : "自动裁剪已关闭：只写入九宫边框，PNG 保持原尺寸。",
+                snapshot.autoCropOnExport ? HelpBoxMessageType.Warning : HelpBoxMessageType.Info));
+
+            var rules = new VisualElement();
+            rules.style.marginTop = 6;
+            var rulesTitle = new Label("支持的九宫标签（PSD 图层名）");
+            rulesTitle.style.unityFontStyleAndWeight = FontStyle.Bold;
+            rulesTitle.style.fontSize = 11;
+            rulesTitle.style.color = new Color(0.78f, 0.85f, 0.94f, 1f);
+            rulesTitle.style.marginBottom = 4;
+            rules.Add(rulesTitle);
+
+            AddNineSliceRuleRow(rules, "|9slice", "自动推断九宫边界（推荐）", "bg|9slice");
+            AddNineSliceRuleRow(rules, "|9slice=L,T,R,B", "显式指定边界（左、上、右、下像素）", "panel|9slice=12,15,12,15");
+            AddNineSliceRuleRow(rules, "|h3slice", "横向三切（左-中-右，适合进度条）", "progressbar|h3slice");
+            AddNineSliceRuleRow(rules, "|v3slice", "纵向三切（上-中-下）", "scrollbar|v3slice");
+            AddNineSliceRuleRow(rules, "[方括号形式]", "与上面等价，例如 [9slice] / [v3slice]", "scrollbar[v3slice]");
+            AddNineSliceRuleRow(rules, "jiugong* 前缀", "Figma 兼容写法，作为名称开头前缀", "jiugongh3_dibankuan_3");
+            section.Add(rules);
+            return section;
+        }
+
+        private static void AddNineSliceRuleRow(VisualElement parent, string tag, string description, string example)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems = Align.Center;
+            row.style.marginBottom = 2;
+
+            var tagLabel = new Label(tag);
+            tagLabel.style.minWidth = 110;
+            tagLabel.style.fontSize = 10;
+            tagLabel.style.color = new Color(0.62f, 0.82f, 1f, 1f);
+            tagLabel.style.backgroundColor = new Color(0.14f, 0.2f, 0.3f, 1f);
+            tagLabel.style.paddingLeft = 5;
+            tagLabel.style.paddingRight = 5;
+            tagLabel.style.paddingTop = 2;
+            tagLabel.style.paddingBottom = 2;
+            tagLabel.style.borderTopLeftRadius = 3;
+            tagLabel.style.borderTopRightRadius = 3;
+            tagLabel.style.borderBottomLeftRadius = 3;
+            tagLabel.style.borderBottomRightRadius = 3;
+
+            var descriptionLabel = new Label(description);
+            descriptionLabel.style.fontSize = 10;
+            descriptionLabel.style.color = new Color(0.72f, 0.76f, 0.82f, 1f);
+            descriptionLabel.style.flexGrow = 1;
+
+            var exampleLabel = new Label("例: " + example);
+            exampleLabel.style.fontSize = 10;
+            exampleLabel.style.color = new Color(0.55f, 0.6f, 0.67f, 1f);
+
+            row.Add(tagLabel);
+            row.Add(descriptionLabel);
+            row.Add(exampleLabel);
+            parent.Add(row);
         }
 
         private static VisualElement CreateFontSection(PsdLayoutProjectSettings settings)

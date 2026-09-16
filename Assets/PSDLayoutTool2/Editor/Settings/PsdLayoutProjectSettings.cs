@@ -73,6 +73,21 @@ namespace PsdLayoutTool2
     }
 
     /// <summary>
+    /// 项目级九宫格（9-slice）导入规则快照。
+    /// autoCropOnExport 为 false 时仍会推断并写入九宫边框，但保留原始 PNG 尺寸，
+    /// 避免裁剪改变像素量导致手动量的边距和烘焙美术错位。
+    /// </summary>
+    internal readonly struct PsdLayoutProjectNineSliceSnapshot
+    {
+        internal PsdLayoutProjectNineSliceSnapshot(bool autoCropOnExport)
+        {
+            this.autoCropOnExport = autoCropOnExport;
+        }
+
+        internal readonly bool autoCropOnExport;
+    }
+
+    /// <summary>
     /// 项目级资源与 Prefab 输出规则快照。
     /// 输出文件夹名为空时，导入器继续使用当前 PSD 文件名。
     /// </summary>
@@ -430,6 +445,35 @@ namespace PsdLayoutTool2
     }
 
     [Serializable]
+    internal sealed class PsdLayoutProjectNineSliceSettings
+    {
+        /// <summary>
+        /// 默认关闭自动裁剪：裁剪会改变像素尺寸，手动量的九宫边距和烘焙美术都按原图设计，
+        /// 想省图集空间的项目再主动打开。
+        /// </summary>
+        internal const bool DefaultAutoCropOnExport = false;
+
+        [SerializeField]
+        private bool autoCropOnExport = DefaultAutoCropOnExport;
+
+        internal bool Set(bool newAutoCropOnExport)
+        {
+            if (autoCropOnExport == newAutoCropOnExport)
+            {
+                return false;
+            }
+
+            autoCropOnExport = newAutoCropOnExport;
+            return true;
+        }
+
+        internal PsdLayoutProjectNineSliceSnapshot Resolve()
+        {
+            return new PsdLayoutProjectNineSliceSnapshot(autoCropOnExport);
+        }
+    }
+
+    [Serializable]
     internal sealed class PsdLayoutProjectOutputSettings
     {
         [SerializeField]
@@ -609,7 +653,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 8;
+        private const int CurrentSettingsVersion = 9;
 
         [SerializeField]
         private int settingsVersion;
@@ -626,6 +670,9 @@ namespace PsdLayoutTool2
 
         [SerializeField]
         private PsdLayoutProjectUiComponentSettings uiComponentSettings = new PsdLayoutProjectUiComponentSettings();
+
+        [SerializeField]
+        private PsdLayoutProjectNineSliceSettings nineSliceSettings = new PsdLayoutProjectNineSliceSettings();
 
         [SerializeField]
         private PsdHierarchyAiSettings hierarchyAiSettings = new PsdHierarchyAiSettings();
@@ -682,6 +729,21 @@ namespace PsdLayoutTool2
 
             SaveAsset();
             return true;
+        }
+
+        internal PsdLayoutProjectNineSliceSnapshot ResolveNineSliceSettings()
+        {
+            EnsureData();
+            return nineSliceSettings.Resolve();
+        }
+
+        internal void SetNineSliceAutoCrop(bool autoCropOnExport)
+        {
+            EnsureData();
+            if (nineSliceSettings.Set(autoCropOnExport))
+            {
+                SaveAsset();
+            }
         }
 
         internal PsdHierarchyAiSettingsSnapshot ResolveHierarchyAiSettings()
@@ -869,6 +931,12 @@ namespace PsdLayoutTool2
             if (uiComponentSettings == null)
             {
                 uiComponentSettings = new PsdLayoutProjectUiComponentSettings();
+                changed = true;
+            }
+
+            if (nineSliceSettings == null)
+            {
+                nineSliceSettings = new PsdLayoutProjectNineSliceSettings();
                 changed = true;
             }
 

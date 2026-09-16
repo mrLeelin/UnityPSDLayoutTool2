@@ -7,6 +7,10 @@ description: Safely organize one existing Unity Prefab in place into a complete 
 
 Organize existing Unity Prefabs by transferring the *discipline* of Figma hierarchy cleanup, not Figma's node model or tooling. Treat Unity components, serialized bindings, RectTransforms, asset references, prefab overrides, and sibling order as source-of-truth data.
 
+> This project's engine deviates from the written plan format in ways that have already caused
+> real failures (auto-tightening, extraction-stage counts, text snapshots without node ids). Read
+> **Project-verified engine realities** at the end of this file before authoring a plan.
+
 ## AI Chat Single-Confirmation Contract
 
 When this skill is supplied to the Unity AI hierarchy chat window, use exactly this interaction:
@@ -218,3 +222,72 @@ Technical verification is not completion proof. A cleanup must be rejected as in
 - `Use $prefab-hierarchy-cleanup to inspect Assets/UI/RewardPanel.prefab and propose a complete hierarchy. Do not modify it yet.`
 - `Use $prefab-hierarchy-cleanup on Assets/PSDLayoutTool2/TestData/Example.prefab. Propose the complete in-place hierarchy cleanup before applying it.`
 - `Use $prefab-hierarchy-cleanup to organize this UI in place and rename its private textures to RewardPanelView_SemanticName. Infer the View name and ask me to confirm the rename plan first.`
+
+## Project-verified engine realities (read this before authoring a plan)
+
+Measured in this project with the NativeUnity backend (`run_native_cleanup.py`, `unity.exe command
+eval_file`). Two of them contradict the written plan format and have already produced real damage,
+so they are rules, not tips.
+
+- **R1 — New containers are not tightened automatically.** A wrapper created by a plan keeps
+  `sizeDelta = 0` unless the same plan lists it in `tightBounds`. Always emit `tightBounds` for
+  **every** new wrapper (inner -> outer). A later stage that tightens a *parent* computes the union
+  of its children, so a parent tightened while its children are still 0 x 0 also collapses to 0 x 0.
+  `validate_plan_locally.py` fails this rule as a warning before the Unity preflight.
+- **R2 — Extraction stages expand the tree.** `componentExtractions`, `stateComponentExtractions`,
+  `variantComponentExtractions` and `statefulComponentExtractions` replace source units with nested
+  instances, so `verify.nodes|components|images` must be the **post-expansion** expectation. Passing
+  the pre-apply snapshot numbers gives `VERIFY_WARN issue=nodes expected=.. actual=..` *after* the
+  asset is already saved. Prefer omitting those counts in an extraction stage, or take a fresh
+  snapshot first.
+- **R3 — The CLI text snapshot has no node ids.** `snapshot_prefab_hierarchy.ps1` (and the runner's
+  Snapshot phase) emit `SUMMARY`/`NODE` text with paths, rects, active flags and children, but no
+  `node:<id>`. Such a snapshot can only author a **version 1 (path) plan**; a version 2 (node-id)
+  plan needs the Unity chat window's JSON snapshot. See `parse_hierarchy_snapshot.py`.
+- **R4 — A transport timeout is not a contract mismatch.** If the `verify` phase fails with
+  `Pipeline server returned 400 Bad Request ... Main thread operation timed out`, the Apply phase has
+  already returned `VERIFY_OK`. Do not replay Apply: re-run `--mode verify` once (read-only) or run
+  the read-only checkers, and report the ledger paths.
+- **R5 — `eval_file` payloads are top-level statements only.** No `using` directives (they fail to
+  compile with "Identifier expected"); `UnityEngine`, `UnityEditor`, `System` and
+  `System.Collections.Generic` are implicitly available; qualify `UnityEngine.UI.*` explicitly, and
+  `return` a string to get it back in the CLI result.
+- **R6 — Never name a version 1 plan `*.plan.json`.** The Unity inspector button "应用AI计划" applies
+  the *newest* `*.plan.json` under `Library/PsdHierarchyTerminal` and requires version 2, so a v1 file
+  with that suffix is picked up and rejected. Use e.g. `<session>.rectfix.v1.json`.
+- **R7 — What the plan language cannot express** (verified: no `UnpackPrefab` anywhere in the project
+  tooling, and the renderer deletes assets only in rollback/replay paths): moving nodes across a
+  nested-Prefab boundary, editing an existing asset's internals, unpacking an instance, and deleting
+  an asset. When a request needs one of these (e.g. "these two Prefabs should be one"), a plan cannot
+  do it. The reviewed escape hatch is *bake-and-propagate*:
+  1. `PrefabUtility.LoadPrefabContents(sourceAsset)` and read the member's components/rect values;
+  2. add that member to the target asset's **state branch** (`LoadPrefabContents` on the target,
+     `new GameObject(..., typeof(RectTransform), typeof(CanvasRenderer), typeof(Image))`, copy the
+     values, `SaveAsPrefabAsset`) — the member then propagates to every existing instance;
+  3. in the target Prefab set each instance's member position override so the world corners are kept;
+  4. remove the now-redundant source nodes/containers in the target Prefab;
+  5. prove no reference remains (walk instance roots and compare
+     `GetPrefabAssetPathOfNearestInstanceRoot`, or grep the saved text for the old GUID), only then
+     `AssetDatabase.DeleteAsset`.
+  Such a step bypasses the plan validator, so it needs explicit user approval, a before/after
+  read-only snapshot and a link check; report it as an escape hatch, never as a normal stage.
+- **R8 — Text-level checks of `.prefab` files must respect Unity's serialisation.** Names starting
+  with `[` are written as `m_Name: '[Name]'` (quote-aware greps, or you get false "missing" results),
+  and non-ASCII names are written escaped as `"日..."` — unescape before comparing. Never edit
+  these files as text; this is only for read-only evidence.
+
+### Read-only toolbox added by this project
+
+| script | purpose |
+|---|---|
+| `scripts/parse_hierarchy_snapshot.py` | normalise a text/JSON snapshot, print metrics + tree, emit a v1 plan skeleton |
+| `scripts/validate_plan_locally.py` | offline linter: refs, uniqueness, removals, naming gate, directChildren, plus R1/R2 warnings |
+| `scripts/simulate_and_verify_plan.py` | rebuild the final tree offline and prove `verify.hierarchy/directChildren/absentPaths` (caught a real double-wrapper defect) |
+| `scripts/check_extraction_result.py` | prove a finished extraction: instance names/order, `[Common]`/`[States]`, exactly one active mapped state |
+| `scripts/read_unity_selection.py` | read the user's live Editor selection / Prefab Stage / nested-instance links (read-only, `--mode selection|instance-links|prefab-stage`) |
+| `scripts/payloads/read_selection.cs` | the eval_file payload behind it (template for R5) |
+
+Typical session order: snapshot -> semantics -> plan -> `validate_plan_locally.py` ->
+`simulate_and_verify_plan.py` -> Unity preflight -> user confirmation -> one Apply ->
+read-only verification (`check_extraction_result.py`, container tightness, world-rect preservation,
+`--mode instance-links`) -> record evidence in the review file.

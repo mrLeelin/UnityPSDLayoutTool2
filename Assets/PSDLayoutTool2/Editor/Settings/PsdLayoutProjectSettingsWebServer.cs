@@ -207,6 +207,7 @@ namespace PsdLayoutTool2
                 string rawQuery = context.Request.Url == null ? string.Empty : context.Request.Url.Query;
                 string kind = ReadQueryParam(rawQuery, "kind");
                 string text = ReadQueryParam(rawQuery, "q");
+                string current = ReadQueryParam(rawQuery, "cur");
                 List<TypeCandidate> candidates = kind == "button" ? buttonTypeCandidates : imageTypeCandidates;
                 if (candidates == null)
                 {
@@ -218,7 +219,7 @@ namespace PsdLayoutTool2
                     return;
                 }
 
-                Write(response, BuildSuggestJson(candidates, text), "application/json; charset=utf-8");
+                Write(response, BuildSuggestJson(candidates, text, current), "application/json; charset=utf-8");
                 return;
             }
 
@@ -433,7 +434,7 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>把匹配结果拼成页面要的 JSON。纯字符串运算，监听线程可用。</summary>
-        private static string BuildSuggestJson(List<TypeCandidate> candidates, string query)
+        private static string BuildSuggestJson(List<TypeCandidate> candidates, string query, string current)
         {
             var root = new JObject();
             root["ready"] = true;
@@ -441,21 +442,28 @@ namespace PsdLayoutTool2
             var items = new JArray();
             var hits = new List<TypeCandidate>();
             var scores = new List<int>();
+            var qualities = new List<int>();
             string q = (query ?? string.Empty).Trim();
+            string qLower = q.ToLowerInvariant();
             for (int i = 0; i < candidates.Count; i++)
             {
-                int score = ScoreCandidate(q, candidates[i]);
+                int score = ScoreCandidate(q, candidates[i], current);
                 if (score < 0) continue;
                 hits.Add(candidates[i]);
                 scores.Add(score);
+                qualities.Add(MatchWeight(candidates[i].Full, qLower));
             }
 
             var order = new List<int>();
             for (int i = 0; i < hits.Count; i++) order.Add(i);
-            /* 先看匹配强度，再看名字长短（短名通常就是用户想要的），最后按字母序保证结果稳定。 */
+            /* 先看匹配强度，再看词首命中数（多的靠前），再看命名空间偏好
+               （Unity 自带类型优先），然后才是名字长短，最后按字母序保证结果稳定。 */
             order.Sort(delegate (int x, int y)
             {
                 if (scores[x] != scores[y]) return scores[x].CompareTo(scores[y]);
+                if (qualities[x] != qualities[y]) return qualities[y].CompareTo(qualities[x]);
+                int rank = ScopeRank(hits[x].Scope).CompareTo(ScopeRank(hits[y].Scope));
+                if (rank != 0) return rank;
                 if (hits[x].Full.Length != hits[y].Full.Length) return hits[x].Full.Length.CompareTo(hits[y].Full.Length);
                 return string.CompareOrdinal(hits[x].Full, hits[y].Full);
             });
@@ -470,6 +478,7 @@ namespace PsdLayoutTool2
                     ["name"] = c.Short,
                     ["scope"] = c.Scope,
                     ["assembly"] = c.Assembly,
+                    ["marks"] = MatchMarks(c.Full, qLower),
                 });
             }
 
@@ -482,9 +491,14 @@ namespace PsdLayoutTool2
         /// 模糊匹配打分：越小越靠前，-1 表示不匹配。空查询返回最低优先级，
         /// 这样页面聚焦空输入时也能直接列出候选（按命名空间偏好排序）。
         /// </summary>
-        private static int ScoreCandidate(string query, TypeCandidate candidate)
+        private static int ScoreCandidate(string query, TypeCandidate candidate, string current)
         {
-            if (string.IsNullOrEmpty(query)) return 7;
+            if (string.IsNullOrEmpty(query))
+            {
+                /* 空查询（页面聚焦时）把字段当前值顶到第一行：用户一眼看到现在用的是什么，
+                   按回车就能确认，不用在几十行里找。其余候选并列最低优先级。 */
+                return candidate.Full == current ? 0 : 7;
+            }
             string q = query.ToLowerInvariant();
             string full = candidate.Full.ToLowerInvariant();
             string shortName = candidate.Short.ToLowerInvariant();
@@ -509,6 +523,90 @@ namespace PsdLayoutTool2
             }
 
             return i == query.Length;
+        }
+
+        /// <summary>
+        /// 同分候选的排序质量分：按「匹配到的字符落在哪种词首」加权。
+        /// 命名空间/类型的分段起点（点号后、开头）权重 2，驼峰或全大写缩写的词首权重 1，
+        /// 词中间 0 分；整段查询都能落在某一档词首上时再加一个大分。
+        ///
+        /// 实测价值：uib 在 UnityEngine.UI.Button 上得 505（U 段首 + I 缩写 + B 段首），
+        /// 在 MyGame.UI.MyButton 上只有 504（U 段首 + I + B 驼峰，b 只落在驼峰上），
+        /// 于是 UI.Button 排前面 —— 这正是用户打 uib 时想要的第一个候选。
+        /// </summary>
+        private static int MatchWeight(string text, string queryLower)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(queryLower)) return 0;
+            for (int floor = 2; floor >= 1; floor--)
+            {
+                int weight = WeightedMatch(text, queryLower, floor, null);
+                if (weight >= 0) return weight + (floor == 2 ? 1000 : 500);
+            }
+
+            int loose = WeightedMatch(text, queryLower, 0, null);
+            return loose < 0 ? 0 : loose;
+        }
+
+        /// <summary>匹配到的字符位置，交给页面高亮（uib 命中的是哪个 u / i / b）。</summary>
+        private static JArray MatchMarks(string text, string queryLower)
+        {
+            var marks = new JArray();
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(queryLower)) return marks;
+            var positions = new List<int>();
+            for (int floor = 2; floor >= 0; floor--)
+            {
+                positions.Clear();
+                if (WeightedMatch(text, queryLower, floor, positions) < 0) continue;
+                for (int k = 0; k < positions.Count; k++)
+                {
+                    int begin = positions[k];
+                    int length = 1;
+                    while (k + 1 < positions.Count && positions[k + 1] == positions[k] + 1)
+                    {
+                        length++;
+                        k++;
+                    }
+
+                    marks.Add(new JArray(begin, length));
+                }
+
+                return marks;
+            }
+
+            return marks;
+        }
+
+        /// <summary>
+        /// 只在权重 &gt;= floor 的位置上匹配：匹配不上返回 -1，匹配上返回累计权重。
+        /// positions 非空时顺便把命中的下标记下来（供高亮用）。
+        /// </summary>
+        private static int WeightedMatch(string text, string queryLower, int floor, List<int> positions)
+        {
+            int total = 0;
+            int i = 0;
+            for (int j = 0; j < text.Length && i < queryLower.Length; j++)
+            {
+                if (char.ToLowerInvariant(text[j]) != queryLower[i]) continue;
+                int weight = WordStartWeight(text, j);
+                if (weight < floor) continue;
+                total += weight;
+                if (positions != null) positions.Add(j);
+                i++;
+            }
+
+            return i == queryLower.Length ? total : -1;
+        }
+
+        /// <summary>0 = 词中间，1 = 驼峰 / 全大写缩写的词首，2 = 命名空间或类型的分段起点。</summary>
+        private static int WordStartWeight(string text, int index)
+        {
+            if (index <= 0) return 2;
+            char previous = text[index - 1];
+            if (previous == '.' || previous == '_' || previous == '+') return 2;
+            if (!char.IsUpper(text[index])) return 0;
+            if (char.IsLower(previous)) return 1;
+            /* 全大写缩写（UI、GUI、TMP）：连续大写里的最后一个算一个词首 */
+            return index + 1 >= text.Length || !char.IsUpper(text[index + 1]) ? 1 : 0;
         }
 
         /// <summary>从 Url.Query 里取一个参数（Unity 里没有 System.Web 那套）。</summary>
@@ -556,6 +654,8 @@ namespace PsdLayoutTool2
             root["prefabPrefix"] = naming.prefabPrefix;
             root["texturePrefix"] = naming.texturePrefix;
 
+            root["autoCropNineSlice"] = settings.ResolveNineSliceSettings().autoCropOnExport;
+
             PsdHierarchyAiSettingsSnapshot ai = settings.ResolveHierarchyAiSettings();
             root["aiProvider"] = (int)ai.provider;
             root["aiModel"] = ai.customModel;
@@ -573,7 +673,32 @@ namespace PsdLayoutTool2
                     ["name"] = installed[index].displayName,
                     ["modelHint"] = installed[index].defaultModelHint,
                     ["effortHint"] = installed[index].reasoningEffortHint,
+                    // 模型名是「建议」：页面上做成可手填的下拉，所以仍要保留输入框。
+                    ["modelSuggestions"] = new JArray(installed[index].modelSuggestions),
+                    // 思考程度是封闭枚举，按 CLI 逐个给全，供下拉直接列选项。
+                    ["effortLevels"] = new JArray(installed[index].reasoningEffortLevels),
                 };
+                // Pi 的模型目录每台机器不同（还支持 cc-switch 之类的自定义 provider），
+                // 静态示例会和用户实际用的对不上，所以运行时读 ~/.pi/agent/ 覆盖。
+                if (installed[index].provider == PsdHierarchyAiProvider.Pi &&
+                    PsdHierarchyAiPiCatalog.TryLoad(out string[] piModels, out string[] piLevels, out string piDefault))
+                {
+                    if (piModels.Length > 0)
+                    {
+                        item["modelSuggestions"] = new JArray(piModels);
+                        item["modelHint"] = "例如 " + string.Join("、", piModels);
+                    }
+
+                    if (piLevels.Length > 0)
+                    {
+                        item["effortLevels"] = new JArray(piLevels);
+                        item["effortHint"] = string.Join(" / ", piLevels);
+                    }
+
+                    // 页面用它显示「留空时实际会用哪个模型」，只作提示、不参与保存。
+                    item["defaultModel"] = piDefault;
+                }
+
                 clis.Add(item);
             }
 
@@ -764,6 +889,12 @@ namespace PsdLayoutTool2
                     {
                         messages.Add(portError);
                     }
+                }
+
+                // ---- 九宫格：导出时是否自动裁剪 ----
+                if (data["autoCropNineSlice"] != null)
+                {
+                    settings.SetNineSliceAutoCrop(data.Value<bool>("autoCropNineSlice"));
                 }
 
                 lastError = messages.Count == 0 ? string.Empty : string.Join("\n", messages);
@@ -970,6 +1101,59 @@ cursor:pointer;padding-right:40px}
 border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);
 transform:translateY(-70%) rotate(45deg);pointer-events:none}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+/* ---------- 可手填下拉（模型名称 / 思考程度） ----------
+   用 input + 候选面板而不是 form-select：模型名是开放集合，必须允许填列表外的值。
+   面板用 absolute 贴在输入框下方；这一层不是滚动容器，不会被裁掉。 */
+.combo{position:relative}
+.combo .form-input{padding-right:52px}
+.combo-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+width:36px;height:30px;display:flex;align-items:center;justify-content:center;
+background:transparent;border:0;border-radius:6px;cursor:pointer;
+font-size:15px;line-height:1;color:var(--muted);transition:background .15s,color .15s}
+.combo-toggle:hover{background:var(--field-bg);color:var(--text)}
+.combo-panel{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:400;
+background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);
+box-shadow:0 12px 32px rgba(15,23,42,.18);padding:6px;
+max-height:260px;overflow-y:auto}
+.combo-panel[hidden]{display:none}
+.combo-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;
+cursor:pointer;font-size:14px;line-height:1.35}
+.combo-item:hover,.combo-item.is-active{background:var(--field-bg);box-shadow:inset 0 0 0 1px #bfdbfe}
+.combo-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.combo-value b{color:var(--blue-dark);font-weight:700}
+.combo-note{padding:10px 12px;color:var(--muted);font-size:13px;line-height:1.5}
+.combo-act{flex:0 0 auto;font-size:12px;color:var(--blue-dark);font-weight:600}
+.combo-foot{margin-top:6px;padding:8px 11px 4px;border-top:1px solid var(--line);
+color:var(--muted);font-size:12px;line-height:1.5}
+/* ---------- 开关行 ---------- */
+.switch-row{display:flex;align-items:center;gap:14px;padding:14px;border:1px solid var(--line);
+border-radius:var(--r-sm);background:var(--field-bg)}
+.switch-text{flex:1;min-width:0}
+.switch-main{display:block;font-size:14px;font-weight:600;margin-bottom:4px}
+.switch-sub{display:block;font-size:13px;color:var(--muted);line-height:1.5}
+.switch{position:relative;flex:0 0 auto;width:52px;height:30px;display:inline-block}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:2}
+.switch-track{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;
+transition:background .18s ease}
+.switch-track::after{content:'';position:absolute;top:3px;left:3px;width:24px;height:24px;
+border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.3);
+transition:transform .18s ease}
+.switch input:checked + .switch-track{background:#2563eb}
+.switch input:checked + .switch-track::after{transform:translateX(22px)}
+.switch input:focus-visible + .switch-track{box-shadow:0 0 0 3px rgba(37,99,235,.28)}
+/* ---------- 九宫标签规则表 ---------- */
+.rules-panel{margin-top:6px;border:1px solid var(--line);border-radius:var(--r-sm);
+padding:16px;background:var(--field-bg)}
+.rules-title{font-size:14px;font-weight:600;margin-bottom:12px}
+.rule-item{display:flex;align-items:center;gap:12px;padding:9px 0;flex-wrap:wrap}
+.rule-item + .rule-item{border-top:1px solid var(--line)}
+.rule-tag{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:600;
+color:#1d4ed8;background:#dbeafe;border:1px solid #bfdbfe;border-radius:6px;padding:3px 9px}
+.rule-desc{flex:1;min-width:0;font-size:13px;color:var(--text)}
+.rule-example{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--muted)}
+.rules-foot{margin-top:14px;padding-top:14px;border-top:1px solid var(--line);
+font-size:13px;color:var(--muted);line-height:1.6}
+.rules-foot code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#e5e7eb;padding:2px 6px;border-radius:4px;color:var(--text)}
 /* ---------- 组件类型候选下拉 ----------
    面板由 JS 建在 body 下并用 position:fixed 定位：卡片和滚动容器都可能把它裁掉。 */
 .suggest-panel{position:fixed;z-index:3000;background:#fff;border:1px solid var(--line);
@@ -977,12 +1161,14 @@ border-radius:var(--r-sm);box-shadow:0 12px 32px rgba(15,23,42,.18);padding:6px;
 max-height:300px;overflow-y:auto;display:none}
 .suggest-panel.is-open{display:block}
 .suggest-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;
-cursor:pointer;font-size:14px;line-height:1.35}
+cursor:pointer;font-size:14px;line-height:1.35;flex-wrap:wrap}
 .suggest-item:hover,.suggest-item.is-active{background:var(--field-bg);box-shadow:inset 0 0 0 1px #bfdbfe}
 .suggest-name{font-weight:600;flex:0 0 auto}
-.suggest-name b,.suggest-scope b{color:var(--blue-dark);font-weight:700}
+.suggest-name b,.suggest-scope b,.suggest-match b{color:var(--blue-dark);font-weight:700}
 .suggest-scope{color:var(--muted);font-size:12px;flex:1;min-width:0;overflow:hidden;
 text-overflow:ellipsis;white-space:nowrap}
+.suggest-match{flex:1 0 100%;font-size:12px;color:var(--muted);margin-top:1px;
+word-break:break-all}
 .suggest-assembly{color:#9ca3af;font-size:11px;flex:0 0 auto}
 .suggest-note{padding:10px 12px;color:var(--muted);font-size:13px;line-height:1.5}
 
@@ -1086,6 +1272,10 @@ border-top:0;padding-top:0;flex:0 0 auto}
       <svg viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.6'><rect x='2.5' y='2.5' width='6.2' height='6.2' rx='1.6'/><rect x='11.3' y='2.5' width='6.2' height='6.2' rx='1.6'/><rect x='2.5' y='11.3' width='6.2' height='6.2' rx='1.6'/><rect x='11.3' y='11.3' width='6.2' height='6.2' rx='1.6'/></svg>
       <span>默认组件类型</span>
     </a>
+    <a class='nav-item' href='#sec-nine'>
+      <svg viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round'><rect x='2.5' y='2.5' width='15' height='15' rx='2'/><path d='M7.5 2.5v15M12.5 2.5v15M2.5 7.5h15M2.5 12.5h15'/></svg>
+      <span>九宫格检测</span>
+    </a>
     <a class='nav-item' href='#sec-out'>
       <svg viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round'><path d='M2.5 6.1c0-.9.8-1.7 1.7-1.7h3l1.7 1.9h5.9c.9 0 1.7.8 1.7 1.7v5.5c0 .9-.8 1.7-1.7 1.7H4.2c-.9 0-1.7-.8-1.7-1.7V6.1Z'/></svg>
       <span>输出配置</span>
@@ -1144,6 +1334,72 @@ border-top:0;padding-top:0;flex:0 0 auto}
       <label class='form-label' for='buttonComponentTypeName'>Button 组件类型</label>
       <input class='form-input' id='buttonComponentTypeName' placeholder='UnityEngine.UI.Button'>
       <span class='form-help'>生成按钮时挂载的组件类名，可用任意 MonoBehaviour，包括自定义 Button。</span>
+    </div>
+  </section>
+
+  <section class='card' id='sec-nine'>
+    <div class='card-header'>
+      <div class='card-icon green'>🎯</div>
+      <div class='card-title'>
+        <h2>九宫格检测</h2>
+        <p>基于三重推断的智能边框检测</p>
+      </div>
+      <span class='badge badge-success' id='nineBadge'>已启用</span>
+    </div>
+
+    <div class='info-banner'>
+      <strong>三重推断算法已启用</strong>
+      视觉边缘检测 + 重复模式分析 + 圆角保护。图层名带九宫标签时，导入会先推断边框再生成 Sprite，
+      并且碰到烘焙好的卡片或标签美术会自动保留原图。
+    </div>
+
+    <div class='switch-row'>
+      <div class='switch-text'>
+        <span class='switch-main'>导出时自动裁剪</span>
+        <span class='switch-sub'>按九宫边框把 PNG 裁到最小可拉伸尺寸。关闭时边框照常生效但保留原始像素 —— 手动量的边距和烘焙美术不会因裁剪错位。</span>
+      </div>
+      <label class='switch'>
+        <input type='checkbox' id='autoCropNineSlice'>
+        <span class='switch-track'></span>
+      </label>
+    </div>
+
+    <div class='rules-panel'>
+      <div class='rules-title'>支持的九宫格标签（写在 PSD 图层名里）</div>
+      <div class='rule-item'>
+        <span class='rule-tag'>|9slice</span>
+        <span class='rule-desc'>自动推断九宫格边界（推荐）</span>
+        <span class='rule-example'>例: bg|9slice</span>
+      </div>
+      <div class='rule-item'>
+        <span class='rule-tag'>|9slice=L,T,R,B</span>
+        <span class='rule-desc'>显式指定边界（左、上、右、下像素）</span>
+        <span class='rule-example'>例: panel|9slice=12,15,12,15</span>
+      </div>
+      <div class='rule-item'>
+        <span class='rule-tag'>|h3slice</span>
+        <span class='rule-desc'>横向三切（左-中-右，适合进度条）</span>
+        <span class='rule-example'>例: progressbar|h3slice</span>
+      </div>
+      <div class='rule-item'>
+        <span class='rule-tag'>|v3slice</span>
+        <span class='rule-desc'>纵向三切（上-中-下）</span>
+        <span class='rule-example'>例: scrollbar|v3slice</span>
+      </div>
+      <div class='rule-item'>
+        <span class='rule-tag'>[方括号形式]</span>
+        <span class='rule-desc'>与上面等价，例如 [9slice] / [v3slice]</span>
+        <span class='rule-example'>例: scrollbar[v3slice]</span>
+      </div>
+      <div class='rule-item'>
+        <span class='rule-tag'>jiugong* 前缀</span>
+        <span class='rule-desc'>Figma 兼容写法，写在图层名开头</span>
+        <span class='rule-example'>例: jiugongh3_dibankuan_3</span>
+      </div>
+      <div class='rules-foot'>
+        <strong>提示：</strong> 推荐用 <code>|9slice</code>，算法会自动找最佳边界。
+        带显式边界但分析失败时会自动退回名称规则；两种写法都不需要手动填边距。
+      </div>
     </div>
   </section>
 
@@ -1208,12 +1464,20 @@ border-top:0;padding-top:0;flex:0 0 auto}
       <div class='form-grid'>
         <div class='form-group'>
           <label class='form-label' for='aiModel'>模型名称</label>
-          <input class='form-input' id='aiModel' placeholder='留空 = 用 CLI 自己配置的'>
+          <div class='combo' id='aiModelCombo'>
+            <input class='form-input' id='aiModel' placeholder='留空 = 用 CLI 自己配置的' autocomplete='off' spellcheck='false'>
+            <button type='button' class='combo-toggle' id='aiModelDrop' aria-label='展开模型候选'>▾</button>
+            <div class='combo-panel' id='aiModelPanel' role='listbox' hidden></div>
+          </div>
           <span class='form-help' id='modelHint'></span>
         </div>
         <div class='form-group'>
           <label class='form-label' for='aiEffort'>思考程度</label>
-          <input class='form-input' id='aiEffort' placeholder='留空 = 用 CLI 自己配置的'>
+          <div class='combo' id='aiEffortCombo'>
+            <input class='form-input' id='aiEffort' placeholder='留空 = 用 CLI 自己配置的' autocomplete='off' spellcheck='false'>
+            <button type='button' class='combo-toggle' id='aiEffortDrop' aria-label='展开思考程度档位'>▾</button>
+            <div class='combo-panel' id='aiEffortPanel' role='listbox' hidden></div>
+          </div>
           <span class='form-help' id='effortHint'></span>
         </div>
       </div>
@@ -1397,6 +1661,9 @@ function applyField(id,value){
   if(dirty[id])return;
   var f=byId(id);
   if(!f||active(f))return;
+  /* checkbox 不能用字符串赋值：f.value='false' 仍然算勾选。
+     轮询期间也不能覆盖正在被点击的开关。 */
+  if(f.type==='checkbox'){f.checked=value===true||value==='true';return;}
   f.value=value==null?'':String(value);
 }
 
@@ -1491,10 +1758,19 @@ function refreshDetailVisibility(){
   if(provider===-1){box.hidden=true;return;}
   box.hidden=false;
   var info=currentCli();
-  byId('modelHint').textContent=info?('留空时使用 '+info.name+' CLI 自身配置的模型。例如 '+info.modelHint):'留空时使用 CLI 自身配置的模型。';
-  byId('effortHint').textContent=info?('留空时使用 CLI 自身配置。可选 '+info.effortHint):'留空时使用 CLI 自身配置。';
+  byId('modelHint').textContent=info
+    ?('留空时使用 '+info.name+' CLI 自身配置的模型'+(info.defaultModel?'（当前默认 '+info.defaultModel+'）':'')+'。点输入框右侧的 ▾ 或直接手填。'+
+      (info.modelHint?('常见取值：'+info.modelHint+'。'):''))
+    :'留空时使用 CLI 自身配置的模型。';
+  byId('effortHint').textContent=info
+    ?('留空时使用 CLI 自身配置。可选 '+info.effortHint+'，点右侧 ▾ 直接选。')
+    :'留空时使用 CLI 自身配置。';
   byId('endpointHint').textContent=info?('留空表示调用本机 '+info.name+' CLI，不需要 API Key；填写后才走自定义 API。'):'留空表示调用本机 CLI。';
   byId('keyHint').textContent=hasKey?'本机已加密保存。留空表示不修改，点下面的按钮可以删除。':'本机未保存。走本地 CLI 时不需要填写。';
+  /* 提示文字已经跟着 provider 换了，开着的候选面板也必须换成新 CLI 的档位，
+     否则会留着上一个 CLI 的列表让人误选。 */
+  if(comboCtx.aiModel&&!comboCtx.aiModel.panel.hidden)comboRender('aiModel');
+  if(comboCtx.aiEffort&&!comboCtx.aiEffort.panel.hidden)comboRender('aiEffort');
 }
 
 /* Prefab 清理执行后端的说明文字。和 Inspector 一样，切换后端时给出对应级别的提示：
@@ -1508,6 +1784,17 @@ function updateCleanupBanner(){
   box.textContent=v===1
     ? 'Unity CLI Runner 已启用：支持组件 Prefab 提取与私有资源改名。'
     : 'Native Unity 已启用：层级清理、组件 Prefab 提取、私有资源改名、校验与失败处理都在当前 Unity 编辑器内执行。';
+}
+
+/* 九宫格：开关状态 + 徽标文案。徽标反映「自动裁剪」是否开启，
+   而不是「九宫检测是否可用」—— 检测本身始终在跑。 */
+function updateNineSliceBanner(){
+  var badge=byId('nineBadge');
+  if(badge){
+    var on=byId('autoCropNineSlice').checked;
+    badge.textContent=on?'自动裁剪':'保留原图';
+    badge.className='badge '+(on?'badge-warn':'badge-success');
+  }
 }
 
 /* 公共资源库：映射表规模 + 共享预览服务的实时状态。
@@ -1578,6 +1865,214 @@ function updateSharePanel(cfg){
   }
 }
 
+/* ---------- 可手填下拉（模型名称 / 思考程度） ----------
+   沿用 .suggest-* 那套「焦点留在输入框上」的键盘模型，
+   区别是候选集是本地算出来的（不查服务端），而且面板由容器自己定位。 */
+var comboCtx={};
+var comboActive=-1;
+
+function comboSetup(inputId,panelId){
+  var input=byId(inputId);
+  var panel=byId(panelId);
+  if(!input||!panel)return;
+  comboCtx[inputId]={input:input,panel:panel,items:[],active:-1,note:''};
+
+  input.addEventListener('focus',function(){comboOpen(inputId);});
+  input.addEventListener('input',function(){
+    dirty[inputId]=true;
+    /* 输入时按已打的内容过滤；已经打开的键盘高亮要重置，否则选中的还是上一批。 */
+    var ctx=comboCtx[inputId];
+    ctx.active=-1;
+    comboRender(inputId);
+  });
+  input.addEventListener('keydown',function(ev){
+    var ctx=comboCtx[inputId];
+    var open=!ctx.panel.hidden;
+    if(ev.key==='ArrowDown'){
+      ev.preventDefault();
+      if(open)comboMove(inputId,1);else comboOpen(inputId);
+      return;
+    }
+    if(ev.key==='ArrowUp'){if(open){ev.preventDefault();comboMove(inputId,-1);}return;}
+    if(ev.key==='Escape'){if(open){ev.preventDefault();comboClose(inputId);}return;}
+    if(ev.key==='Enter'&&open&&ctx.active>=0){ev.preventDefault();comboPick(inputId,ctx.active);return;}
+    if(ev.key==='Tab'&&open&&ctx.active>=0){ev.preventDefault();comboPick(inputId,ctx.active);return;}
+    if(ev.key==='Enter'&&open)comboClose(inputId);
+  });
+  input.addEventListener('blur',function(){
+    /* blur 早于点击：给面板上的 mousedown 一点时间先处理，
+       否则点候选会先被这里关掉、什么也没选中。 */
+    setTimeout(function(){
+      var ctx=comboCtx[inputId];
+      if(ctx&&!ctx.panel.hidden&&!ctx.panel.contains(document.activeElement))comboClose(inputId);
+    },140);
+  });
+
+  var toggle=byId(inputId==='aiModel'?'aiModelDrop':'aiEffortDrop');
+  if(toggle){
+    /* mousedown 里 preventDefault：不把焦点让给按钮，
+       否则输入框先 blur 关面板、按钮再 toggle 又把空面板打开。 */
+    toggle.addEventListener('mousedown',function(ev){
+      ev.preventDefault();
+      var ctx=comboCtx[inputId];
+      if(ctx.panel.hidden)comboOpen(inputId);else comboClose(inputId);
+    });
+  }
+}
+
+/* 候选来源：模型名是建议列表（仍可手填），思考程度是该 CLI 的封闭档位全集。
+   注意 aiModel 模式下不能因为列表为空就什么都不画——手填本来就是这个字段的用法。 */
+function comboSource(inputId){
+  var info=currentCli();
+  var provider=parseInt(byId('aiProvider').value,10);
+  if(inputId==='aiModel'){
+    if(!info){
+      return {items:[],note:'选择「不启用」时不需要填模型；填了也只在本机 CLI 下生效。',
+              foot:'可以手填任何该 CLI 认的模型名。'};
+    }
+    if(provider===-1){
+      return {items:[],note:'当前是「不启用」，模型名不会生效。',
+              foot:'可以手填任何该 CLI 认的模型名。'};
+    }
+    return {items:info.modelSuggestions||[],
+            default:info.defaultModel||'',
+            foot:info.modelSuggestions&&info.modelSuggestions.length
+              ? '上面只是常见取值，也可以手填其它模型名。'
+              : '该 CLI 没有内置候选，直接手填模型名即可。'};
+  }
+
+  var levels=info?(info.effortLevels||[]):[];
+  if(!levels.length){
+    return {items:[],note:info?('没有列到 '+info.name+' 的思考程度档位，可以直接手填。')
+                             :'选择具体 CLI 后这里会列出可用档位。',
+            foot:'留空表示不传该参数，完全使用 CLI 自身的配置。'};
+  }
+  return {items:levels,
+          foot:'留空表示不传该参数（使用 CLI 自身配置）。档位会原样传给 '+
+               (info?info.name:'CLI')+'，填列表外的值不会报错、只会被忽略。'};
+}
+
+function comboOpen(inputId){
+  var ctx=comboCtx[inputId];
+  if(!ctx)return;
+  ctx.active=-1;
+  comboRender(inputId);
+  ctx.panel.hidden=false;
+}
+
+function comboClose(inputId){
+  var ctx=comboCtx[inputId];
+  if(!ctx)return;
+  ctx.panel.hidden=true;
+  ctx.active=-1;
+}
+
+function comboCloseAll(){
+  comboClose('aiModel');
+  comboClose('aiEffort');
+}
+
+function comboRender(inputId){
+  var ctx=comboCtx[inputId];
+  if(!ctx)return;
+  var src=comboSource(inputId);
+  var q=String(ctx.input.value||'').trim().toLowerCase();
+  var items=src.items||[];
+  /* 已经打进去的值别在候选里重复一遍，看着像多出来一项。 */
+  var list=items.filter(function(v){return String(v).toLowerCase()!==q;});
+  if(q)list=list.filter(function(v){return String(v).toLowerCase().indexOf(q)>=0;});
+  ctx.items=list;
+  ctx.note=src.note||'';
+
+  var panel=ctx.panel;
+  panel.textContent='';
+  if(!list.length){
+    panel.appendChild(el('div','combo-note',
+      src.note||(q?'没有匹配的候选，按原样保存即可。':'没有可选项，直接手填即可。')));
+  }else{
+    list.forEach(function(v,index){
+      var row=el('div','combo-item');
+      row.setAttribute('role','option');
+      row.title=String(v);
+      var span=el('span','combo-value');
+      span.appendChild(comboMark(String(v),q));
+      row.appendChild(span);
+      if(String(v)===String(ctx.input.value||''))row.appendChild(el('span','combo-act','当前'));
+      else if(src.default&&String(v)===String(src.default))row.appendChild(el('span','combo-act','默认'));
+      /* mousedown 早于 blur：preventDefault 把焦点留在输入框上 */
+      row.addEventListener('mousedown',function(ev){ev.preventDefault();comboPick(inputId,index);});
+      panel.appendChild(row);
+    });
+  }
+  if(src.foot)panel.appendChild(el('div','combo-foot',src.foot));
+
+  /* 手填模式下没候选就不弹一个空面板挡着输入框。 */
+  if(!list.length&&!src.foot){
+    panel.hidden=true;
+    return;
+  }
+  panel.hidden=false;
+  comboMarkActive(inputId);
+}
+
+function comboMark(value,query){
+  var span=document.createElement('span');
+  var text=String(value);
+  var at=query?text.toLowerCase().indexOf(query):-1;
+  if(at<0){span.appendChild(document.createTextNode(text));return span;}
+  if(at>0)span.appendChild(document.createTextNode(text.substring(0,at)));
+  span.appendChild(el('b',null,text.substr(at,query.length)));
+  if(at+query.length<text.length)span.appendChild(document.createTextNode(text.substring(at+query.length)));
+  return span;
+}
+
+function comboMarkActive(inputId){
+  var ctx=comboCtx[inputId];
+  if(!ctx)return;
+  var rows=ctx.panel.querySelectorAll('.combo-item');
+  for(var i=0;i<rows.length;i++){
+    var on=i===ctx.active;
+    rows[i].classList.toggle('is-active',on);
+    if(on&&rows[i].scrollIntoView)rows[i].scrollIntoView({block:'nearest'});
+  }
+}
+
+function comboMove(inputId,delta){
+  var ctx=comboCtx[inputId];
+  if(!ctx||!ctx.items.length)return;
+  var total=ctx.items.length;
+  ctx.active=ctx.active<0?(delta>0?0:total-1):(ctx.active+delta+total)%total;
+  comboMarkActive(inputId);
+}
+
+function comboPick(inputId,index){
+  var ctx=comboCtx[inputId];
+  if(!ctx)return;
+  var value=ctx.items[index];
+  if(value==null)return;
+  ctx.input.value=String(value);
+  dirty[inputId]=true;
+  comboClose(inputId);
+  setStatusHold('已填入 '+value+'，记得点保存同步','ok',5000);
+}
+
+/* 点空白处、滚动、改窗口大小都收掉面板；切换分组时也一样。 */
+document.addEventListener('mousedown',function(ev){
+  Object.keys(comboCtx).forEach(function(id){
+    var ctx=comboCtx[id];
+    if(ctx.panel.hidden)return;
+    if(ctx.panel.contains(ev.target))return;
+    if(ev.target===ctx.input)return;
+    if(ev.target.id===(id==='aiModel'?'aiModelDrop':'aiEffortDrop'))return;
+    comboClose(id);
+  });
+});
+window.addEventListener('scroll',comboCloseAll,true);
+window.addEventListener('resize',comboCloseAll);
+
+/* comboSetup 放在 renderProviders 之后：函数声明会提升，但首次聚焦时
+   currentCli() 读的 clis 数组得先被 renderProviders 填好。 */
+
 function load(){
   if(pollBusy)return;
   pollBusy=true;
@@ -1587,6 +2082,8 @@ function load(){
     if(!dirty.outputMode)applyField('outputMode',cfg.outputMode);
     if(!dirty.cleanupBackend)applyField('cleanupBackend',cfg.cleanupBackend);
     updateCleanupBanner();
+    if(!dirty.autoCropNineSlice)applyField('autoCropNineSlice',cfg.autoCropNineSlice);
+    updateNineSliceBanner();
     if(!dirty.previewServerPort)applyField('previewServerPort',cfg.previewServerPort);
     updateSharePanel(cfg);
     hasKey=!!cfg.aiHasApiKey;
@@ -1614,6 +2111,7 @@ function payload(){
   TEXT_FIELDS.forEach(function(id){var f=byId(id);if(f)body[id]=f.value;});
   body.outputMode=parseInt(byId('outputMode').value,10);
   body.cleanupBackend=parseInt(byId('cleanupBackend').value,10);
+  body.autoCropNineSlice=!!byId('autoCropNineSlice').checked;
   var port=parseInt(byId('previewServerPort').value,10);
   if(!isNaN(port))body.previewServerPort=port;
   body.aiProvider=parseInt(byId('aiProvider').value,10);
@@ -1829,15 +2327,34 @@ function suggestRender(query,data){
     suggestPlace();
     return;
   }
+  var lower=String(query||'').toLowerCase();
   suggestItems.forEach(function(it,index){
     var row=el('div','suggest-item');
     row.setAttribute('role','option');
     row.title=it.value;
-    row.appendChild(suggestMark(it.name,query,'suggest-name'));
+    /* 短名/命名空间只在「查询是其连续子串」时高亮；uib 这种跳着匹配的情况
+       高亮不出来，改由下面一行完整类型名 + 服务端给的匹配区间来表示。 */
+    var nameHit=!!lower&&String(it.name||'').toLowerCase().indexOf(lower)>=0;
+    var scopeHit=!nameHit&&!!lower&&String(it.scope||'').toLowerCase().indexOf(lower)>=0;
+    row.appendChild(suggestMark(it.name,nameHit?query:'','suggest-name'));
     var scope=el('span','suggest-scope');
-    if(it.scope)scope.appendChild(suggestMark(it.scope,query,null));
+    if(it.scope)scope.appendChild(suggestMark(it.scope,scopeHit?query:'',null));
     row.appendChild(scope);
-    if(it.assembly)row.appendChild(el('span','suggest-assembly',it.assembly));
+    /* 程序集名等于命名空间首段时（UnityEngine.UI 这种）就不重复显示一遍了 */
+    var assembly=String(it.assembly||'');
+    if(assembly&&assembly!==String(it.scope||'')&&assembly!==String(it.scope||'').split('.')[0])
+      row.appendChild(el('span','suggest-assembly',assembly));
+    if(!nameHit&&!scopeHit&&it.marks&&it.marks.length){
+      var line=el('div','suggest-match');
+      var at=0;
+      it.marks.forEach(function(rg){
+        if(rg[0]>at)line.appendChild(document.createTextNode(it.value.substring(at,rg[0])));
+        line.appendChild(el('b',null,it.value.substr(rg[0],rg[1])));
+        at=rg[0]+rg[1];
+      });
+      if(at<it.value.length)line.appendChild(document.createTextNode(it.value.substring(at)));
+      row.appendChild(line);
+    }
     /* mousedown 早于 blur：先 preventDefault 把焦点留在输入框上，否则面板会先被 blur 关掉 */
     row.addEventListener('mousedown',function(ev){ev.preventDefault();suggestPick(index);});
     panel.appendChild(row);
@@ -1869,11 +2386,13 @@ function suggestPick(index){
   setStatusHold('已填入 '+it.value+'，记得点保存同步','ok',5000);
 }
 
-function suggestQuery(kind,query){
+function suggestQuery(kind,query,current){
   suggestToken++;
   var token=suggestToken;
   if(suggestRetry){clearTimeout(suggestRetry);suggestRetry=null;}
-  fetchWithTimeout('/typesuggest?kind='+kind+'&q='+encodeURIComponent(query),{cache:'no-store'},5000)
+  /* cur 是字段里现有的值：空查询时服务端会把它排到第一行，方便直接确认。 */
+  var url='/typesuggest?kind='+kind+'&q='+encodeURIComponent(query)+'&cur='+encodeURIComponent(current||'');
+  fetchWithTimeout(url,{cache:'no-store'},5000)
     .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
     .then(function(data){
       if(token!==suggestToken||!suggestOwner)return;
@@ -1881,7 +2400,7 @@ function suggestQuery(kind,query){
       if(!data||!data.ready){
         /* 主线程还在扫程序集：过一会儿再问一次，问到了自然就画出来 */
         suggestRetry=setTimeout(function(){
-          if(token===suggestToken&&suggestOwner)suggestQuery(kind,query);
+          if(token===suggestToken&&suggestOwner)suggestQuery(kind,query,current);
         },800);
       }
     })
@@ -1896,16 +2415,18 @@ function suggestQuery(kind,query){
     });
 }
 
-function suggestOpen(input){
+function suggestOpen(input,showAll){
   var kind=TYPE_SUGGEST[input.id];
   if(!kind)return;
   suggestOwner=input;
-  suggestQuery(kind,input.value.trim());
+  /* 聚焦时按空查询列全部候选：字段里通常已经有完整类名，拿它当查询只会剩一两行，
+     反而看不到有什么可选。开始打字之后才按输入内容过滤。 */
+  suggestQuery(kind,showAll?'':input.value.trim(),input.value.trim());
 }
 
 function suggestSchedule(input){
   if(suggestTimer)clearTimeout(suggestTimer);
-  suggestTimer=setTimeout(function(){suggestOpen(input);},140);
+  suggestTimer=setTimeout(function(){suggestOpen(input,false);},140);
 }
 
 Object.keys(TYPE_SUGGEST).forEach(function(id){
@@ -1916,12 +2437,12 @@ Object.keys(TYPE_SUGGEST).forEach(function(id){
   input.setAttribute('spellcheck','false');
   input.setAttribute('aria-autocomplete','list');
   input.addEventListener('input',function(){dirty[id]=true;suggestSchedule(input);});
-  input.addEventListener('focus',function(){suggestOpen(input);});
+  input.addEventListener('focus',function(){suggestOpen(input,true);});
   input.addEventListener('keydown',function(ev){
     var open=!!suggestPanel&&suggestPanel.classList.contains('is-open')&&suggestOwner===input;
     if(ev.key==='ArrowDown'){
       ev.preventDefault();
-      if(open)suggestMove(1);else suggestOpen(input);
+      if(open)suggestMove(1);else suggestOpen(input,true);
       return;
     }
     if(ev.key==='ArrowUp'){if(open){ev.preventDefault();suggestMove(-1);}return;}
@@ -1944,10 +2465,20 @@ document.addEventListener('mousedown',function(ev){
 });
 
 byId('save').addEventListener('click',function(){post(payload(),'配置已同步到 Unity',byId('save'));});
-byId('aiProvider').addEventListener('change',function(){dirty.aiProvider=true;refreshDetailVisibility();markSelectedCard();});
+byId('aiProvider').addEventListener('change',function(){
+  dirty.aiProvider=true;refreshDetailVisibility();markSelectedCard();
+  /* 换成别的 CLI，候选集完全不同，收掉旧面板免得看起来像还在选上一个模型的档位。 */
+  comboClose('aiModel');comboClose('aiEffort');
+});
+/* 绑定下拉最迟放在这里：renderProviders 定义完了，clis 也由 load() 填过一遍。 */
+comboSetup('aiModel','aiModelPanel');
+comboSetup('aiEffort','aiEffortPanel');
 byId('outputMode').addEventListener('change',function(){dirty.outputMode=true;});
 byId('cleanupBackend').addEventListener('change',function(){
   dirty.cleanupBackend=true;updateCleanupBanner();
+});
+byId('autoCropNineSlice').addEventListener('change',function(){
+  dirty.autoCropNineSlice=true;updateNineSliceBanner();
 });
 byId('previewServerPort').addEventListener('input',function(){dirty.previewServerPort=true;});
 TEXT_FIELDS.forEach(function(id){

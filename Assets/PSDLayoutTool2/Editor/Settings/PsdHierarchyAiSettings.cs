@@ -7,6 +7,7 @@ namespace PsdLayoutTool2
     using System.Runtime.InteropServices;
     using System.Security.Cryptography;
     using System.Text;
+    using Newtonsoft.Json.Linq;
     using UnityEditor;
     using UnityEngine;
 
@@ -40,56 +41,89 @@ namespace PsdLayoutTool2
             PsdHierarchyAiProvider provider,
             string displayName,
             string executablePath,
-            string defaultModelHint,
-            string reasoningEffortHint)
+            string[] modelSuggestions,
+            string[] reasoningEffortLevels)
         {
             this.provider = provider;
             this.displayName = displayName ?? string.Empty;
             this.executablePath = executablePath ?? string.Empty;
-            this.defaultModelHint = defaultModelHint ?? string.Empty;
-            this.reasoningEffortHint = reasoningEffortHint ?? string.Empty;
+            this.modelSuggestions = modelSuggestions ?? Empty;
+            this.reasoningEffortLevels = reasoningEffortLevels ?? Empty;
         }
+
+        private static readonly string[] Empty = new string[0];
 
         internal readonly PsdHierarchyAiProvider provider;
         internal readonly string displayName;
         internal readonly string executablePath;
 
+        /// <summary>
+        /// 模型名称的候选取值。**只用于界面的下拉建议，不参与校验**：
+        /// 每个 CLI 支持的模型名是开放集合（新版本随时会加），所以这里列的是常见项，
+        /// 输入框必须始终允许手填其它名字。
+        /// </summary>
+        internal readonly string[] modelSuggestions;
+
+        /// <summary>
+        /// 思考程度的候选取值。与模型名不同，这一列是**封闭枚举**：
+        /// 档位会原样拼进命令行（见 PsdHierarchyChatClient.BuildReasoningEffortArguments），
+        /// 写错不会报错、只会被 CLI 忽略，所以用下拉列全比让人手打更安全。
+        /// 提示文案与网页下拉都由它派生，不再单独维护一份字符串。
+        /// </summary>
+        internal readonly string[] reasoningEffortLevels;
+
         /// <summary>模型名称输入框的占位提示，说明该 CLI 认什么样的取值。</summary>
-        internal readonly string defaultModelHint;
+        internal string defaultModelHint => Describe(modelSuggestions);
 
         /// <summary>思考程度输入框的占位提示，列出该 CLI 支持的档位。</summary>
-        internal readonly string reasoningEffortHint;
+        internal string reasoningEffortHint => Join(reasoningEffortLevels, " / ");
+
+        private static string Join(string[] values, string separator)
+        {
+            return values == null || values.Length == 0
+                ? string.Empty
+                : string.Join(separator, values);
+        }
+
+        /// <summary>把候选模型名拼成「例如 a、b」这种占位提示。</summary>
+        private static string Describe(string[] values)
+        {
+            return values == null || values.Length == 0
+                ? string.Empty
+                : "例如 " + string.Join("、", values);
+        }
     }
 
     internal static class PsdHierarchyAiCliDiscovery
     {
-        // 每项末尾的两个提示串只用于界面占位，不参与调用。
+        // 模型名是开放集合（只是下拉建议），思考程度是封闭集合（下拉即全集）。
+        // 两组提示文案都由下面的数组派生，避免改了一处漏一处。
         private static readonly PsdHierarchyAiCliDescriptor[] SupportedClis =
         {
             new PsdHierarchyAiCliDescriptor(
                 PsdHierarchyAiProvider.Claude,
                 "Claude",
                 "claude",
-                "例如 opus、sonnet，或完整名 claude-sonnet-5",
-                "low / medium / high / xhigh / max"),
+                new[] { "opus", "sonnet", "haiku", "claude-sonnet-5" },
+                new[] { "low", "medium", "high", "xhigh", "max" }),
             new PsdHierarchyAiCliDescriptor(
                 PsdHierarchyAiProvider.Codex,
                 "Codex",
                 "codex",
-                "例如 gpt-5、gpt-5-codex",
-                "minimal / low / medium / high"),
+                new[] { "gpt-5", "gpt-5-codex", "gpt-5-mini" },
+                new[] { "minimal", "low", "medium", "high" }),
             new PsdHierarchyAiCliDescriptor(
                 PsdHierarchyAiProvider.Grok,
                 "Grok",
                 "grok",
-                "例如 grok-4、grok-code-fast-1",
-                "low / medium / high"),
+                new[] { "grok-4", "grok-3", "grok-code-fast-1" },
+                new[] { "low", "medium", "high" }),
             new PsdHierarchyAiCliDescriptor(
                 PsdHierarchyAiProvider.Pi,
                 "Pi",
                 "pi",
-                "例如 openai/gpt-5、anthropic/claude-sonnet-5",
-                "off / minimal / low / medium / high / xhigh / max"),
+                new[] { "openai/gpt-5", "anthropic/claude-sonnet-5" },
+                new[] { "off", "minimal", "low", "medium", "high", "xhigh", "max" }),
         };
 
         internal static IReadOnlyList<PsdHierarchyAiCliDescriptor> FindInstalled()
@@ -113,8 +147,8 @@ namespace PsdLayoutTool2
                         supported.provider,
                         supported.displayName,
                         executablePath,
-                        supported.defaultModelHint,
-                        supported.reasoningEffortHint));
+                        supported.modelSuggestions,
+                        supported.reasoningEffortLevels));
                 }
             }
 
@@ -190,6 +224,271 @@ namespace PsdLayoutTool2
             }
 
             return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Pi 的模型目录是「每台机器各不相同」的：它支持自定义 provider（例如用 cc-switch
+    /// 配的 DeepSeek 中转），~/.pi/agent/models.json 里列的才是这台机器真正可用的模型。
+    /// 静态写死的候选必然和用户实际用的对不上（实测本机就是 DeepSeek，而静态示例
+    /// 写的是 openai / anthropic），所以 Pi 的下拉候选改为运行时读取：
+    /// settings.json 给默认模型，models.json 给模型清单和各模型实际支持的思考档位
+    /// （thinkingLevelMap 里映射为 null 的档位对该模型不起作用，直接不列）。
+    /// 文件缺失或解析失败时回退到 SupportedClis 里的静态示例。
+    /// </summary>
+    internal static class PsdHierarchyAiPiCatalog
+    {
+        /// <summary>pi --thinking 接受的档位（pi --help 原文顺序），展示时按这个顺序排。</summary>
+        private static readonly string[] EffortOrder =
+        {
+            "off", "minimal", "low", "medium", "high", "xhigh", "max",
+        };
+
+        private static readonly string[] NoValues = new string[0];
+
+        // BuildConfigJson 每 0.4 秒跑一次，不能每次都读盘解析。
+        // 以「两个文件的大小 + 修改时间」为缓存键：文件没变就复用上次结果（包括解析失败）。
+        // 只在主线程调用（BuildConfigJson 与 Inspector 都是主线程），无需加锁。
+        private static string cacheKey = string.Empty;
+        private static bool cacheLoaded;
+        private static string[] cachedModels = NoValues;
+        private static string[] cachedLevels = NoValues;
+        private static string cachedDefaultModel = string.Empty;
+
+        /// <summary>
+        /// 读本机 ~/.pi/agent/ 下的 settings.json 与 models.json。
+        /// 返回 false 表示没有可用的目录信息（文件不存在/解析失败），调用方应使用静态兜底。
+        /// modelSuggestions / effortLevels 可能单独为空：哪个为空就单独回退哪个。
+        /// </summary>
+        internal static bool TryLoad(
+            out string[] modelSuggestions,
+            out string[] effortLevels,
+            out string defaultModel)
+        {
+            string agentDirectory = AgentDirectory();
+            string settingsPath = Path.Combine(agentDirectory, "settings.json");
+            string modelsPath = Path.Combine(agentDirectory, "models.json");
+            string key = DescribeFile(settingsPath) + "|" + DescribeFile(modelsPath);
+            if (!cacheLoaded || !string.Equals(key, cacheKey, StringComparison.Ordinal))
+            {
+                cacheLoaded = true;
+                cacheKey = key;
+                TryParse(
+                    ReadAllTextOrNull(settingsPath),
+                    ReadAllTextOrNull(modelsPath),
+                    out cachedModels,
+                    out cachedLevels,
+                    out cachedDefaultModel);
+            }
+
+            modelSuggestions = cachedModels;
+            effortLevels = cachedLevels;
+            defaultModel = cachedDefaultModel;
+            return cachedModels.Length > 0 || cachedLevels.Length > 0;
+        }
+
+        /// <summary>
+        /// 纯解析：settings.json 与 models.json 的文本内容 → 候选模型 / 有效档位 / 默认模型。
+        /// 档位取「默认模型」的 thinkingLevelMap；默认模型不在目录里时，
+        /// 若所有模型的档位映射一致则采用该映射（例如两个 DeepSeek 模型都只有 high / max），
+        /// 否则不给档位（回退静态全集）。
+        /// </summary>
+        internal static bool TryParse(
+            string settingsJson,
+            string modelsJson,
+            out string[] modelSuggestions,
+            out string[] effortLevels,
+            out string defaultModel)
+        {
+            modelSuggestions = NoValues;
+            effortLevels = NoValues;
+            defaultModel = string.Empty;
+
+            JObject models = ParseObjectOrNull(modelsJson);
+            if (models == null)
+            {
+                return false;
+            }
+
+            JObject settings = ParseObjectOrNull(settingsJson);
+            if (settings != null)
+            {
+                defaultModel = settings["defaultModel"]?.ToString() ?? string.Empty;
+            }
+
+            // 目录里所有模型的 id（保序去重）与各自的档位映射。
+            var ids = new List<string>();
+            var mapsById = new Dictionary<string, JObject>();
+            var allMaps = new List<JObject>();
+            if (models["providers"] is JObject providers)
+            {
+                foreach (JProperty providerProperty in providers.Properties())
+                {
+                    if (!(providerProperty.Value is JObject provider) ||
+                        !(provider["models"] is JArray providerModels))
+                    {
+                        continue;
+                    }
+
+                    foreach (JToken entry in providerModels)
+                    {
+                        string id = (entry as JObject)?["id"]?.ToString();
+                        if (string.IsNullOrEmpty(id) || ids.Contains(id))
+                        {
+                            continue;
+                        }
+
+                        ids.Add(id);
+                        if ((entry as JObject)?["thinkingLevelMap"] is JObject map)
+                        {
+                            mapsById[id] = map;
+                            allMaps.Add(map);
+                        }
+                    }
+                }
+            }
+
+            if (ids.Count == 0)
+            {
+                return false;
+            }
+
+            var suggestions = new List<string>();
+            if (!string.IsNullOrEmpty(defaultModel))
+            {
+                suggestions.Add(defaultModel);
+            }
+
+            foreach (string id in ids)
+            {
+                if (!suggestions.Contains(id))
+                {
+                    suggestions.Add(id);
+                }
+            }
+
+            modelSuggestions = suggestions.ToArray();
+
+            JObject chosenMap = null;
+            if (!string.IsNullOrEmpty(defaultModel) && mapsById.TryGetValue(defaultModel, out JObject exactMap))
+            {
+                chosenMap = exactMap;
+            }
+            else if (AllMapsAgree(allMaps))
+            {
+                chosenMap = allMaps[0];
+            }
+
+            if (chosenMap != null)
+            {
+                effortLevels = LevelsFromMap(chosenMap);
+            }
+
+            return true;
+        }
+
+        /// <summary>档位映射 → 有效档位列表：只保留映射值非 null 的键，按 EffortOrder 排序。</summary>
+        private static string[] LevelsFromMap(JObject map)
+        {
+            var enabled = new List<string>();
+            foreach (string level in EffortOrder)
+            {
+                if (map[level] is JToken token && token.Type != JTokenType.Null)
+                {
+                    enabled.Add(level);
+                }
+            }
+
+            return enabled.Count > 0 ? enabled.ToArray() : NoValues;
+        }
+
+        private static bool AllMapsAgree(List<JObject> maps)
+        {
+            if (maps.Count == 0)
+            {
+                return false;
+            }
+
+            string[] reference = LevelsFromMap(maps[0]);
+            for (int index = 1; index < maps.Count; index++)
+            {
+                string[] other = LevelsFromMap(maps[index]);
+                if (reference.Length != other.Length)
+                {
+                    return false;
+                }
+
+                for (int level = 0; level < reference.Length; level++)
+                {
+                    if (!string.Equals(reference[level], other[level], StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static string AgentDirectory()
+        {
+            // 不用 Application.platform：那是 Unity 的 ECall，脱离编辑器（单测 / 反射探针）会抛
+            // 「ECall methods must be packaged into a system module」。USERPROFILE / HOME
+            // 在 Windows 与 mac/linux 上各自总是存在，按这个顺序取就够。
+            string home = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (string.IsNullOrEmpty(home))
+            {
+                home = Environment.GetEnvironmentVariable("HOME");
+            }
+
+            return Path.Combine(home ?? string.Empty, ".pi", "agent");
+        }
+
+        private static string DescribeFile(string path)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    return "missing";
+                }
+
+                var info = new FileInfo(path);
+                return info.Length.ToString() + "@" + info.LastWriteTimeUtc.Ticks.ToString();
+            }
+            catch (Exception)
+            {
+                return "error";
+            }
+        }
+
+        private static string ReadAllTextOrNull(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? File.ReadAllText(path) : null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private static JObject ParseObjectOrNull(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JObject.Parse(json);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
     }
 

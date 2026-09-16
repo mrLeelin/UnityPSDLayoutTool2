@@ -4374,6 +4374,10 @@
                     PsdNineSliceNameRule nineSliceRule;
                     if (TryGetNineSliceConversionRule(layer, out nineSliceRule))
                     {
+                        // 项目设置关闭「导出时自动裁剪」时，仍推断并写入九宫边框，
+                        // 但保留原始 PNG 尺寸，避免裁剪让手动量的边距和烘焙美术错位。
+                        bool autoCropNineSlice =
+                            PsdLayoutProjectSettings.instance.ResolveNineSliceSettings().autoCropOnExport;
                         byte[] originalPng = png;
                         byte[] processedPng;
                         PsdNineSliceBorder appliedBorder;
@@ -4383,6 +4387,7 @@
                             nineSliceRule,
                             GetTargetCanvasScaleX(),
                             GetTargetCanvasScaleY(),
+                            autoCropNineSlice,
                             out processedPng,
                             out appliedBorder,
                             out reason);
@@ -4397,6 +4402,7 @@
                                     fallbackRule,
                                     GetTargetCanvasScaleX(),
                                     GetTargetCanvasScaleY(),
+                                    autoCropNineSlice,
                                     out processedPng,
                                     out appliedBorder,
                                     out reason);

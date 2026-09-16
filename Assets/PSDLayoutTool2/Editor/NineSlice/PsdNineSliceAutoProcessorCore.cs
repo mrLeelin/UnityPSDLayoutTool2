@@ -19,6 +19,22 @@ namespace PsdLayoutTool2
             out PsdNineSliceBorder border,
             out string reason)
         {
+            return TryProcessRaster(source, rule, true, out cropped, out border, out reason);
+        }
+
+        /// <summary>
+        /// <paramref name="cropEnabled"/> 为 false 时只推断并返回边框，<c>cropped</c> 保持原始栅格。
+        /// 用于「关闭导出时自动裁剪」的项目设置：九宫边框照常生效，但 PNG 尺寸不变，
+        /// 手动量的边距和烘焙美术不会因为裁剪而错位。
+        /// </summary>
+        public static bool TryProcessRaster(
+            PsdNineSliceRaster source,
+            PsdNineSliceNameRule rule,
+            bool cropEnabled,
+            out PsdNineSliceRaster cropped,
+            out PsdNineSliceBorder border,
+            out string reason)
+        {
             cropped = null;
             border = null;
             reason = string.Empty;
@@ -49,6 +65,13 @@ namespace PsdLayoutTool2
             {
                 reason = "The requested nine-slice border is outside the generated layer bounds.";
                 return false;
+            }
+
+            if (!cropEnabled)
+            {
+                cropped = source;
+                reason = "Auto crop is disabled in the project settings; kept the full source raster.";
+                return true;
             }
 
             cropped = PsdNineSliceCropper.CropToMinimum(source, border);
