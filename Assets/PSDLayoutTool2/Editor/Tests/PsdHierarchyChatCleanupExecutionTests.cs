@@ -533,7 +533,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void NativeBackendDoesNotAutomaticallySwitchToUloopForComponentExtraction()
+        public void NativeBackendDoesNotAutomaticallySwitchToUnityCliForComponentExtraction()
         {
             var plan = JObject.Parse(CreatePlan(
                 "Assets/UI/Prefab/ExampleView.prefab",
@@ -2127,7 +2127,7 @@ namespace PsdLayoutTool2.Tests
             var hierarchyOnlyPlan = JObject.Parse(CreatePlan("Assets/UI/Prefab/ExampleView.prefab", true));
 
             Assert.That(
-                PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(hierarchyOnlyPlan.ToString()),
+                PsdHierarchyNativeCleanupExecutor.RequiresUnityCliRunner(hierarchyOnlyPlan.ToString()),
                 Is.False);
 
             hierarchyOnlyPlan["variantComponentExtractions"] = new JArray
@@ -2136,7 +2136,7 @@ namespace PsdLayoutTool2.Tests
             };
 
             Assert.That(
-                PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(hierarchyOnlyPlan.ToString()),
+                PsdHierarchyNativeCleanupExecutor.RequiresUnityCliRunner(hierarchyOnlyPlan.ToString()),
                 Is.True);
         }
 
@@ -2148,14 +2148,14 @@ namespace PsdLayoutTool2.Tests
             {
                 new JObject { ["mode"] = "skip" },
             };
-            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(plan.ToString()), Is.False);
+            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUnityCliRunner(plan.ToString()), Is.False);
 
             plan["containmentFindings"] = new JArray
             {
                 new JObject { ["id"] = "finding" },
             };
 
-            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUloopRunner(plan.ToString()), Is.True);
+            Assert.That(PsdHierarchyNativeCleanupExecutor.RequiresUnityCliRunner(plan.ToString()), Is.True);
         }
 
         [Test]

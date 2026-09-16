@@ -23,6 +23,10 @@ namespace UGF.EditorTools.Psd2UGUI
         bool[] _include;
         bool[][] _instanceIncluded;
         Vector2 _scroll;
+        string _feedback = "";
+        string _selectedNodeId;
+        bool _revising;
+        readonly System.Collections.Generic.Stack<AiPatchDocument> _history = new System.Collections.Generic.Stack<AiPatchDocument>();
 
         internal static void Open(Psd2UIFormConverter source)
         {
@@ -45,13 +49,15 @@ namespace UGF.EditorTools.Psd2UGUI
             if (_running) AiHierarchyAnalysisOrchestrator.CancelOrganizerJob(_job);
             _running = false; _job = null;
             _preview?.Dispose(); _preview = null; _patch = null; _package = null;
+            _history.Clear();
         }
 
         void OnGUI()
         {
+            if (_source != null && GUILayout.Button("在网页工作台中整理")) AiOrganizerWebServer.Open(_source);
             EditorGUILayout.LabelField("整理层级 → 改名 → 抽取公共 Prefab", EditorStyles.boldLabel);
             EditorGUILayout.ObjectField("PSD 编辑树", _source, typeof(Psd2UIFormConverter), true);
-            EditorGUILayout.HelpBox("AI 提出完整方案，你可以修改名称或排除实例。生成预览后，统一保存编辑树和含公共组件的 UI。已有结果的源更新合并尚未实现，请使用新输出文件夹。", MessageType.Info);
+            EditorGUILayout.HelpBox("先在下方整理树中修改名称、父节点和顺序，或填写反馈让 AI 修改当前方案。满意后生成预览并应用；确认应用之前不会修改原文件。已有结果的源更新合并尚未实现，请使用新输出文件夹。", MessageType.Info);
             using (new EditorGUI.DisabledScope(_running))
             {
                 _requirements = EditorGUILayout.TextField("补充整理要求", _requirements);
@@ -59,7 +65,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 _destination = EditorGUILayout.TextField("新输出文件夹", _destination);
                 if (EditorGUI.EndChangeCheck()) InvalidatePreview();
                 _showTerminal = EditorGUILayout.Toggle("显示 CLI 终端", _showTerminal);
-                if (GUILayout.Button("AI 分析整理方案")) StartAnalysis();
+                if (_patch == null && GUILayout.Button("AI 分析整理方案")) StartAnalysis();
             }
             if (_running)
             {
@@ -72,19 +78,17 @@ namespace UGF.EditorTools.Psd2UGUI
             if (!string.IsNullOrEmpty(_error)) EditorGUILayout.HelpBox(_error, MessageType.Error);
             if (_job != null && GUILayout.Button("查看任务文件与日志")) EditorUtility.RevealInFinder(_job.JobDirectory);
             if (_patch == null) return;
-            _scroll = EditorGUILayout.BeginScrollView(_scroll);
-            EditorGUILayout.LabelField("层级、类型与命名", EditorStyles.boldLabel);
-            foreach (var op in _patch.operations)
+            using (new EditorGUI.DisabledScope(_running))
             {
-                if (op.op == "rename_node")
-                {
-                    EditorGUI.BeginChangeCheck();
-                    op.name = EditorGUILayout.TextField(op.targetId, op.name);
-                    if (EditorGUI.EndChangeCheck()) InvalidatePreview();
-                }
-                else EditorGUILayout.LabelField(op.op + "  " + (op.targetId ?? op.id),
-                    op.name ?? op.newParentId ?? op.uiType ?? "", EditorStyles.wordWrappedLabel);
+                _feedback = EditorGUILayout.TextField("修改反馈", _feedback);
+                if (GUILayout.Button("按反馈调整当前方案")) StartAnalysis(true);
+                using (new EditorGUI.DisabledScope(_history.Count == 0))
+                    if (GUILayout.Button("撤销上一次层级或 AI 修改")) { ReplacePlan(_history.Pop()); }
             }
+            using (new EditorGUI.DisabledScope(_running))
+            {
+            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+            DrawEditableTree();
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("公共 Prefab 建议", EditorStyles.boldLabel);
             for (int i = 0; i < _patch.components.Count; i++)
@@ -121,15 +125,72 @@ namespace UGF.EditorTools.Psd2UGUI
             if (GUILayout.Button("生成完整预览")) BuildPreview();
             using (new EditorGUI.DisabledScope(_preview == null))
                 if (GUILayout.Button("应用整理并保存 UI 与公共 Prefab")) Publish();
+            }
         }
 
         void InvalidatePreview() { _preview?.Dispose(); _preview = null; }
 
-        void StartAnalysis()
+        AiPatchDocument SelectedPlan()
         {
-            ResetSession(); _error = null;
+            var patch = JsonUtility.FromJson<AiPatchDocument>(JsonUtility.ToJson(_patch));
+            for (int index = 0; index < patch.components.Count; index++)
+                if (patch.components[index].rootIds != null)
+                    patch.components[index].rootIds = patch.components[index].rootIds.Where((id, instance) => _instanceIncluded[index][instance]).ToArray();
+            patch.components = patch.components.Where((component, index) => _include[index]).ToList();
+            return patch;
+        }
+
+        void ReplacePlan(AiPatchDocument patch)
+        {
+            InvalidatePreview();
+            _patch = patch;
+            _patch.components = _patch.components ?? new System.Collections.Generic.List<AiOrganizerComponent>();
+            _include = Enumerable.Repeat(true, _patch.components.Count).ToArray();
+            _instanceIncluded = _patch.components.Select(component => Enumerable.Repeat(true, component.rootIds?.Length ?? 0).ToArray()).ToArray();
+        }
+
+        void DrawEditableTree()
+        {
+            EditorGUILayout.LabelField("整理后的层级树（点击节点修改）", EditorStyles.boldLabel);
+            var tree = AiOrganizerPlanEditing.Tree(_package, _patch);
+            foreach (var node in tree)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space(node.Depth * 14);
+                    if (GUILayout.Toggle(_selectedNodeId == node.Id, node.Name + "  [" + node.Type + "]", "Button")) _selectedNodeId = node.Id;
+                }
+            }
+            var selected = tree.FirstOrDefault(node => node.Id == _selectedNodeId);
+            if (selected == null) return;
+            EditorGUILayout.LabelField("节点 ID", selected.Id);
+            var parents = new[] { "root" }.Concat(tree.Where(node => node.Id != selected.Id).Select(node => node.Id)).ToArray();
+            var labels = parents.Select(id => id == "root" ? "根节点" : tree.First(node => node.Id == id).Name + "  [" + id + "]").ToArray();
+            EditorGUI.BeginChangeCheck();
+            string name = EditorGUILayout.DelayedTextField("节点名称", selected.Name);
+            int parentIndex = EditorGUILayout.Popup("父节点", Math.Max(0, Array.IndexOf(parents, selected.Parent)), labels);
+            int order = EditorGUILayout.DelayedIntField("同级顺序（-1 为末尾）", selected.Index == int.MaxValue ? -1 : selected.Index);
+            if (EditorGUI.EndChangeCheck())
+            {
+                try
+                {
+                    var next = AiOrganizerPlanEditing.Edit(_package, _patch, selected.Id, name, parents[parentIndex], order);
+                    _history.Push(SelectedPlan());
+                    _patch = next; InvalidatePreview(); _error = null;
+                }
+                catch (Exception ex) { _error = ex.Message; }
+            }
+        }
+
+        void StartAnalysis(bool revise = false)
+        {
+            _error = null;
             try
             {
+                string revision = revise ? AiOrganizerPlanEditing.RevisionInstructions(SelectedPlan(), _feedback) : "";
+                if (revise) CheckInput();
+                else ResetSession();
+                _revising = revise;
                 if (_source == null) throw new InvalidOperationException("请从 PSD 编辑树的 Inspector 打开 AI 整理 UI。");
                 var sourcePath = PsdCommonPrefabPersistence.SourcePath(_source.gameObject);
                 var stage = UnityEditor.SceneManagement.PrefabStageUtility.GetCurrentPrefabStage();
@@ -137,7 +198,7 @@ namespace UGF.EditorTools.Psd2UGUI
                     throw new InvalidOperationException("请先保存 PSD 编辑树，再开始分析。");
                 string project = Directory.GetParent(Application.dataPath).FullName;
                 string skill = AiPathUtility.ResolvePluginRelativePath(project, "AIPrompts/UIOrganizer/SKILL.md");
-                string instructions = File.ReadAllText(skill) + "\n\nUser organization requirements:\n" + _requirements;
+                string instructions = File.ReadAllText(skill) + "\n\nUser organization requirements:\n" + _requirements + revision;
                 _inputSourceBytes = File.ReadAllBytes(sourcePath);
                 _running = true;
                 if (!AiHierarchyAnalysisOrchestrator.StartRecognitionJob(Psd2UIFormConverterEditor.GetOrCreate(_source), out string error,
@@ -156,14 +217,16 @@ namespace UGF.EditorTools.Psd2UGUI
                 CheckInput();
                 if (!AiJobFileStore.TryReadJson<AiRecognitionCombinedResultDocument>(job.RecognitionCombinedPath, out var combined) || combined.organizerVersion != "1.0")
                     throw new InvalidOperationException("AI 未返回完整整理协议，请查看日志后重新分析。");
-                if (!AiJobFileStore.TryReadJson<AiPatchDocument>(job.PatchPath, out _patch) ||
-                    !AiJobFileStore.TryReadJson<AiAnalysisPackageDocument>(job.AnalysisPackagePath, out _package))
+                if (!AiJobFileStore.TryReadJson<AiPatchDocument>(job.PatchPath, out var patch) ||
+                    !AiJobFileStore.TryReadJson<AiAnalysisPackageDocument>(job.AnalysisPackagePath, out var package))
                     throw new InvalidOperationException("整理结果或分析快照缺失。");
-                _patch.components = _patch.components ?? new System.Collections.Generic.List<AiOrganizerComponent>();
-                _include = Enumerable.Repeat(true, _patch.components.Count).ToArray();
-                _instanceIncluded = _patch.components.Select(component => Enumerable.Repeat(true, component.rootIds?.Length ?? 0).ToArray()).ToArray();
+                if (!new AiPatchValidatorNamespace.AiPatchValidator().ValidatePatch(patch, package, out string validation))
+                    throw new InvalidOperationException(validation);
+                if (_revising && _patch != null) _history.Push(SelectedPlan());
+                _package = package;
+                ReplacePlan(patch);
             }
-            catch (Exception ex) { _error = ex.Message; _patch = null; }
+            catch (Exception ex) { _error = ex.Message; }
             Repaint();
         }
 
@@ -185,11 +248,7 @@ namespace UGF.EditorTools.Psd2UGUI
             try
             {
                 CheckInput();
-                var patch = JsonUtility.FromJson<AiPatchDocument>(JsonUtility.ToJson(_patch));
-                for (int index = 0; index < patch.components.Count; index++)
-                    if (patch.components[index].rootIds != null)
-                        patch.components[index].rootIds = patch.components[index].rootIds.Where((id, instance) => _instanceIncluded[index][instance]).ToArray();
-                patch.components = patch.components.Where((component, index) => _include[index]).ToList();
+                var patch = SelectedPlan();
                 _preview = AiOrganizerPreview.Build(Psd2UIFormConverterEditor.GetOrCreate(_source), patch, _package, _destination, _inputFingerprint, _inputSourceBytes);
             }
             catch (Exception ex) { _error = ex.Message; }

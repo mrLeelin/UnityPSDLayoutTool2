@@ -145,7 +145,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 EditorGUILayout.BeginHorizontal(Array.Empty<GUILayoutOption>());
                 if (GUILayout.Button(aiAutoFixBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }))
                 {
-                    AiOrganizerWindow.Open(targetLogic);
+                    AiOrganizerWebServer.Open(targetLogic);
                 }
                 if (GUILayout.Button(normalizeStructureBt, (GUILayoutOption[])(object)new GUILayoutOption[1] { btHeight }))
                 {

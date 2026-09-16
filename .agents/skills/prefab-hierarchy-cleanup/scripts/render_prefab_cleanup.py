@@ -63,6 +63,16 @@ def csharp_string_array(values: list[str]) -> str:
     return "new string[] { " + ", ".join(csharp(value) for value in values) + " }"
 
 
+def finalize_eval_body(lines: list[str]) -> str:
+    """Make a statement-only payload compatible with Unity Pipeline eval_file."""
+    body = "\n".join(lines) + "\n"
+    body = re.sub(r"(?<![\w.])Object\b", "UnityEngine.Object", body)
+    body = re.sub(r"(?<![\w.])Path\b", "System.IO.Path", body)
+    body = re.sub(r"(?<![\w.])File\b", "System.IO.File", body)
+    body = re.sub(r"(?<![\w.])Directory\b", "System.IO.Directory", body)
+    return body
+
+
 def final_asset_path(source: str, new_name: str) -> str:
     source_path = PurePosixPath(source)
     return str(source_path.with_name(new_name + source_path.suffix))
@@ -913,6 +923,30 @@ def value_or_default(values: dict[str, Any], key: str, default: int = -1) -> int
     return value if isinstance(value, int) else default
 
 
+def extraction_source_paths(plan: dict[str, Any]) -> set[str]:
+    """Return source roots that are replaced only after extraction simulation.
+
+    The plan passed here is the normalized snake_case representation.  These
+    paths exist in the source hierarchy during preflight, but their direct
+    children are replaced by the generated nested Prefab during apply.  This
+    helper deliberately uses extraction shape, never fixture-specific names.
+    """
+    paths: set[str] = set()
+    for extraction in plan["component_extractions"]:
+        paths.update(extraction["instances"])
+    for extraction in plan["state_component_extractions"]:
+        paths.update(state["source"] for state in extraction["states"])
+    for extraction in plan["variant_component_extractions"]:
+        paths.update(state["source"] for state in extraction["states"])
+        paths.update(instance["source"] for instance in extraction["instances"])
+    for extraction in plan["stateful_component_extractions"]:
+        paths.add(extraction["template"])
+        paths.add(extraction["common"]["source"])
+        paths.update(state["source"] for state in extraction["states"])
+        paths.update(instance["source"] for instance in extraction["instances"])
+    return paths
+
+
 def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
     verify = plan["verify"]
     require_english_names = bool(verify.get("requireEnglishNames", False))
@@ -930,7 +964,7 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
         "    var nodes = CountNodes(reopened.transform);",
         "    var components = CountComponents(reopened.transform, ref missingComponents);",
         "    var objectReferences = CountObjectReferences(reopened.transform);",
-        "    var images = reopened.GetComponentsInChildren<Image>(true);",
+        "    var images = reopened.GetComponentsInChildren<UnityEngine.UI.Image>(true);",
         "    var prefixedTexturePaths = new HashSet<string>(StringComparer.Ordinal);",
         "    var ignoredNestedMissingSprites = new List<string>();",
         "    foreach (var image in images)",
@@ -966,7 +1000,7 @@ def emit_verification(plan: dict[str, Any], mode: str) -> list[str]:
     if require_english_names:
         lines.extend(
             [
-                "    CollectInvalidNames(reopened.transform, invalidNames);",
+                "    CollectInvalidNames(reopened.transform, invalidNames, System.IO.Path.GetFileNameWithoutExtension(prefabPath));",
                 "    if (invalidNames.Count > 0) throw new InvalidOperationException(\"Non-English semantic object names: \" + string.Join(\", \", invalidNames.ToArray()));",
             ]
         )
@@ -1267,6 +1301,13 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
             lines.append(
                 f"    var preflightMoveDestination{index} = FindByPath(root, {csharp(move['destination'])}).transform;"
             )
+    # Capture source-path rename targets before any move changes their path.
+    # Wrapper targets are resolved after wrapper creation below.
+    for index, rename in enumerate(plan["renames"]):
+        if not rename["target"].startswith("@"):
+            lines.append(
+                f"    var preflightRenameTarget{index} = FindByPath(root, {csharp(rename['target'])});"
+            )
     for index, removal in enumerate(plan["empty_container_removals"]):
         lines.append(
             f"    var preflightRemoval{index} = FindByPath(root, {csharp(removal['source'])}).transform;"
@@ -1327,6 +1368,63 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
             '    if (preflightRemovalErrors.Count > 0) throw new InvalidOperationException("Planned empty container removals are invalid: " + string.Join(" | ", preflightRemovalErrors.ToArray()));'
         )
 
+    # Match the apply ordering: reparent first, then rename the captured
+    # objects, then validate the final simulated tree. This closes the gap
+    # where a preflight could report success while the final contracts fail.
+    for index, rename in enumerate(plan["renames"]):
+        target = rename["target"]
+        if target.startswith("@"):
+            target_expr = preflight_wrapper_vars[target[1:]]
+        else:
+            target_expr = f"preflightRenameTarget{index}"
+        lines.append(f"    {target_expr}.name = {csharp(rename['name'])};")
+
+    verify = plan["verify"]
+    require_english_names = bool(verify.get("requireEnglishNames", False))
+    if require_english_names or verify.get("forbiddenObjectNamePatterns"):
+        lines.append("    var preflightInvalidNames = new List<string>();")
+        if require_english_names:
+            lines.extend(
+                [
+                    "    CollectInvalidNames(root.transform, preflightInvalidNames, System.IO.Path.GetFileNameWithoutExtension(prefabPath));",
+                    '    if (preflightInvalidNames.Count > 0) throw new InvalidOperationException("Non-English semantic object names: " + string.Join(", ", preflightInvalidNames.ToArray()));',
+                ]
+            )
+        if verify.get("forbiddenObjectNamePatterns"):
+            lines.extend(
+                [
+                    "    CollectForbiddenNames(root.transform, forbiddenObjectNamePatterns, preflightInvalidNames);",
+                    '    if (preflightInvalidNames.Count > 0) throw new InvalidOperationException("Forbidden object names: " + string.Join(", ", preflightInvalidNames.ToArray()));',
+                ]
+            )
+    for index, item in enumerate(verify.get("hierarchy", [])):
+        lines.extend(
+            [
+                f"    var preflightHierarchyNode{index} = FindByPath(root, {csharp(item['path'])});",
+                f"    AssertExpected({csharp(item['path'] + '.childCount')}, preflightHierarchyNode{index}.transform.childCount, {item['childCount']});",
+            ]
+        )
+    for path in verify.get("absentPaths", []):
+        lines.append(f"    AssertPathAbsent(root, {csharp(path)});")
+    preflight_extraction_source_paths = extraction_source_paths(plan)
+    for index, item in enumerate(verify.get("directChildren", [])):
+        # These contracts describe the replaced source root after extraction.
+        # The source root is validated by the extraction-specific checks above;
+        # its post-extraction children are asserted by emit_verification.
+        if item["path"] in preflight_extraction_source_paths:
+            continue
+        expected_children = csharp_string_array(item["children"])
+        lines.extend(
+            [
+                f"    var preflightDirectChildrenNode{index} = FindByPath(root, {csharp(item['path'])}).transform;",
+                f"    AssertDirectChildren(preflightDirectChildrenNode{index}, {expected_children}, {csharp(item['path'])});",
+            ]
+        )
+    for item in verify.get("tightBounds", []):
+        lines.append(
+            f"    AssertTightBounds(FindByPath(root, {csharp(item['path'])}).GetComponent<RectTransform>(), {csharp(item['path'])});"
+        )
+
     lines.extend(
         [
             "    return \"PREFLIGHT_OK\";",
@@ -1348,14 +1446,6 @@ def render(plan: dict[str, Any], mode: str) -> str:
     forbidden_name_patterns = csharp_string_array(verify.get("forbiddenObjectNamePatterns", []))
     allowed_missing_image_prefixes = csharp_string_array(verify.get("allowedMissingImagePathPrefixes", []))
     lines = [
-        "using System;",
-        "using System.Collections.Generic;",
-        "using System.IO;",
-        "using System.Linq;",
-        "using UnityEditor;",
-        "using UnityEngine;",
-        "using UnityEngine.UI;",
-        "",
         f"var prefabPath = {csharp(plan['prefab_path'])};",
         f"var outputPath = {csharp(plan['output_path'])};",
         f"var texturePathPrefix = {csharp(prefix)};",
@@ -1488,8 +1578,8 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "void AssertPrivateTextureAssetNames(string directory, string requiredPrefix)",
         "{",
         "    var guids = AssetDatabase.FindAssets(\"t:Texture2D\", new[] { directory });",
-        "    var requiredFileNamePrefix = Path.GetFileName(requiredPrefix);",
-        "    foreach (var guid in guids) { var path = AssetDatabase.GUIDToAssetPath(guid); var fileName = Path.GetFileNameWithoutExtension(path); if (!fileName.StartsWith(requiredFileNamePrefix, StringComparison.Ordinal)) throw new InvalidOperationException(\"Private Texture name must start with \" + requiredFileNamePrefix + \": \" + path); }",
+        "    var requiredFileNamePrefix = System.IO.Path.GetFileName(requiredPrefix);",
+        "    foreach (var guid in guids) { var path = AssetDatabase.GUIDToAssetPath(guid); var fileName = System.IO.Path.GetFileNameWithoutExtension(path); if (!fileName.StartsWith(requiredFileNamePrefix, StringComparison.Ordinal)) throw new InvalidOperationException(\"Private Texture name must start with \" + requiredFileNamePrefix + \": \" + path); }",
         "}",
         "",
         "GameObject CreateWrapper(Transform parent, string name, int siblingIndex)",
@@ -2021,13 +2111,13 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    if (sourceObjects.Length == 0) throw new InvalidOperationException(\"Replay source asset did not load: \" + sourcePath);",
         "    var sourceImporter = AssetImporter.GetAtPath(sourcePath); var targetImporter = AssetImporter.GetAtPath(targetPath);",
         "    if (sourceImporter == null || targetImporter == null || sourceImporter.GetType() != targetImporter.GetType()) throw new InvalidOperationException(\"Replay asset importer types do not match: \" + sourcePath + \" => \" + targetPath);",
-        "    var projectRoot = Directory.GetParent(Application.dataPath);",
+        "    var projectRoot = System.IO.Directory.GetParent(Application.dataPath);",
         "    if (projectRoot == null) throw new InvalidOperationException(\"Unity project root could not be resolved\");",
-        "    var sourceFullPath = Path.GetFullPath(Path.Combine(projectRoot.FullName, sourcePath.Replace('/', Path.DirectorySeparatorChar)));",
-        "    var targetFullPath = Path.GetFullPath(Path.Combine(projectRoot.FullName, targetPath.Replace('/', Path.DirectorySeparatorChar)));",
-        "    var projectPrefix = projectRoot.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;",
+        "    var sourceFullPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(projectRoot.FullName, sourcePath.Replace('/', System.IO.Path.DirectorySeparatorChar)));",
+        "    var targetFullPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(projectRoot.FullName, targetPath.Replace('/', System.IO.Path.DirectorySeparatorChar)));",
+        "    var projectPrefix = projectRoot.FullName.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;",
         "    if (!sourceFullPath.StartsWith(projectPrefix, StringComparison.OrdinalIgnoreCase) || !targetFullPath.StartsWith(projectPrefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException(\"Replay asset path escaped the Unity project\");",
-        "    File.Copy(sourceFullPath, targetFullPath, true);",
+        "    System.IO.File.Copy(sourceFullPath, targetFullPath, true);",
         "    EditorUtility.CopySerialized(sourceImporter, targetImporter);",
         "    targetImporter.SaveAndReimport();",
         "    AssertGuid(targetPath, expectedTargetGuid);",
@@ -2061,10 +2151,10 @@ def render(plan: dict[str, Any], mode: str) -> str:
         "    }",
         "}",
         "",
-        "void CollectInvalidNames(Transform node, List<string> invalidNames)",
+        "void CollectInvalidNames(Transform node, List<string> invalidNames, string rootName)",
         "{",
-        "    if (IsNonSemanticObjectName(node.name)) invalidNames.Add(TransformPath(node));",
-        "    for (var index = 0; index < node.childCount; index++) CollectInvalidNames(node.GetChild(index), invalidNames);",
+        "    if (!(node.parent == null && string.Equals(node.name, rootName, StringComparison.Ordinal)) && IsNonSemanticObjectName(node.name)) invalidNames.Add(TransformPath(node));",
+        "    for (var index = 0; index < node.childCount; index++) CollectInvalidNames(node.GetChild(index), invalidNames, rootName);",
         "}",
         "",
         "bool IsNonSemanticObjectName(string name)",
@@ -2077,11 +2167,11 @@ def render(plan: dict[str, Any], mode: str) -> str:
 
     if mode == "verify":
         lines.extend(emit_verification(plan, mode))
-        return "\n".join(lines) + "\n"
+        return finalize_eval_body(lines)
 
     if mode == "preflight":
         lines.extend(emit_preflight(plan))
-        return "\n".join(lines) + "\n"
+        return finalize_eval_body(lines)
 
     lines.extend(
         [
@@ -2571,21 +2661,13 @@ def render(plan: dict[str, Any], mode: str) -> str:
             ]
         )
     lines.extend(emit_verification(plan, mode))
-    return "\n".join(lines) + "\n"
+    return finalize_eval_body(lines)
 
 
 def render_snapshot(prefab_path: str) -> str:
     """Render a read-only Unity payload that reports the entire Prefab tree."""
     return "\n".join(
         [
-            "using System;",
-            "using System.Collections.Generic;",
-            "using System.Text;",
-            "using TMPro;",
-            "using UnityEditor;",
-            "using UnityEngine;",
-            "using UnityEngine.UI;",
-            "",
             f"var prefabPath = {csharp(prefab_path)};",
             "",
             "string Escape(string value)",
@@ -2631,7 +2713,7 @@ def render_snapshot(prefab_path: str) -> str:
             "    var imageCount = 0;",
             "    var textCount = 0;",
             "    var nestedPrefabCount = 0;",
-            "    var output = new StringBuilder();",
+            "    var output = new System.Text.StringBuilder();",
             "    output.AppendLine(\"SNAPSHOT_BEGIN\");",
             "    foreach (var node in nodes)",
             "    {",
@@ -2659,7 +2741,7 @@ def render_snapshot(prefab_path: str) -> str:
             "            }",
             "        }",
             "",
-            "        var image = node.GetComponent<Image>();",
+            "        var image = node.GetComponent<UnityEngine.UI.Image>();",
             "        if (image != null)",
             "        {",
             "            imageCount++;",
@@ -2668,7 +2750,7 @@ def render_snapshot(prefab_path: str) -> str:
             "            details.Add(\"Image(sprite=\" + Escape(image.sprite == null ? string.Empty : image.sprite.name) + \",texture=\" + Escape(texturePath) + \",type=\" + image.type + \")\");",
             "        }",
             "",
-            "        var text = node.GetComponent<TMP_Text>();",
+            "        var text = node.GetComponent<TMPro.TMP_Text>();",
             "        if (text != null)",
             "        {",
             "            textCount++;",

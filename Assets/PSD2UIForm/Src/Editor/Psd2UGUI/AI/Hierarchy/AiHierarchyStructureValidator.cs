@@ -32,17 +32,8 @@ namespace AiHierarchyStructureValidatorNamespace
             {
                 if (!Psd2UIFormTargetCompat.IsNull(psdLayerNode))
                 {
-                    ValidateUnsupportedMainType(psdLayerNode, ids);
                     ValidateCompositeStructure(psdLayerNode, ids);
                 }
-            }
-        }
-
-        private static void ValidateUnsupportedMainType(object value, List<string> texts)
-        {
-            if (!Psd2UIFormTargetCompat.IsNull(value) && UiTypeCompatibilityRules.IsUiTypeAlias(((PsdLayerNode)value).UIType))
-            {
-                texts?.Add($"Node '{((Object)value).name}' still uses unsupported AI main type '{((PsdLayerNode)value).UIType}'. The patch was kept, but this node may not parse as ordinary uGUI.");
             }
         }
 

@@ -11,7 +11,7 @@ namespace PsdLayoutTool2
     internal enum PsdHierarchyCleanupExecutionBackend
     {
         NativeUnity,
-        UloopRunner,
+        UnityCliRunner,
     }
 
     internal readonly struct PsdHierarchyCleanupExecutionSettingsSnapshot
@@ -26,7 +26,7 @@ namespace PsdLayoutTool2
         internal bool TryValidate(out string error)
         {
             if (backend == PsdHierarchyCleanupExecutionBackend.NativeUnity ||
-                backend == PsdHierarchyCleanupExecutionBackend.UloopRunner)
+                backend == PsdHierarchyCleanupExecutionBackend.UnityCliRunner)
             {
                 error = string.Empty;
                 return true;

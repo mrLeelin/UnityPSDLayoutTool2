@@ -10,6 +10,11 @@ namespace CodexCliProviderNamespace
     {
         internal static CodexCliProvider s_ObfuscationSentinel;
 
+        internal CodexCliProvider(AiProviderConnectionSettings connectionSettings = null)
+            : base(AiProviderKind.CodexCli, connectionSettings)
+        {
+        }
+
         [SpecialName]
         public override string GetProviderId()
         {

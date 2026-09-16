@@ -18,11 +18,13 @@ namespace UGF.EditorTools.Psd2UGUI
         internal string TargetPath { get; private set; }
         internal string SourcePath { get; private set; }
         internal string PreviewPath { get; private set; }
-        string _folder, _destination, _inputFingerprint, _candidateFingerprint;
+        string _folder, _destination, _inputFingerprint, _candidateFingerprint, _workingSourcePath;
         byte[] _sourceBytes;
         GameObject _authoring;
         Psd2UIFormConverterEditor _editor;
         bool _published;
+        Dictionary<string, string> _previewNodeAddresses;
+        internal Vector2Int DocumentSize => _editor.GetDocumentSize();
 
         internal static AiOrganizerPreview Build(Psd2UIFormConverterEditor source, AiPatchDocument patch,
             AiAnalysisPackageDocument package, string destination, string expectedFingerprint = null, byte[] expectedSourceBytes = null)
@@ -47,7 +49,11 @@ namespace UGF.EditorTools.Psd2UGUI
                 string folderName = "__PsdOrganizerPreview_" + Guid.NewGuid().ToString("N");
                 if (string.IsNullOrEmpty(AssetDatabase.CreateFolder("Assets", folderName))) throw new IOException("不能创建整理预览目录。");
                 preview._folder = "Assets/" + folderName;
-                preview._authoring = PrefabUtility.LoadPrefabContents(sourcePath);
+                // 每个候选有独立来源身份，避免上一版公共 Prefab 规则被误判为目标迁移冲突。
+                preview._workingSourcePath = "Assets/__PsdOrganizerInput_" + Guid.NewGuid().ToString("N") + ".prefab";
+                if (!AssetDatabase.CopyAsset(sourcePath, preview._workingSourcePath)) throw new IOException("不能创建整理输入副本。");
+                preview._authoring = PrefabUtility.LoadPrefabContents(preview._workingSourcePath);
+                preview._authoring.name = source.gameObject.name;
                 if (PsdExtractionSourceFingerprint.Capture(preview._authoring) != preview._inputFingerprint ||
                     !File.ReadAllBytes(sourcePath).SequenceEqual(preview._sourceBytes))
                     throw new InvalidOperationException("磁盘编辑树与分析输入不一致，请保存并重新分析。");
@@ -56,15 +62,21 @@ namespace UGF.EditorTools.Psd2UGUI
                 var settings = ScriptableSingleton<Psd2UIFormSettings>.Instance;
                 string images = settings.UIImagesOutputDir;
                 string lastForms = settings.LastUIFormOutputDir;
+                var selection = Selection.objects;
                 try
                 {
                     settings.UIImagesOutputDir = preview._folder + "/Images";
                     if (!preview._editor.GenerateAndSaveUIFormPrefab(preview._authoring.transform, preview._folder))
                         throw new InvalidOperationException("候选界面生成失败，原编辑树未改变。");
                 }
-                finally { settings.UIImagesOutputDir = images; settings.LastUIFormOutputDir = lastForms; }
+                finally
+                {
+                    settings.UIImagesOutputDir = images; settings.LastUIFormOutputDir = lastForms;
+                    Selection.objects = selection;
+                }
                 preview.PreviewPath = preview._folder + "/" + preview._authoring.GetComponent<Psd2UIFormConverter>().uiFormName + ".prefab";
                 preview.TargetPath = destination + "/" + Path.GetFileName(preview.PreviewPath);
+                preview._previewNodeAddresses = preview.CollectPreviewNodeAddresses();
                 preview.BuildExtractions(patch.components ?? new List<AiOrganizerComponent>());
                 preview._candidateFingerprint = preview.CandidateFingerprint();
                 return preview;
@@ -105,10 +117,37 @@ namespace UGF.EditorTools.Psd2UGUI
                     : PsdCommonPrefabExtraction.Preview(PreviewPath, addresses.ToArray(), component.name));
             }
             // All groups pass preflight before the first temporary extraction changes the candidate.
+            // 状态提取会重建子层级；保留精确根映射，移除内部成员的旧地址。
+            foreach (var plan in Extractions.Where(plan => plan.UsesStates))
+                foreach (string root in plan.Sources)
+                    foreach (string id in _previewNodeAddresses.Where(pair => pair.Value.StartsWith(root + "/", StringComparison.Ordinal)).Select(pair => pair.Key).ToArray())
+                        _previewNodeAddresses.Remove(id);
             foreach (var plan in Extractions)
                 PsdCommonPrefabExtraction.Apply(plan.UsesStates
                     ? PsdCommonPrefabExtraction.PreviewStates(PreviewPath, plan.Sources.ToArray(), Path.GetFileNameWithoutExtension(plan.OutputPath))
                     : PsdCommonPrefabExtraction.Preview(PreviewPath, plan.Sources.ToArray(), Path.GetFileNameWithoutExtension(plan.OutputPath)));
+        }
+
+        internal Dictionary<string, string> PreviewNodeAddresses()
+        {
+            return new Dictionary<string, string>(_previewNodeAddresses, StringComparer.Ordinal);
+        }
+
+        Dictionary<string, string> CollectPreviewNodeAddresses()
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            var generated = AssetDatabase.LoadAssetAtPath<GameObject>(PreviewPath);
+            var metadata = _editor.generatedMetadataEntries.Single(entry => entry.PrefabAssetPath == PreviewPath).Entries;
+            foreach (var node in _authoring.GetComponentsInChildren<PsdLayerNode>(true))
+            {
+                string key = _editor.BuildNormalizedNodePath(node.gameObject, _authoring.transform);
+                var matches = metadata.Where(entry => entry.Key == key).ToArray();
+                if (matches.Length != 1 || !GlobalObjectId.TryParse(matches[0].GlobalObjectId, out var globalId) ||
+                    !(GlobalObjectId.GlobalObjectIdentifierToObjectSlow(globalId) is GameObject item) ||
+                    item.transform == generated.transform || !item.transform.IsChildOf(generated.transform)) continue;
+                result[LayerNodeIdUtility.GetStableNodeId(_editor, node)] = PsdCommonPrefabExtraction.GetNodeAddress(generated.transform, item.transform);
+            }
+            return result;
         }
 
         internal void Publish(Psd2UIFormConverterEditor current)
@@ -174,7 +213,7 @@ namespace UGF.EditorTools.Psd2UGUI
             }
         }
 
-        static void ValidateDestination(string path)
+        internal static void ValidateDestination(string path)
         {
             if (string.IsNullOrWhiteSpace(path) || !path.StartsWith("Assets/", StringComparison.Ordinal) ||
                 path.Contains("..") || path.Contains('\\') || Path.GetInvalidPathChars().Any(path.Contains) ||
@@ -202,6 +241,8 @@ namespace UGF.EditorTools.Psd2UGUI
         {
             if (_authoring != null) PrefabUtility.UnloadPrefabContents(_authoring);
             _authoring = null;
+            if (!string.IsNullOrEmpty(_workingSourcePath) && AssetDatabase.LoadMainAssetAtPath(_workingSourcePath) != null)
+                AssetDatabase.DeleteAsset(_workingSourcePath);
             if (!_published && !string.IsNullOrEmpty(_folder) && AssetDatabase.IsValidFolder(_folder)) AssetDatabase.DeleteAsset(_folder);
         }
     }

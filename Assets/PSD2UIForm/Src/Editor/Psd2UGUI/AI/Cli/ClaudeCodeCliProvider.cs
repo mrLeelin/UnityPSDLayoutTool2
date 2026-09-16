@@ -9,6 +9,11 @@ namespace ClaudeCodeCliProviderNamespace
     {
         internal static ClaudeCodeCliProvider s_ObfuscationSentinel;
 
+        internal ClaudeCodeCliProvider(AiProviderConnectionSettings connectionSettings = null)
+            : base(AiProviderKind.ClaudeCodeCli, connectionSettings)
+        {
+        }
+
         [SpecialName]
         public override string GetProviderId()
         {

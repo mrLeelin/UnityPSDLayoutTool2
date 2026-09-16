@@ -284,7 +284,7 @@
                                     "Selects the project PSDLayoutProjectSettings asset. Output rules, fonts, materials, and Common asset prefixes are edited in that asset Inspector.")),
                             GUILayout.Height(24)))
                     {
-                        PsdLayoutProjectSettingsAsset.OpenInInspector();
+                        PsdLayoutProjectSettingsAsset.OpenInWeb();
                     }
 
                     string hierarchyTargetPath;
@@ -344,10 +344,10 @@
                                 "在 Unity 编辑器中打开 AI 对话窗口，并把整理技能与当前目标 Prefab 发送给 AI。"),
                             true,
                             new GUIContent(
-                                Localize("复制AI提示词", "Copy AI Prompt"),
+                                PsdHierarchyOrganizerEntry.ApplyPlanButtonLabel,
                                 Localize(
-                                    "复制轻量版 prefab-hierarchy-cleanup 地址交接提示词，包含技能、计划格式、Prefab 和层级快照的本地文件地址。",
-                                    "Copy a lightweight prefab-hierarchy-cleanup handoff with local paths to the skill, plan format, Prefab, and hierarchy snapshot.")),
+                                    "读取终端生成的最新计划，重新校验后应用到当前 Prefab。",
+                                    "Validate and apply the latest terminal plan to the current Prefab.")),
                             true);
                         if (hierarchyActions.firstClicked)
                         {
@@ -360,18 +360,7 @@
 
                         if (hierarchyActions.secondClicked)
                         {
-                            string copyError;
-                            if (PsdHierarchyOrganizerEntry.TryCopyAiPrompt(assetPath, out copyError))
-                            {
-                                EditorUtility.DisplayDialog("PSDLayoutTool2",
-                                    Localize("AI 提示词已复制到剪贴板。", "AI prompt has been copied to clipboard."),
-                                    Localize("确定", "OK"));
-                            }
-                            else
-                            {
-                                EditorUtility.DisplayDialog("PSDLayoutTool2", copyError,
-                                    Localize("确定", "OK"));
-                            }
+                            PsdHierarchyOrganizerEntry.ApplyLatestPlan(assetPath);
                         }
                     }
 

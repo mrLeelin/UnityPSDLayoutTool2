@@ -849,19 +849,7 @@ namespace AiRecognitionResultParserNamespace
 
         private static GUIType ResolveNodeLabelType(object value, object value2)
         {
-            if (!UiTypeCompatibilityRules.TryParseBaseLayerType(value, out var result))
-            {
-                if (AiPatchValidator.TryParsePatchUiType(value, out var gUIType))
-                {
-                    gUIType = UiTypeCompatibilityRules.NormalizeUiTypeAlias(gUIType);
-                    if (gUIType == GUIType.Text && value2 != null && ((AiAnalysisNodeEntry)value2).isTextLayer)
-                    {
-                        return GUIType.Text;
-                    }
-                }
-                return UiTypeCompatibilityRules.InferBaseUiType(value2);
-            }
-            return result;
+            return UiTypeCompatibilityRules.ResolveBaseUiType((string)value, (AiAnalysisNodeEntry)value2);
         }
 
         private static GUIType InferBasicOwnerType(object value3, object value4, Dictionary<string, AiAnalysisNodeEntry> lookup)

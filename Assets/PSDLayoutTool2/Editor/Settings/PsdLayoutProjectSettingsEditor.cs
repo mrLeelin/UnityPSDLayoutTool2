@@ -33,15 +33,15 @@ namespace PsdLayoutTool2
             root.style.paddingRight = 10;
             root.style.paddingTop = 10;
             root.style.paddingBottom = 4;
-            root.style.backgroundColor = new Color(0.075f, 0.085f, 0.1f, 1f);
+            root.style.backgroundColor = new Color(0.11f, 0.12f, 0.14f, 1f);
             root.style.borderLeftWidth = 1;
             root.style.borderRightWidth = 1;
             root.style.borderTopWidth = 1;
             root.style.borderBottomWidth = 1;
-            root.style.borderLeftColor = new Color(0.24f, 0.48f, 0.8f, 1f);
-            root.style.borderRightColor = new Color(0.24f, 0.48f, 0.8f, 1f);
-            root.style.borderTopColor = new Color(0.24f, 0.48f, 0.8f, 1f);
-            root.style.borderBottomColor = new Color(0.24f, 0.48f, 0.8f, 1f);
+            root.style.borderLeftColor = new Color(0.36f, 0.75f, 0.65f, 1f);
+            root.style.borderRightColor = new Color(0.36f, 0.75f, 0.65f, 1f);
+            root.style.borderTopColor = new Color(0.36f, 0.75f, 0.65f, 1f);
+            root.style.borderBottomColor = new Color(0.36f, 0.75f, 0.65f, 1f);
             root.style.borderTopLeftRadius = 6;
             root.style.borderTopRightRadius = 6;
             root.style.borderBottomLeftRadius = 6;
@@ -114,15 +114,15 @@ namespace PsdLayoutTool2
             section.style.paddingRight = 10;
             section.style.paddingTop = 9;
             section.style.paddingBottom = 10;
-            section.style.backgroundColor = new Color(0.115f, 0.13f, 0.16f, 1f);
+            section.style.backgroundColor = new Color(0.15f, 0.165f, 0.19f, 1f);
             section.style.borderLeftWidth = 1;
             section.style.borderRightWidth = 1;
             section.style.borderTopWidth = 1;
             section.style.borderBottomWidth = 1;
-            section.style.borderLeftColor = new Color(0.2f, 0.23f, 0.29f, 1f);
-            section.style.borderRightColor = new Color(0.2f, 0.23f, 0.29f, 1f);
-            section.style.borderTopColor = new Color(0.2f, 0.23f, 0.29f, 1f);
-            section.style.borderBottomColor = new Color(0.2f, 0.23f, 0.29f, 1f);
+            section.style.borderLeftColor = new Color(0.27f, 0.30f, 0.35f, 1f);
+            section.style.borderRightColor = new Color(0.27f, 0.30f, 0.35f, 1f);
+            section.style.borderTopColor = new Color(0.27f, 0.30f, 0.35f, 1f);
+            section.style.borderBottomColor = new Color(0.27f, 0.30f, 0.35f, 1f);
             section.style.borderTopLeftRadius = 5;
             section.style.borderTopRightRadius = 5;
             section.style.borderBottomLeftRadius = 5;
@@ -190,25 +190,25 @@ namespace PsdLayoutTool2
             var choices = new List<string>
             {
                 "Native Unity (default)",
-                "uLoop runner (optional)",
+                "Unity CLI runner (optional)",
             };
-            int selectedIndex = snapshot.backend == PsdHierarchyCleanupExecutionBackend.UloopRunner ? 1 : 0;
+            int selectedIndex = snapshot.backend == PsdHierarchyCleanupExecutionBackend.UnityCliRunner ? 1 : 0;
             var backendField = new PopupField<string>("Backend", choices, selectedIndex)
             {
                 name = "psd-project-settings-cleanup-execution-backend",
-                tooltip = "Native Unity executes hierarchy cleanup, component Prefab extraction, and private asset renames directly in the current Editor. uLoop remains an optional alternate runner.",
+                tooltip = "Native Unity executes cleanup in the current Editor. Unity CLI remains an optional alternate runner.",
             };
             section.Add(new HelpBox(
                 selectedIndex == 0
                     ? "Native Unity is active. Hierarchy cleanup, component Prefab extraction, private asset renames, validation, and failure handling run in the current Unity Editor."
-                    : "uLoop runner is active for this project. It supports component extraction and asset renames.",
+                    : "Unity CLI runner is active for this project. It supports component extraction and asset renames.",
                 selectedIndex == 0 ? HelpBoxMessageType.Info : HelpBoxMessageType.Warning));
             section.Add(backendField);
             backendField.RegisterValueChangedCallback(change =>
             {
                 settings.SetHierarchyCleanupExecutionBackend(
                     choices.IndexOf(change.newValue) == 1
-                        ? PsdHierarchyCleanupExecutionBackend.UloopRunner
+                        ? PsdHierarchyCleanupExecutionBackend.UnityCliRunner
                         : PsdHierarchyCleanupExecutionBackend.NativeUnity);
                 ReplaceSection(section, CreateHierarchyCleanupExecutionSection(settings));
             });

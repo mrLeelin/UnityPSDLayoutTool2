@@ -13,6 +13,10 @@ The entire workflow is: identify UI types and functional grouping, propose meani
 
 Use real full node IDs from the input for existing nodes. To refer to the resulting carrier of an owner in your owners array, use "owner:" followed by that exact ownerId. Never invent generated node IDs, hierarchy paths or sibling indices. The host resolves owner references after planning and verifies the generated object identity.
 
+## Source capability constraints
+
+Visual meaning cannot override the source layer's capabilities. Before emitting owners, roles or nodeLabels, check the actual node's layerType and isTextLayer. Text and text roles require an actual TextLayer; raster artwork containing letters or numbers is still an Image when its layerType is Layer. Do not turn such artwork into Text, and do not invent a TextLayer. Preserve its pixels as Image even when the visible content reads like a label. Apply this constraint to the complete replacement result on every revision, not just to renamed nodes.
+
 ## renames
 
 Array of {"nodeId":"psd:12 or owner:owner_id","name":"RewardItem","reason":"..."}. Use concise meaningful names based on visible content and functional role. Preserve names already meaningful. Avoid renaming distinct concepts identically or inserting slash characters. Include proposed owner names so new functional groups have readable names.

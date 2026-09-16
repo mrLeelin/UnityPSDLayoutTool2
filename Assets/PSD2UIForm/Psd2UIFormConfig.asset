@@ -14,6 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   defaultTextType: 12
   defaultImageType: 1
+  defaultButtonComponentTypeName: UnityEngine.UI.Button
   forceUseTMP: 1
   uiFormTemplate: {fileID: 3548335019738977768, guid: 6d8c85c377edc7240ace111136f916b1, type: 3}
   rules:
@@ -391,5 +392,11 @@ MonoBehaviour:
   sharedAssetsOutput: Assets\Examples\Common
   sharedPrefabOutput: Assets\Examples\CommonPrefab
   aiProviderConfig:
-    provider: 1
+    provider: 2
     showCliWindow: 1
+    codexConnection:
+      useCustomApi: 0
+      customApiUrl: https://api.openai.com/v1
+    claudeConnection:
+      useCustomApi: 0
+      customApiUrl: https://api.anthropic.com/v1

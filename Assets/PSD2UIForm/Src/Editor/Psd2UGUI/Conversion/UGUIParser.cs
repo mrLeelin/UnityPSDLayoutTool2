@@ -199,6 +199,14 @@ namespace UGF.EditorTools.Psd2UGUI
         [HideInInspector]
         private GUIType defaultImageType = GUIType.Image;
 
+        [SerializeField, HideInInspector]
+        private string defaultButtonComponentTypeName = "UnityEngine.UI.Button";
+
+        internal Type GetDefaultButtonComponentType()
+        {
+            return PsdButtonComponentPolicy.Resolve(defaultButtonComponentTypeName);
+        }
+
         [SerializeField]
         [HideInInspector]
         private bool forceUseTMP;

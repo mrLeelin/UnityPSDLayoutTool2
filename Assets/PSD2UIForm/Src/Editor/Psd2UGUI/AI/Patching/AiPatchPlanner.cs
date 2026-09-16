@@ -165,8 +165,15 @@ namespace AiPatchPlannerNamespace
                     {
                         if (aiRecognitionCombinedResultDocument.organizerVersion != "1.0")
                         { result2 = "不支持的整理方案版本。"; return false; }
-                        var owners = list.ToDictionary(owner => "owner:" + owner._ownerId, owner => owner._targetNodeId, StringComparer.Ordinal);
-                        Func<string, string> resolve = id => id != null && owners.TryGetValue(id, out var target) ? target : id;
+                        var owners = list.ToDictionary(owner => "owner:" + owner._ownerId, owner => owner._targetNodeId, StringComparer.OrdinalIgnoreCase);
+                        Func<string, string> resolve = id =>
+                        {
+                            if (id == null) return null;
+                            if (owners.TryGetValue(id, out var target)) return target;
+                            // Accept an exact bare owner ID, but never steal an existing source-node ID.
+                            if (!dictionary.ContainsKey(id) && owners.TryGetValue("owner:" + id, out target)) return target;
+                            return id;
+                        };
                         foreach (var rename in aiRecognitionCombinedResultDocument.renames ?? new List<AiOrganizerRename>())
                         {
                             if (rename == null) { result2 = "改名建议为空。"; return false; }
@@ -311,9 +318,8 @@ namespace AiPatchPlannerNamespace
                 if (aiAnalysisNodeEntry != null && !string.IsNullOrWhiteSpace(aiAnalysisNodeEntry.id))
                 {
                     GUIType currentUiType = GetCurrentUiType(aiAnalysisNodeEntry);
-                    AiRecognitionNodeLabelEntry value;
-                    GUIType gUIType;
-                    GUIType plannedUiType = ((!dictionary2.TryGetValue(aiAnalysisNodeEntry.id, out value) || value == null || !UiTypeCompatibilityRules.TryParseBaseLayerType(value.labelType, out gUIType)) ? UiTypeCompatibilityRules.InferBaseUiType(aiAnalysisNodeEntry) : gUIType);
+                    dictionary2.TryGetValue(aiAnalysisNodeEntry.id, out var value);
+                    GUIType plannedUiType = UiTypeCompatibilityRules.ResolveBaseUiType(value?.labelType, aiAnalysisNodeEntry);
                     dictionary[aiAnalysisNodeEntry.id] = new NodeTypeChange
                     {
                         _node = aiAnalysisNodeEntry,

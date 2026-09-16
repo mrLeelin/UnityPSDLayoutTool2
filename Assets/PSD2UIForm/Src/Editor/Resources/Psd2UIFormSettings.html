@@ -260,6 +260,93 @@
             line-height: 1.6;
         }
 
+        .ai-provider-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .ai-provider-card {
+            appearance: none;
+            width: 100%;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            text-align: left;
+            color: #1a1a1a;
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            cursor: pointer;
+            font: inherit;
+            transition: border-color .2s, box-shadow .2s, background .2s;
+        }
+
+        .ai-provider-card:hover,
+        .ai-provider-card.is-selected {
+            background: #f0fdfa;
+            border-color: #14b8a6;
+        }
+
+        .ai-provider-card.is-selected {
+            box-shadow: 0 0 0 3px rgba(20, 184, 166, .14);
+        }
+
+        .ai-provider-mark {
+            flex: 0 0 auto;
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            border-radius: 10px;
+            color: #ffffff;
+            font-size: 18px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #14b8a6, #0f766e);
+        }
+
+        .ai-provider-copy { min-width: 0; flex: 1; }
+        .ai-provider-name { display: block; font-size: 16px; font-weight: 700; }
+        .ai-provider-description { display: block; margin-top: 2px; font-size: 13px; color: #6b7280; }
+        .ai-provider-selected { font-size: 12px; font-weight: 700; color: #0f766e; }
+
+        .ai-connection-mode {
+            display: inline-flex;
+            margin: 24px 0 16px;
+            padding: 3px;
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            border-radius: 9px;
+        }
+
+        .ai-mode-button {
+            padding: 8px 20px;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: #4b5563;
+            cursor: pointer;
+            font: inherit;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .ai-mode-button.is-selected {
+            color: #ffffff;
+            background: #14b8a6;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, .16);
+        }
+
+        .ai-custom-fields { display: none; }
+        .ai-custom-fields.visible { display: block; }
+        .ai-api-row { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; }
+
+        @media (max-width: 600px) {
+            .ai-provider-grid { grid-template-columns: 1fr; }
+            .ai-api-row { grid-template-columns: 1fr; }
+        }
+
         .toggle-row {
             display: flex;
             align-items: center;
@@ -525,6 +612,11 @@
                 <span class="form-help">Image 支持九宫格和填充模式（GUIType: Image = 1 / RawImage = 2）</span>
             </div>
 
+            <div class="form-group">
+                <label class="form-label" for="defaultButtonComponentTypeName">默认 Button 组件类型</label>
+                <input class="form-input" id="defaultButtonComponentTypeName" value="UnityEngine.UI.Button">
+                <span class="form-help">填写 MonoBehaviour 完整类名，适用于 Button 和 TMPButton。独立脚本需自行实现点击逻辑。</span>
+            </div>
             <div class="toggle-row">
                 <div class="toggle-label">
                     <span class="toggle-label-main">强制使用 TextMeshPro</span>
@@ -566,6 +658,78 @@
                 </div>
                 <label class="toggle">
                     <input type="checkbox" id="convertZh2En">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- AI Settings Card -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon green">✦</div>
+                <div class="card-title">
+                    <h2>AI 设置</h2>
+                    <p>选择 AI 智能识别与中文名转英文名使用的本机智能体</p>
+                </div>
+            </div>
+
+            <div class="ai-provider-grid" role="radiogroup" aria-label="AI 智能体">
+                <button class="ai-provider-card" type="button" data-ai-provider="1" role="radio" aria-checked="false" onclick="selectAiProvider(1)">
+                    <span class="ai-provider-mark">C</span>
+                    <span class="ai-provider-copy">
+                        <span class="ai-provider-name">Codex</span>
+                        <span class="ai-provider-description">使用本机 Codex CLI</span>
+                    </span>
+                    <span class="ai-provider-selected">已选择</span>
+                </button>
+                <button class="ai-provider-card" type="button" data-ai-provider="2" role="radio" aria-checked="false" onclick="selectAiProvider(2)">
+                    <span class="ai-provider-mark">C</span>
+                    <span class="ai-provider-copy">
+                        <span class="ai-provider-name">Claude Code</span>
+                        <span class="ai-provider-description">使用本机 Claude Code CLI</span>
+                    </span>
+                    <span class="ai-provider-selected">已选择</span>
+                </button>
+            </div>
+            <span class="form-help">请确保所选 CLI 已登录且其模型具备本次识别所需的多模态能力。</span>
+
+            <div class="ai-connection-mode" role="radiogroup" aria-label="AI 连接方式">
+                <button class="ai-mode-button" type="button" data-ai-mode="default" role="radio" onclick="selectAiConnectionMode('default')">默认</button>
+                <button class="ai-mode-button" type="button" data-ai-mode="custom" role="radio" onclick="selectAiConnectionMode('custom')">自定义 API</button>
+            </div>
+
+            <div class="ai-custom-fields" id="aiCustomFields">
+                <div class="ai-api-row">
+                    <div class="form-group">
+                        <label class="form-label" for="aiApiUrl">API 地址</label>
+                        <input type="url" class="form-input" id="aiApiUrl" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="aiApiKey">API Key</label>
+                        <input type="password" class="form-input" id="aiApiKey" placeholder="输入 API Key">
+                        <span class="form-help" id="aiApiKeyStatus"></span>
+                    </div>
+                </div>
+                <div class="toggle-row">
+                    <div class="toggle-label">
+                        <span class="toggle-label-main">清除已保存的 API Key</span>
+                        <span class="toggle-label-sub">保存后会删除当前智能体的本机加密凭据</span>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="clearAiApiKey">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <span class="form-help">API Key 只保存为当前 Windows 用户可解密的本地凭据，不会写入项目资源或导出配置。</span>
+            </div>
+
+            <div class="toggle-row">
+                <div class="toggle-label">
+                    <span class="toggle-label-main">显示 AI CLI 窗口</span>
+                    <span class="toggle-label-sub">执行 AI 智能识别时显示本机 CLI 过程</span>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="showCliWindow" checked>
                     <span class="toggle-slider"></span>
                 </label>
             </div>
@@ -620,16 +784,79 @@
             }
         }
 
+        function selectAiProvider(provider) {
+            syncAiConnectionDraft();
+            const selectedProvider = provider === 2 ? 2 : 1;
+            window.__psd2uiformAiProvider = selectedProvider;
+            document.querySelectorAll('[data-ai-provider]').forEach(card => {
+                const selected = Number(card.dataset.aiProvider) === selectedProvider;
+                card.classList.toggle('is-selected', selected);
+                card.setAttribute('aria-checked', selected ? 'true' : 'false');
+            });
+            renderAiConnection();
+        }
+
+        function getAiConnection(provider) {
+            const selectedProvider = provider === 2 ? 2 : 1;
+            const connections = window.__psd2uiformAiConnections || {};
+            if (!connections[selectedProvider]) {
+                connections[selectedProvider] = {
+                    mode: 'default',
+                    url: selectedProvider === 2 ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1',
+                    keyConfigured: false
+                };
+                window.__psd2uiformAiConnections = connections;
+            }
+            return connections[selectedProvider];
+        }
+
+        function syncAiConnectionDraft() {
+            if (!window.__psd2uiformAiProvider) return;
+            const connection = getAiConnection(window.__psd2uiformAiProvider);
+            const url = document.getElementById('aiApiUrl');
+            if (url) connection.url = url.value;
+        }
+
+        function selectAiConnectionMode(mode) {
+            const connection = getAiConnection(window.__psd2uiformAiProvider);
+            connection.mode = mode === 'custom' ? 'custom' : 'default';
+            renderAiConnection();
+        }
+
+        function renderAiConnection() {
+            const connection = getAiConnection(window.__psd2uiformAiProvider);
+            const custom = connection.mode === 'custom';
+            document.querySelectorAll('[data-ai-mode]').forEach(button => {
+                const selected = button.dataset.aiMode === connection.mode;
+                button.classList.toggle('is-selected', selected);
+                button.setAttribute('aria-checked', selected ? 'true' : 'false');
+            });
+            document.getElementById('aiCustomFields').classList.toggle('visible', custom);
+            document.getElementById('aiApiUrl').value = connection.url || '';
+            const apiKey = document.getElementById('aiApiKey');
+            apiKey.value = '';
+            apiKey.placeholder = connection.keyConfigured ? '已保存（输入以替换）' : '输入 API Key';
+            document.getElementById('aiApiKeyStatus').textContent = connection.keyConfigured ? '已保存本机加密凭据' : '尚未保存 API Key';
+            document.getElementById('clearAiApiKey').checked = false;
+        }
+
         // Load settings from Unity
         function loadSettings(config) {
             document.getElementById('autoCropNineSlice').checked = config.autoCropNineSlice === true;
             applySelectValue('defaultTextType', config.defaultTextType !== undefined ? config.defaultTextType : 12, '默认文本类型');
             applySelectValue('defaultImageType', config.defaultImageType !== undefined ? config.defaultImageType : 1, '默认图片类型');
+            document.getElementById('defaultButtonComponentTypeName').value = config.defaultButtonComponentTypeName || 'UnityEngine.UI.Button';
             document.getElementById('forceUseTMP').checked = config.forceUseTMP !== undefined ? config.forceUseTMP : true;
             document.getElementById('sharedAssetsOutput').value = config.sharedAssetsOutput || '';
             document.getElementById('sharedPrefabOutput').value = config.sharedPrefabOutput || '';
             document.getElementById('convertZh2En').checked = config.convertZh2En === true;
             document.getElementById('readmeDoc').value = config.readmeDoc || '';
+            window.__psd2uiformAiConnections = {
+                1: { mode: config.codexUseCustomApi ? 'custom' : 'default', url: config.codexApiUrl || 'https://api.openai.com/v1', keyConfigured: config.codexApiKeyConfigured === true },
+                2: { mode: config.claudeUseCustomApi ? 'custom' : 'default', url: config.claudeApiUrl || 'https://api.anthropic.com/v1', keyConfigured: config.claudeApiKeyConfigured === true }
+            };
+            selectAiProvider(config.aiProvider === 2 ? 2 : 1);
+            document.getElementById('showCliWindow').checked = config.showCliWindow !== false;
 
             // 标记"已经拿到 Unity 的真实配置"，之后的保存才被允许
             window.__psd2uiformLoaded = true;
@@ -640,15 +867,28 @@
 
         // Collect current settings
         function collectSettings() {
+            syncAiConnectionDraft();
+            const codex = getAiConnection(1);
+            const claude = getAiConnection(2);
+            const activeConnection = getAiConnection(window.__psd2uiformAiProvider);
             return {
                 autoCropNineSlice: document.getElementById('autoCropNineSlice').checked,
                 defaultTextType: parseInt(document.getElementById('defaultTextType').value),
                 defaultImageType: parseInt(document.getElementById('defaultImageType').value),
+                defaultButtonComponentTypeName: document.getElementById('defaultButtonComponentTypeName').value,
                 forceUseTMP: document.getElementById('forceUseTMP').checked,
                 sharedAssetsOutput: document.getElementById('sharedAssetsOutput').value,
                 sharedPrefabOutput: document.getElementById('sharedPrefabOutput').value,
                 convertZh2En: document.getElementById('convertZh2En').checked,
-                readmeDoc: document.getElementById('readmeDoc').value
+                readmeDoc: document.getElementById('readmeDoc').value,
+                aiProvider: window.__psd2uiformAiProvider === 2 ? 2 : 1,
+                showCliWindow: document.getElementById('showCliWindow').checked,
+                codexUseCustomApi: codex.mode === 'custom',
+                codexApiUrl: codex.url,
+                claudeUseCustomApi: claude.mode === 'custom',
+                claudeApiUrl: claude.url,
+                apiKey: document.getElementById('aiApiKey').value,
+                clearApiKey: activeConnection.mode === 'custom' && document.getElementById('clearAiApiKey').checked
             };
         }
 
@@ -801,7 +1041,9 @@
                     sharedAssetsOutput: '',
                     sharedPrefabOutput: '',
                     convertZh2En: false,
-                    readmeDoc: ''
+                    readmeDoc: '',
+                    aiProvider: 1,
+                    showCliWindow: true
                 });
             }
         }

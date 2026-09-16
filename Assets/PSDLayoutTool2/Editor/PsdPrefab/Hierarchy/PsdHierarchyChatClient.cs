@@ -1165,7 +1165,7 @@ namespace PsdLayoutTool2
                 .Where(node =>
                     !string.IsNullOrWhiteSpace(node.Value<string>("id")) &&
                     !string.IsNullOrWhiteSpace(node.Value<string>("parentId")) &&
-                    node.Value<int?>("childCount") == 0)
+                    node.Value<int?>("childCount") == 0 && !IsInsideNestedPrefab(node, nodesById))
                 .GroupBy(node => node.Value<string>("parentId"), StringComparer.Ordinal)
                 .OrderBy(group => group.Key, StringComparer.Ordinal);
 
@@ -1243,6 +1243,18 @@ namespace PsdLayoutTool2
             string name = node?.Value<string>("name")?.Trim();
             return !string.IsNullOrEmpty(name) && name.Length > 2 &&
                    name[0] == '[' && name[name.Length - 1] == ']';
+        }
+
+        private static bool IsInsideNestedPrefab(JObject node, IReadOnlyDictionary<string, JObject> nodesById)
+        {
+            JObject current = node;
+            while (current != null)
+            {
+                if (!string.IsNullOrEmpty(current.Value<string>("nestedPrefabAssetPath"))) return true;
+                string parentId = current.Value<string>("parentId");
+                if (string.IsNullOrEmpty(parentId) || !nodesById.TryGetValue(parentId, out current)) break;
+            }
+            return false;
         }
 
         private static List<JObject> ResolveFamilyNodes(

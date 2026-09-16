@@ -14,7 +14,7 @@ namespace PsdLayoutTool2
 
     /// <summary>
     /// Executes the reviewed cleanup payload inside the current Unity Editor
-    /// without starting uLoop. The payload renderer remains shared with uLoop
+    /// without starting the Unity CLI. The payload renderer remains shared with the Unity CLI
     /// so both backends execute the same validated Unity operations.
     /// </summary>
     internal static class PsdHierarchyNativePayloadExecutor

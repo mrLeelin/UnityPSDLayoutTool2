@@ -1,6 +1,6 @@
 .psd-settings-window {
     flex-grow: 1;
-    background-color: rgb(15, 18, 21);
+    background-color: rgb(28, 31, 36);
 }
 
 .psd-settings-window__host,
@@ -9,5 +9,64 @@
 }
 
 .psd-settings-window__scroll .unity-scroll-view__content-container {
-    padding: 6px;
+    padding: 18px 22px 24px 22px;
+}
+
+/* Give the generated inspector a consistent, readable surface. */
+.psd-settings-window__scroll .unity-base-field {
+    margin-top: 5px;
+    margin-bottom: 7px;
+    min-height: 28px;
+}
+
+.psd-settings-window__scroll .unity-base-field__label {
+    min-width: 168px;
+    color: rgb(191, 203, 221);
+    -unity-font-style: normal;
+}
+
+.psd-settings-window__scroll .unity-base-field__input {
+    min-height: 28px;
+    padding-left: 9px;
+    padding-right: 9px;
+    background-color: rgb(35, 39, 46);
+    border-top-width: 1px;
+    border-right-width: 1px;
+    border-bottom-width: 1px;
+    border-left-width: 1px;
+    border-top-color: rgb(70, 76, 86);
+    border-right-color: rgb(70, 76, 86);
+    border-bottom-color: rgb(70, 76, 86);
+    border-left-color: rgb(70, 76, 86);
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-left-radius: 5px;
+    border-bottom-right-radius: 5px;
+}
+
+.psd-settings-window__scroll .unity-base-field__input:hover {
+    border-top-color: rgb(91, 191, 166);
+    border-right-color: rgb(91, 191, 166);
+    border-bottom-color: rgb(91, 191, 166);
+    border-left-color: rgb(91, 191, 166);
+}
+
+.psd-settings-window__scroll .unity-help-box {
+    margin-top: 8px;
+    margin-bottom: 10px;
+    padding: 9px 11px;
+    background-color: rgb(39, 43, 50);
+    border-left-color: rgb(91, 191, 166);
+}
+
+.psd-settings-window__scroll .unity-button {
+    min-height: 27px;
+    margin-top: 5px;
+    margin-bottom: 5px;
+    padding-left: 12px;
+    padding-right: 12px;
+}
+
+.psd-settings-window__scroll .unity-popup-field__input {
+    background-color: rgb(35, 39, 46);
 }

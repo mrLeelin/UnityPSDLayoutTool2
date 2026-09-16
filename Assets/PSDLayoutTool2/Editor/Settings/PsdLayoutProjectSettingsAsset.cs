@@ -79,6 +79,13 @@ namespace PsdLayoutTool2
             return settings;
         }
 
+        internal static PsdLayoutProjectSettings OpenInWeb()
+        {
+            PsdLayoutProjectSettings settings = GetOrCreate();
+            PsdLayoutProjectSettingsWebServer.Open(settings);
+            return settings;
+        }
+
         private static PsdLayoutProjectSettingsMigrationSnapshot ReadLegacyProjectSettings()
         {
             string legacyPath = Path.Combine(

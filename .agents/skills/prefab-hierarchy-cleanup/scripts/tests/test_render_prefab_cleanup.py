@@ -598,6 +598,61 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertLess(generated.index(move), generated.index(tighten))
         self.assertLess(generated.index(tighten), generated.index('return "PREFLIGHT_OK";'))
 
+    def test_preflight_captures_rename_targets_before_moves_and_applies_renames_before_contracts(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        raw_plan["moves"] = [
+            {
+                "source": "RewardPanel/Root/Title",
+                "destination": "RewardPanel/Root",
+                "siblingIndex": 0,
+            }
+        ]
+        raw_plan["renames"] = [
+            {"target": "RewardPanel/Root/Title", "name": "TitleLabel"}
+        ]
+
+        generated = render(normalize_plan(raw_plan, "preflight"), "preflight")
+
+        capture = 'var preflightRenameTarget0 = FindByPath(root, "RewardPanel/Root/Title");'
+        rename = 'preflightRenameTarget0.name = "TitleLabel";'
+        move = 'preflightMoveSource0.SetParent(preflightMoveDestination0, true);'
+        self.assertIn(capture, generated)
+        self.assertIn(rename, generated)
+        self.assertLess(generated.index(capture), generated.index(move))
+        self.assertLess(generated.index(move), generated.index(rename))
+
+    def test_preflight_enforces_final_hierarchy_bounds_and_name_contracts(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        raw_plan["verify"]["requireEnglishNames"] = True
+        raw_plan["verify"]["directChildren"] = [
+            {"path": "RewardPanel/[Screen]/[Content]", "children": ["TitleLabel"]}
+        ]
+        raw_plan["verify"]["tightBounds"] = [
+            {"path": "RewardPanel/[Screen]/[Content]"}
+        ]
+        generated = render(normalize_plan(raw_plan, "preflight"), "preflight")
+
+        self.assertIn('CollectInvalidNames(root.transform, preflightInvalidNames, System.IO.Path.GetFileNameWithoutExtension(prefabPath));', generated)
+        self.assertIn('AssertDirectChildren(preflightDirectChildrenNode0, new string[] { "TitleLabel" }, "RewardPanel/[Screen]/[Content]");', generated)
+        self.assertIn('AssertTightBounds(FindByPath(root, "RewardPanel/[Screen]/[Content]").GetComponent<RectTransform>(), "RewardPanel/[Screen]/[Content]");', generated)
+        self.assertLess(generated.index("preflightInvalidNames"), generated.index('return "PREFLIGHT_OK";'))
+        self.assertLess(generated.index("preflightDirectChildrenNode0"), generated.index('return "PREFLIGHT_OK";'))
+        self.assertLess(generated.index('AssertTightBounds(FindByPath(root'), generated.index('return "PREFLIGHT_OK";'))
+
+    def test_preflight_root_name_is_exempt_only_when_it_matches_prefab_filename(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        raw_plan["verify"]["requireEnglishNames"] = True
+        generated = render(normalize_plan(raw_plan, "preflight"), "preflight")
+
+        self.assertIn("if (!(node.parent == null && string.Equals(node.name, rootName, StringComparison.Ordinal)) && IsNonSemanticObjectName(node.name))", generated)
+        self.assertIn("System.IO.Path.GetFileNameWithoutExtension(prefabPath)", generated)
+
     def test_tight_bounds_removes_only_empty_generated_wrappers(self):
         raw_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
@@ -764,6 +819,71 @@ class RenderPrefabCleanupTests(unittest.TestCase):
                     )
                 if requires_member_check:
                     self.assertIn(f"AssertDirectSourceMembers({variable},", generated)
+
+    def test_stateful_preflight_keeps_source_member_contract_enabled(self):
+        plan = self.load_plan("seven-day-task-view-day-reward-items.in-place.plan.json")
+        extraction = plan["statefulComponentExtractions"][0]
+        plan["componentFamilyDecisions"] = [
+            {
+                "parent": extraction["template"].rsplit("/", 1)[0],
+                "sources": [instance["source"] for instance in extraction["instances"]],
+                "mode": "stateful",
+                "extractionId": extraction["id"],
+                "reason": "The repeated units have common members and explicit states.",
+            }
+        ]
+
+        generated = render(normalize_plan(plan, "preflight"), "preflight")
+
+        self.assertNotIn("if (false) AssertDirectSourceMembers", generated)
+        self.assertIn(
+            "AssertDirectSourceMembers(preflightStatefulInstance0_0,",
+            generated,
+        )
+
+    def test_preflight_only_skips_generic_extraction_source_paths(self):
+        plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+        sources = ["RewardPanel/Root/AlphaUnit", "RewardPanel/Root/BetaUnit"]
+        plan["componentExtractions"] = [
+            {
+                "id": "arbitrary_family",
+                "template": sources[0],
+                "assetPath": "Assets/UI/Common/ArbitraryFamily.prefab",
+                "instances": sources,
+            }
+        ]
+        plan["componentFamilyDecisions"] = [
+            {
+                "parent": "RewardPanel/Root",
+                "sources": sources,
+                "mode": "component",
+                "extractionId": "arbitrary_family",
+                "reason": "Both arbitrary-name units share one reusable structure.",
+            }
+        ]
+        plan["verify"]["directChildren"] = [
+            {
+                "path": sources[0],
+                "children": ["PostExtractionChild"],
+            },
+            {
+                "path": "RewardPanel/Root",
+                "children": ["AlphaUnit", "BetaUnit"],
+            },
+        ]
+        normalized = normalize_plan(plan, "preflight")
+        preflight = render(normalized, "preflight")
+        verification = render(normalize_plan(plan, "verify"), "verify")
+
+        self.assertNotIn("preflightDirectChildrenNode0", preflight)
+        self.assertIn(
+            'AssertDirectChildren(directChildrenNode0, new string[] { "PostExtractionChild" }, "RewardPanel/Root/AlphaUnit");',
+            verification,
+        )
+        self.assertNotIn("/[Day_", preflight)
+        self.assertNotIn("/[Task_", preflight)
 
     def test_variant_failures_include_actionable_structure_details(self):
         plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")

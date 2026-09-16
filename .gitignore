@@ -22,9 +22,7 @@ Temp/
 # Ignore the StyleCop files
 Settings.StyleCop
 StyleCop.Cache
-.superpowers
 .omx/plans
-docs/superpowers/
 
 # WorkBuddy 工作区数据（记忆、改动备份），不进版本库
 .workbuddy/

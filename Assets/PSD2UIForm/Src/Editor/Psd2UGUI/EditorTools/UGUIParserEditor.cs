@@ -18,6 +18,7 @@ namespace UGF.EditorTools.Psd2UGUI
             public GUIType defaultTextType;
 
             public GUIType defaultImageType;
+            public string defaultButtonComponentTypeName = "UnityEngine.UI.Button";
 
             public bool forceUseTMP;
 
@@ -114,8 +115,6 @@ namespace UGF.EditorTools.Psd2UGUI
 
         private SerializedProperty sharedPrefabOutput;
 
-        private SerializedProperty aiProviderConfig;
-
         private string[] textTypesDisplay;
 
         private int[] textTypes;
@@ -136,7 +135,6 @@ namespace UGF.EditorTools.Psd2UGUI
             // REMOVED: nineSliceBorderTolerance = ... (九宫功能已迁移)
             sharedAssetsOutput = ((Editor)this).serializedObject.FindProperty("sharedAssetsOutput");
             sharedPrefabOutput = ((Editor)this).serializedObject.FindProperty("sharedPrefabOutput");
-            aiProviderConfig = ((Editor)this).serializedObject.FindProperty("aiProviderConfig");
             GUIType[] array = new GUIType[2]
             {
                 GUIType.Text,
@@ -249,6 +247,13 @@ namespace UGF.EditorTools.Psd2UGUI
             {
                 ((IDisposable)val)?.Dispose();
             }
+            var buttonType = serializedObject.FindProperty("defaultButtonComponentTypeName");
+            buttonType.stringValue = EditorGUILayout.TextField("默认 Button 组件类型", buttonType.stringValue);
+            var buttonScript = EditorGUILayout.ObjectField("选择 Button 脚本", null, typeof(MonoScript), false) as MonoScript;
+            if (buttonScript != null) buttonType.stringValue = buttonScript.GetClass()?.FullName ?? buttonScript.name;
+            try { PsdButtonComponentPolicy.Resolve(buttonType.stringValue); }
+            catch (Exception error) { EditorGUILayout.HelpBox(error.Message, MessageType.Error); }
+            EditorGUILayout.HelpBox("适用于 Button 和 TMPButton。可填写完整类名或选择脚本。Button 子类保留按钮设置；独立 MonoBehaviour 需自行实现点击逻辑。", MessageType.Info);
             val = new EditorGUILayout.HorizontalScope(Array.Empty<GUILayoutOption>());
             try
             {
@@ -301,26 +306,8 @@ namespace UGF.EditorTools.Psd2UGUI
             {
                 ((IDisposable)val)?.Dispose();
             }
-            DrawAiProviderConfig();
             ((Editor)this).serializedObject.ApplyModifiedProperties();
             base.OnInspectorGUI();
-        }
-
-        private void DrawAiProviderConfig()
-        {
-            if (aiProviderConfig != null)
-            {
-                SerializedProperty providerProperty = aiProviderConfig.FindPropertyRelative("provider");
-                SerializedProperty val = aiProviderConfig.FindPropertyRelative("showCliWindow");
-                AiProviderKind aiProviderKind = ReadAiProviderKind(providerProperty);
-                AiProviderKind provider = (AiProviderKind)(object)EditorGUILayout.EnumPopup("AI 智能识别", (Enum)aiProviderKind, Array.Empty<GUILayoutOption>());
-                WriteAiProviderKind(providerProperty, provider);
-                if (val != null)
-                {
-                    EditorGUILayout.PropertyField(val, new GUIContent("CLI显示窗口"), Array.Empty<GUILayoutOption>());
-                }
-                EditorGUILayout.HelpBox("注意: AI智能识别是调用本机已安装配置的Codex、Claude Code、Open Code, 识别需要模型拥有多模态能力(根据图像识别类型), 识别准确度与AI模型能力有关", (MessageType)1);
-            }
         }
 
         private void ImportConfigFromJson(SerializedObject serializedObject)
@@ -341,6 +328,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 }
                 serializedObject.FindProperty("defaultTextType").intValue = (int)uGUIParserSnapshot.defaultTextType;
                 serializedObject.FindProperty("defaultImageType").intValue = (int)uGUIParserSnapshot.defaultImageType;
+                serializedObject.FindProperty("defaultButtonComponentTypeName").stringValue = uGUIParserSnapshot.defaultButtonComponentTypeName ?? "UnityEngine.UI.Button";
                 serializedObject.FindProperty("forceUseTMP").boolValue = uGUIParserSnapshot.forceUseTMP;
                 serializedObject.FindProperty("readmeDoc").stringValue = uGUIParserSnapshot.readmeDoc;
                 serializedObject.FindProperty("convertZh2En").boolValue = uGUIParserSnapshot.convertZh2En;
@@ -437,6 +425,7 @@ namespace UGF.EditorTools.Psd2UGUI
             }
             uGUIParserSnapshot.defaultTextType = (GUIType)serializedObject.FindProperty("defaultTextType").intValue;
             uGUIParserSnapshot.defaultImageType = (GUIType)serializedObject.FindProperty("defaultImageType").intValue;
+            uGUIParserSnapshot.defaultButtonComponentTypeName = serializedObject.FindProperty("defaultButtonComponentTypeName").stringValue;
             uGUIParserSnapshot.forceUseTMP = serializedObject.FindProperty("forceUseTMP").boolValue;
             uGUIParserSnapshot.readmeDoc = serializedObject.FindProperty("readmeDoc").stringValue;
             uGUIParserSnapshot.convertZh2En = serializedObject.FindProperty("convertZh2En").boolValue;

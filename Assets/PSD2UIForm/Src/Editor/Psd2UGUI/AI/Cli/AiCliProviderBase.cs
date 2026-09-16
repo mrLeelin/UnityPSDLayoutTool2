@@ -464,6 +464,21 @@ namespace AiCliProviderBaseNamespace
 
         private static AiCliProviderBase s_ObfuscationSentinel;
 
+        private readonly AiProviderKind providerKind;
+
+        private readonly AiProviderConnectionSettings connectionSettings;
+
+        protected AiCliProviderBase()
+            : this(AiProviderKind.CodexCli, new AiProviderConnectionSettings())
+        {
+        }
+
+        protected AiCliProviderBase(AiProviderKind providerKind, AiProviderConnectionSettings connectionSettings)
+        {
+            this.providerKind = providerKind;
+            this.connectionSettings = connectionSettings ?? new AiProviderConnectionSettings();
+        }
+
         [SpecialName]
         public abstract string GetProviderId();
 
@@ -569,6 +584,7 @@ namespace AiCliProviderBaseNamespace
                     StandardOutputEncoding = _utf8NoBom,
                     StandardErrorEncoding = _utf8NoBom
                 };
+                ApplyCustomApiEnvironment(processStartInfo);
                 AiJobFileStore.LogDebug(aiJobContext, $"ProcessStartInfo prepared. workingDirectory={processStartInfo.WorkingDirectory}, redirectStdIn={processStartInfo.RedirectStandardInput}");
                 try
                 {
@@ -771,7 +787,7 @@ namespace AiCliProviderBaseNamespace
         private bool ShouldUseVisibleCliExecution(AiAnalysisRequest value)
         {
             AiProviderCapabilities aiProviderCapabilities = GetCapabilities();
-            if (aiProviderCapabilities != null && value != null && value.AllowVisibleCliExecution && aiProviderCapabilities.UsesVisibleCliExecution)
+            if (!connectionSettings.useCustomApi && aiProviderCapabilities != null && value != null && value.AllowVisibleCliExecution && aiProviderCapabilities.UsesVisibleCliExecution)
             {
                 if (!IsWindowsEditor())
                 {
@@ -970,6 +986,30 @@ namespace AiCliProviderBaseNamespace
                 UseShellExecute = true,
                 CreateNoWindow = false
             };
+        }
+
+        private void ApplyCustomApiEnvironment(ProcessStartInfo processStartInfo)
+        {
+            if (!connectionSettings.useCustomApi) return;
+
+            Uri endpoint;
+            if (!Uri.TryCreate(connectionSettings.customApiUrl, UriKind.Absolute, out endpoint)
+                || (endpoint.Scheme != Uri.UriSchemeHttps && !(endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback)))
+            {
+                throw new InvalidOperationException("自定义 API 地址无效：请填写 HTTPS 地址；仅本机回环地址允许 HTTP。");
+            }
+
+            string apiKey = AiProviderSecretStore.ReadRequired(providerKind);
+            if (providerKind == AiProviderKind.ClaudeCodeCli)
+            {
+                processStartInfo.EnvironmentVariables["ANTHROPIC_BASE_URL"] = endpoint.AbsoluteUri.TrimEnd('/');
+                processStartInfo.EnvironmentVariables["ANTHROPIC_API_KEY"] = apiKey;
+            }
+            else
+            {
+                processStartInfo.EnvironmentVariables["OPENAI_BASE_URL"] = endpoint.AbsoluteUri.TrimEnd('/');
+                processStartInfo.EnvironmentVariables["OPENAI_API_KEY"] = apiKey;
+            }
         }
 
         private string BuildVisibleCliRunnerScript(AiJobContext value, string text2, string text3, string text4, AiAnalysisRequest value2)

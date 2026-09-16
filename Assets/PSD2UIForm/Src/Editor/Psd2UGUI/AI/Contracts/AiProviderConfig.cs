@@ -9,6 +9,19 @@ namespace UGF.EditorTools.Psd2UGUI
 
         public bool showCliWindow = true;
 
+        public AiProviderConnectionSettings codexConnection = new AiProviderConnectionSettings();
+
+        public AiProviderConnectionSettings claudeConnection = new AiProviderConnectionSettings();
+
+        internal AiProviderConnectionSettings GetConnection(AiProviderKind kind)
+        {
+            if (kind == AiProviderKind.ClaudeCodeCli)
+            {
+                return claudeConnection ?? (claudeConnection = new AiProviderConnectionSettings());
+            }
+            return codexConnection ?? (codexConnection = new AiProviderConnectionSettings());
+        }
+
         private static AiProviderConfig s_ObfuscationSentinel;
 
         internal static bool IsObfuscationSentinelNull()

@@ -18,6 +18,7 @@ namespace UGF.EditorTools.Psd2UGUI
             public GUIType defaultTextType;
 
             public GUIType defaultImageType;
+            public string defaultButtonComponentTypeName = "UnityEngine.UI.Button";
 
             public bool forceUseTMP;
 
@@ -261,6 +262,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 // enumValueIndex 是"枚举名数组下标"，用枚举数值去赋值会整体错位。
                 val.FindProperty("defaultTextType").intValue = (int)configSnapshot.defaultTextType;
                 val.FindProperty("defaultImageType").intValue = (int)configSnapshot.defaultImageType;
+                val.FindProperty("defaultButtonComponentTypeName").stringValue = configSnapshot.defaultButtonComponentTypeName ?? "UnityEngine.UI.Button";
                 val.FindProperty("forceUseTMP").boolValue = configSnapshot.forceUseTMP;
                 val.FindProperty("readmeDoc").stringValue = configSnapshot.readmeDoc ?? string.Empty;
                 val.FindProperty("convertZh2En").boolValue = configSnapshot.convertZh2En;

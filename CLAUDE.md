@@ -194,3 +194,17 @@ PSD 图层 (lyid)
 - 提交前检查 `git diff`、`git diff --cached`、`git status`
 - 提交信息说明修改意图、约束、验证结果和未验证项
 - 未明确要求时不要自动 push
+
+## Agent skills
+
+### Issue tracker
+
+Use local Markdown under `.scratch/<feature>/`; see `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical status labels; see `docs/agents/triage-labels.md`. Draft tickets awaiting design approval remain `needs-info`.
+
+### Domain docs
+
+Single-context glossary in `CONTEXT.md`; ADRs in `docs/adr/`. See `docs/agents/domain.md`.

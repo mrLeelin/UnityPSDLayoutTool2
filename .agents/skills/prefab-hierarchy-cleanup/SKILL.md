@@ -32,7 +32,7 @@ Use a supported Unity Editor API execution path. When the project setting is `Na
 1. Inspect first through `scripts/snapshot_prefab_hierarchy.ps1`; it is read-only and emits the complete tree, RectTransform state, UI components, Sprite/Texture paths, TMP state, nested Prefab boundaries, and counts.
 2. Run `scripts/find_prefab_component_candidates.py` whenever the snapshot contains repeated visual units. The Unity AI chat snapshot also emits numbered repeated-family candidates. Record every candidate in `componentFamilyDecisions`; a chat candidate marked `requiresExtraction: true` must be extracted and cannot be skipped. A candidate marked `requiresExtraction: false` is advisory and may be skipped with concrete recursive-structure evidence. A family whose members are not all structurally identical also reports `numbered_structure_subset` candidates: the members that do share one recursive structure. Prefer the family-level extraction when it is marked required, and use a subset when the family only fits a variant or when a narrower boundary is cleaner. A single-member subset is a report that the member has no peer, not an instruction to extract it alone.
 3. For a direct script run, create an internal version 1 JSON plan from the corresponding section of [references/plan-format.md](references/plan-format.md), starting from [examples/sample-plan.json](examples/sample-plan.json). The Unity AI chat window instead creates version 2 node-ID plans and performs the conversion itself.
-4. Validate and execute through the Unity AI chat window's selected backend. Use `scripts/run_prefab_hierarchy_cleanup.ps1 -AllowUloopFallback` only when uloop was explicitly selected as the fallback backend.
+4. Validate and execute through the Unity AI chat window's selected backend. For a repeatable command-line run, use `scripts/run_native_cleanup.py`; it is the canonical NativeUnity runner and never falls back to uloop. The legacy PowerShell runner is fallback-only and may be used only when uloop was explicitly selected as the backend.
 5. Use `-ApplyConfirmed` only after the user has reviewed and explicitly confirmed the complete tree, the exact in-place target path, `PrefabName`, and every Texture/Atlas rename.
 6. If Unity or the wrapper times out after an apply attempt, do not apply again. Run the same plan with `-VerifyOnly` to determine the actual saved state.
 
@@ -53,6 +53,18 @@ Use a supported Unity Editor API execution path. When the project setting is `Na
 The snapshot script calls the registered NativeUnity `eval_file` Unity Pipeline command and therefore never invokes uloop. The optional runner is uloop-only, requires `-AllowUloopFallback`, never installs or downloads uloop, and removes its temporary UTF-8 C# payload after the Unity call returns.
 
 Use `-CompileOnly` only after the renderer, runner, or generated C# source changes. An ordinary new extraction plan uses one preflight and one apply; do not add a redundant compile-only pass.
+
+### NativeUnity run ledger and timing contract
+
+Every snapshot, preflight, apply, and verify invocation must go through `scripts/run_native_cleanup.py` (or an equivalent Unity chat bridge that emits the same evidence). The runner creates a unique `Library/PrefabCleanupRuns/<run-id>/` directory containing:
+
+- `events.jsonl`: one flushed JSON object for every phase start, periodic heartbeat, phase end, and workflow error. Each event includes the target, UTC timestamp, phase, status, exit code when available, and elapsed milliseconds from both the phase and run start.
+- `summary.json`: final status, total elapsed time, every completed phase, and the slowest phases. A missing summary or non-`passed` status is not completion evidence.
+- phase stdout/stderr and the validated phase result, plus a frozen copy of the exact plan used for mutation.
+
+The heartbeat interval must be bounded and visible while Unity is compiling, importing, saving, or waiting. Never infer a hang from silence. If the CLI times out during Apply, the state is indeterminate: do not replay Apply or create a second mutation plan. Run Verify with the same frozen plan, inspect the ledger, and only then decide whether a narrowly corrected plan is safe.
+
+The runner's phase semantics are exact: Snapshot is read-only; Preflight simulates the complete unsaved tree and rejects any contract mismatch; Apply is the only mutating phase and requires the already-reviewed plan plus explicit apply authorization; Verify reopens the saved asset and checks the same manifest, hierarchy, names, references, layout, extraction topology, image ownership, and missing-component invariants. A zero exit code without a validated `PREFLIGHT_OK`/`VERIFY_OK` result is failure.
 
 ```powershell
 & <skill-dir>/scripts/run_prefab_hierarchy_cleanup.ps1 `
@@ -180,6 +192,26 @@ If any invariant fails, preserve the original, do not describe the cleanup as co
 - Do not infer or attach runtime scripts, serialized bindings, Animator transitions, interaction semantics, or asset replacements.
 - Do not infer state semantics, default state, or a runtime state-switching mechanism from visual overlap alone.
 - Do not make a coarse tree appear complete through cosmetic names alone.
+
+## Business-Completeness Gate
+
+Technical verification is not completion proof. A cleanup must be rejected as incomplete when it only adds outer wrappers or merely preserves node/component counts.
+
+- Identify every complete visible business unit before editing. For task, reward, card, row, marker, or button screens, a unit includes its background, icon, labels, values, progress/status elements, action control, and state overlays when they occupy one logical visual region.
+- Repeated business units must be compared recursively. When reusable Prefabs are in scope, extract complete proven families under `Prefab/Common/`, preserving each instance's rendering and serialized values. Shared role names alone are not structural proof. If extraction is skipped, list the actual structural, binding, or draw-order evidence. Do not force a lone icon extraction to satisfy a numerical quota.
+- Do not treat `componentFamilyCandidates: []` as evidence that no business-level repeated unit exists. The candidate scanner is only a discovery aid; inspect numbered groups, sibling order, geometry, component roles, and asset patterns recursively.
+- Every remaining internal object name in the affected reviewed scope must be an English semantic name. Chinese names, numeric-only names, punctuation-only names, PSD/export tokens, UUID-like names, and raw display values are not acceptable semantic names, including pre-existing group names. The single main root must retain the exact asset filename; this identity exception does not exempt any descendant or nested-component root.
+- A plan that only creates containers, leaves Chinese/export names, fails to map Common/State/Instance members, or does not explain repeated-unit extraction is incomplete and must not be applied or reported as finished.
+- Final verification must explicitly prove: zero Chinese or raw-value internal node names in scope; every repeated unit has a complete member mapping; the approved common Prefab exists; every approved source was replaced exactly once; and the resulting hierarchy is semantically usable, not merely technically valid.
+
+### Evidence-driven continuation and visuals
+
+- A missing intermediate wrapper is work to plan, not an external blocker. Create an exact source-to-destination map from the current snapshot and simulate it. Never transplant fixture paths, GUIDs, state labels, or expected counts into a production plan by string replacement.
+- Distinguish separate date selectors from task rows using geometry and rendered content. A visible label may be baked into a Sprite; do not invent a TMP node or deduce node identity from displayed numbers.
+- For a direct iterative maintenance session with explicit end-to-end apply authorization, record each revised in-scope plan before running it, then preflight, apply once, and verify. The AI chat bridge's frozen-manifest confirmation contract remains unchanged. A definitely read-only preflight rejection may be corrected and retested; an uncertain Apply must be verified before any new mutation.
+- Establish a reproducible offscreen render of the exact target before editing. Compare after hierarchy changes and after extraction, including overlapping layers and inactive state branches. World-corner preservation alone does not prove draw-order preservation. A visual mismatch prevents completion and requires an evidence-backed correction, not a relaxed tolerance.
+- Audit image ownership using current AssetDatabase references and retain GUID identity with RenameAsset. A directory can mix private and shared images; rename all proven-private images, but list externally owned/shared exceptions instead of treating the entire directory as private. Do not silently rename a global catalog's assets to a screen-specific prefix.
+- When requested, perform hierarchy and private image naming first; extract common Prefabs last. Preserve the approved boundaries and exact per-instance state/member mapping across stages.
 
 ## Invocation Examples
 

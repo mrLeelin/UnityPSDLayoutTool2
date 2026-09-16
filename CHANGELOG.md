@@ -51,7 +51,6 @@ All notable changes to this package are documented in this file.
 ### Changed
 
 - Improved hierarchy-plan validation, visual-leaf verification, and generated text-material synchronization.
-- Removed generated Superpowers planning and specification artifacts from the package repository.
 
 ## [0.1.2] - 2026-07-24
 

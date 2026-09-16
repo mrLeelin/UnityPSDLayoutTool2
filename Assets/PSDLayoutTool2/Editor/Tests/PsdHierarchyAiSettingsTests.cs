@@ -40,14 +40,14 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void CleanupExecutionCanSelectTheOptionalUloopBackend()
+        public void CleanupExecutionCanSelectTheOptionalUnityCliBackend()
         {
             var settings = new PsdHierarchyCleanupExecutionSettings();
 
-            Assert.That(settings.Set(PsdHierarchyCleanupExecutionBackend.UloopRunner), Is.True);
+            Assert.That(settings.Set(PsdHierarchyCleanupExecutionBackend.UnityCliRunner), Is.True);
             Assert.That(
                 settings.Resolve().backend,
-                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.UloopRunner));
+                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.UnityCliRunner));
         }
 
         [Test]

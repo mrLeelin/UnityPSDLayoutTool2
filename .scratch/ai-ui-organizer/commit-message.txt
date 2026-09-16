@@ -1,0 +1,8 @@
+Keep UI organization and reusable prefab extraction in one reviewed workflow
+
+Constraint: Reuse the existing AI provider and publish into a new output folder.
+Rejected: Global output setting changes | Organizing one source must not redirect other PSD exports.
+Confidence: high
+Scope-risk: moderate
+Tested: Unity compile; 45 EditMode tests; real codex-cli analysis through preview and publication.
+Not-tested: Source-update merge, runtime state switching, and full visual acceptance.

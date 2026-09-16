@@ -17,7 +17,7 @@ namespace PsdLayoutTool2
     internal static class PsdHierarchyNativeCleanupExecutor
     {
         // Kept as a capability query for callers that need to describe a plan.
-        internal static bool RequiresUloopRunner(string planJson)
+        internal static bool RequiresUnityCliRunner(string planJson)
         {
             try
             {
@@ -70,7 +70,7 @@ namespace PsdLayoutTool2
                 return new PsdHierarchyChatCleanupExecutionResult(false, capabilityError);
             }
 
-            if (RequiresUloopRunner(planJson))
+            if (RequiresUnityCliRunner(planJson))
             {
                 return new PsdHierarchyChatCleanupExecutionResult(
                     false,
@@ -203,7 +203,7 @@ namespace PsdLayoutTool2
         {
             if (!TryValidatePlanCapabilities(planJson, out string capabilityError))
                 return new PsdHierarchyChatCleanupExecutionResult(false, capabilityError);
-            if (!RequiresUloopRunner(planJson)) return Validate(planJson);
+            if (!RequiresUnityCliRunner(planJson)) return Validate(planJson);
 
             PsdHierarchyNativePayloadResult result = await PsdHierarchyNativePayloadExecutor.ExecuteAsync(
                 ResolveProjectRoot(context),
@@ -217,7 +217,7 @@ namespace PsdLayoutTool2
             PsdHierarchyChatContext context,
             string planJson)
         {
-            if (!RequiresUloopRunner(planJson)) return Apply(planJson);
+            if (!RequiresUnityCliRunner(planJson)) return Apply(planJson);
 
             PsdHierarchyChatCleanupExecutionResult preflight = await ValidateAsync(context, planJson);
             if (!preflight.success) return preflight;
@@ -239,7 +239,7 @@ namespace PsdLayoutTool2
             string projectRoot,
             string planJson)
         {
-            if (!RequiresUloopRunner(planJson)) return Apply(planJson);
+            if (!RequiresUnityCliRunner(planJson)) return Apply(planJson);
             if (!TryValidatePlanCapabilities(planJson, out string capabilityError))
                 return new PsdHierarchyChatCleanupExecutionResult(false, capabilityError);
 

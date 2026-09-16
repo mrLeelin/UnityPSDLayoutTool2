@@ -14,27 +14,39 @@ namespace AiCliProviderFactoryNamespace
 
         internal static IAiCliProvider GetConfiguredProvider(object value)
         {
-            return CreateProvider(((!((Object)value != (Object)null)) ? new AiProviderConfig() : ((UGUIParser)value).GetAiProviderConfig()).provider);
+            AiProviderConfig config = (!((Object)value != (Object)null)) ? new AiProviderConfig() : ((UGUIParser)value).GetAiProviderConfig();
+            return CreateProvider(config.provider, config);
         }
 
         internal static IAiCliProvider CreateProvider(AiProviderKind aiProviderKind)
         {
+            return CreateProvider(aiProviderKind, new AiProviderConfig());
+        }
+
+        private static IAiCliProvider CreateProvider(AiProviderKind aiProviderKind, AiProviderConfig config)
+        {
+            AiProviderConnectionSettings connection = (config ?? new AiProviderConfig()).GetConnection(aiProviderKind);
             return aiProviderKind switch
             {
-                AiProviderKind.CodexCli => new CodexCliProvider(), 
-                AiProviderKind.ClaudeCodeCli => new ClaudeCodeCliProvider(), 
-                AiProviderKind.OpenCodeCli => new OpenCodeCliProvider(), 
-                _ => new CodexCliProvider(), 
+                AiProviderKind.CodexCli => new CodexCliProvider(connection),
+                AiProviderKind.ClaudeCodeCli => new ClaudeCodeCliProvider(connection),
+                AiProviderKind.OpenCodeCli => new OpenCodeCliProvider(),
+                _ => new CodexCliProvider(connection),
             };
         }
 
         internal static IAiCliProvider CreateProviderById(object id)
         {
+            return CreateProviderById(id, new AiProviderConfig());
+        }
+
+        internal static IAiCliProvider CreateProviderById(object id, AiProviderConfig config)
+        {
             switch (((string)(id ?? string.Empty)).Trim())
             {
             case "claude-code-cli":
             case "claude":
-                return new ClaudeCodeCliProvider();
+                return CreateProvider(AiProviderKind.ClaudeCodeCli, config);
             default:
                 return null;
             case "opencode-cli":
@@ -42,7 +54,7 @@ namespace AiCliProviderFactoryNamespace
                 return new OpenCodeCliProvider();
             case "codex-cli":
             case "codex":
-                return new CodexCliProvider();
+                return CreateProvider(AiProviderKind.CodexCli, config);
             }
         }
 

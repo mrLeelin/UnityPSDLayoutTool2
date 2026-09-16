@@ -23,7 +23,7 @@ namespace PsdLayoutTool2
                 "PSD Layout Tool 全局配置",
                 true);
             window.settings = targetSettings;
-            window.minSize = new Vector2(460f, 500f);
+            window.minSize = new Vector2(680f, 620f);
             window.Show();
             window.Rebuild();
             window.Focus();

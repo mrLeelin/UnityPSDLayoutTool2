@@ -56,6 +56,11 @@ MonoBehaviour:
   UIType: 111
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &211020378255060264
 GameObject:
   m_ObjectHideFlags: 0
@@ -112,6 +117,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &312718541874233617
 GameObject:
   m_ObjectHideFlags: 0
@@ -168,6 +178,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &359491574924941957
 GameObject:
   m_ObjectHideFlags: 0
@@ -224,6 +239,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &445128231578662259
 GameObject:
   m_ObjectHideFlags: 0
@@ -280,6 +300,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &538002350044917125
 GameObject:
   m_ObjectHideFlags: 0
@@ -336,6 +361,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &965539734127161455
 GameObject:
   m_ObjectHideFlags: 0
@@ -575,6 +605,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &1586328538865560086
 GameObject:
   m_ObjectHideFlags: 0
@@ -631,6 +666,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &1671642809205702658
 GameObject:
   m_ObjectHideFlags: 0
@@ -687,6 +727,11 @@ MonoBehaviour:
   UIType: 11
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &2113682247343454880
 GameObject:
   m_ObjectHideFlags: 0
@@ -743,6 +788,11 @@ MonoBehaviour:
   UIType: 108
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &2268405699507346284
 GameObject:
   m_ObjectHideFlags: 0
@@ -799,6 +849,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &2353529126757232688
 GameObject:
   m_ObjectHideFlags: 0
@@ -855,6 +910,11 @@ MonoBehaviour:
   UIType: 13
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &2375144435857941518
 GameObject:
   m_ObjectHideFlags: 0
@@ -911,6 +971,11 @@ MonoBehaviour:
   UIType: 9
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &2529984749189561241
 GameObject:
   m_ObjectHideFlags: 0
@@ -967,6 +1032,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &2897836732478150117
 GameObject:
   m_ObjectHideFlags: 0
@@ -1023,6 +1093,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &3238552484244819687
 GameObject:
   m_ObjectHideFlags: 0
@@ -1079,6 +1154,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &3532866753730719519
 GameObject:
   m_ObjectHideFlags: 0
@@ -1135,6 +1215,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &3557689905660252276
 GameObject:
   m_ObjectHideFlags: 0
@@ -1191,6 +1276,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &3753620900496439967
 GameObject:
   m_ObjectHideFlags: 0
@@ -1247,6 +1337,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &3885958311990467106
 GameObject:
   m_ObjectHideFlags: 0
@@ -1303,6 +1398,11 @@ MonoBehaviour:
   UIType: 119
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &3989342782158585992
 GameObject:
   m_ObjectHideFlags: 0
@@ -1359,6 +1459,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &4189132888596396620
 GameObject:
   m_ObjectHideFlags: 0
@@ -1415,6 +1520,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &4351225051159110853
 GameObject:
   m_ObjectHideFlags: 0
@@ -1471,6 +1581,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &4413924495768394647
 GameObject:
   m_ObjectHideFlags: 0
@@ -1527,6 +1642,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &4464898814311750432
 GameObject:
   m_ObjectHideFlags: 0
@@ -1583,6 +1703,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &4564116087840735707
 GameObject:
   m_ObjectHideFlags: 0
@@ -1639,6 +1764,11 @@ MonoBehaviour:
   UIType: 113
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &4645981618515380373
 GameObject:
   m_ObjectHideFlags: 0
@@ -1695,6 +1825,11 @@ MonoBehaviour:
   UIType: 118
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &5128575426392326354
 GameObject:
   m_ObjectHideFlags: 0
@@ -1751,6 +1886,11 @@ MonoBehaviour:
   UIType: 109
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &5190175490900610796
 GameObject:
   m_ObjectHideFlags: 0
@@ -1807,6 +1947,11 @@ MonoBehaviour:
   UIType: 13
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &5314781215454092968
 GameObject:
   m_ObjectHideFlags: 0
@@ -1863,6 +2008,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &5502973675494801391
 GameObject:
   m_ObjectHideFlags: 0
@@ -1919,6 +2069,11 @@ MonoBehaviour:
   UIType: 118
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &5541164662611964769
 GameObject:
   m_ObjectHideFlags: 0
@@ -1975,6 +2130,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &5600060809473294139
 GameObject:
   m_ObjectHideFlags: 0
@@ -2031,6 +2191,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 1
+  nineSliceLeft: 15
+  nineSliceTop: 15
+  nineSliceRight: 15
+  nineSliceBottom: 15
 --- !u!1 &5997988495173527120
 GameObject:
   m_ObjectHideFlags: 0
@@ -2087,6 +2252,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6018372569543018597
 GameObject:
   m_ObjectHideFlags: 0
@@ -2143,6 +2313,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 1
+  nineSliceLeft: 8
+  nineSliceTop: 8
+  nineSliceRight: 8
+  nineSliceBottom: 8
 --- !u!1 &6046901687863531043
 GameObject:
   m_ObjectHideFlags: 0
@@ -2199,6 +2374,11 @@ MonoBehaviour:
   UIType: 110
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6070536761495568021
 GameObject:
   m_ObjectHideFlags: 0
@@ -2255,6 +2435,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6200483753810003735
 GameObject:
   m_ObjectHideFlags: 0
@@ -2311,6 +2496,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6309650215196967286
 GameObject:
   m_ObjectHideFlags: 0
@@ -2367,6 +2557,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6400769164865830417
 GameObject:
   m_ObjectHideFlags: 0
@@ -2423,6 +2618,11 @@ MonoBehaviour:
   UIType: 16
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6417049328886620265
 GameObject:
   m_ObjectHideFlags: 0
@@ -2479,6 +2679,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6666495325700977936
 GameObject:
   m_ObjectHideFlags: 0
@@ -2535,6 +2740,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6696857939636315972
 GameObject:
   m_ObjectHideFlags: 0
@@ -2591,6 +2801,11 @@ MonoBehaviour:
   UIType: 9
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6832545611447498437
 GameObject:
   m_ObjectHideFlags: 0
@@ -2647,6 +2862,11 @@ MonoBehaviour:
   UIType: 14
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &6984024522439657221
 GameObject:
   m_ObjectHideFlags: 0
@@ -2703,6 +2923,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7020464425469566674
 GameObject:
   m_ObjectHideFlags: 0
@@ -2759,6 +2984,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7148051756259366154
 GameObject:
   m_ObjectHideFlags: 0
@@ -2815,6 +3045,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7154309597704733866
 GameObject:
   m_ObjectHideFlags: 0
@@ -2871,6 +3106,11 @@ MonoBehaviour:
   UIType: 119
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7410913103465260459
 GameObject:
   m_ObjectHideFlags: 0
@@ -2927,6 +3167,11 @@ MonoBehaviour:
   UIType: 15
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7528557184098929319
 GameObject:
   m_ObjectHideFlags: 0
@@ -2983,6 +3228,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7648514383207509178
 GameObject:
   m_ObjectHideFlags: 0
@@ -3039,6 +3289,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7667083614333380918
 GameObject:
   m_ObjectHideFlags: 0
@@ -3095,6 +3350,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7752759456288290593
 GameObject:
   m_ObjectHideFlags: 0
@@ -3151,6 +3411,11 @@ MonoBehaviour:
   UIType: 111
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7832412561794518296
 GameObject:
   m_ObjectHideFlags: 0
@@ -3207,6 +3472,11 @@ MonoBehaviour:
   UIType: 13
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7840758738663398182
 GameObject:
   m_ObjectHideFlags: 0
@@ -3263,6 +3533,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7913002858858503831
 GameObject:
   m_ObjectHideFlags: 0
@@ -3319,6 +3594,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7922127021620761338
 GameObject:
   m_ObjectHideFlags: 0
@@ -3375,6 +3655,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &7927771257638587967
 GameObject:
   m_ObjectHideFlags: 0
@@ -3431,6 +3716,11 @@ MonoBehaviour:
   UIType: 8
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8181964365629393315
 GameObject:
   m_ObjectHideFlags: 0
@@ -3487,6 +3777,11 @@ MonoBehaviour:
   UIType: 101
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8253404028005549286
 GameObject:
   m_ObjectHideFlags: 0
@@ -3543,6 +3838,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8397630260250406239
 GameObject:
   m_ObjectHideFlags: 0
@@ -3599,6 +3899,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8543549333919573290
 GameObject:
   m_ObjectHideFlags: 0
@@ -3655,6 +3960,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8556928368524548393
 GameObject:
   m_ObjectHideFlags: 0
@@ -3711,6 +4021,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8638897900006628164
 GameObject:
   m_ObjectHideFlags: 0
@@ -3767,6 +4082,11 @@ MonoBehaviour:
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8651190768417661132
 GameObject:
   m_ObjectHideFlags: 0
@@ -3818,11 +4138,16 @@ MonoBehaviour:
   BindPsdLayerIndex: 15
   mLayerType: 1
   sourceLayerName: ref ButtonBule
-  markToExport: 0
+  markToExport: 1
   generatedNodeId: 
   UIType: 1
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0
 --- !u!1 &8663630442640306050
 GameObject:
   m_ObjectHideFlags: 0
@@ -3879,3 +4204,8 @@ MonoBehaviour:
   UIType: 16
   collapseChildrenForGeneration: 0
   textSourceBindPsdLayerIndex: -1
+  nineSliceEnabled: 0
+  nineSliceLeft: 0
+  nineSliceTop: 0
+  nineSliceRight: 0
+  nineSliceBottom: 0

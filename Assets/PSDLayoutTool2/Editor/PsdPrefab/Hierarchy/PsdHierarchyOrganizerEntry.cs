@@ -3,16 +3,51 @@ namespace PsdLayoutTool2
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Diagnostics;
+using System.Text;
+    using System.Linq;
+    using System.Threading.Tasks;
     using UnityEditor;
     using UnityEngine;
 
     /// <summary>
-    /// Resolves the exact generated Prefab for a PSD and opens the in-editor
-    /// AI chat only when that Prefab exists.
+    /// Resolves the generated Prefab and starts an interactive AI terminal with its context.
     /// </summary>
     public static class PsdHierarchyOrganizerEntry
     {
         public const string AiButtonLabel = "AI整理";
+        public const string ApplyPlanButtonLabel = "应用AI计划";
+
+        public static async void ApplyLatestPlan(string sourcePsdAssetPath)
+        {
+            if (!TryResolvePrefabAvailability(sourcePsdAssetPath,
+                    PsdImporter.OutputMode, PsdImporter.OutputFolderName, PsdImporter.PrefabMode,
+                    path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
+                    out string targetPrefabPath, out string error))
+            {
+                EditorUtility.DisplayDialog("PSDLayoutTool2", error, "确定"); return;
+            }
+            if (!PsdHierarchyChatContextBuilder.TryCreate(sourcePsdAssetPath, targetPrefabPath,
+                    out PsdHierarchyChatContext context, out error))
+            {
+                EditorUtility.DisplayDialog("PSDLayoutTool2", error, "确定"); return;
+            }
+            string directory = Path.Combine(context.projectRoot, "Library", "PsdHierarchyTerminal");
+            string planPath = Directory.Exists(directory)
+                ? Directory.GetFiles(directory, "*.plan.json").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                : null;
+            if (string.IsNullOrEmpty(planPath) || !File.Exists(planPath))
+            {
+                EditorUtility.DisplayDialog("PSDLayoutTool2", "没有找到终端生成的计划文件，请先完成一次 AI 整理。", "确定"); return;
+            }
+            string planJson = File.ReadAllText(planPath, Encoding.UTF8);
+            if (!EditorUtility.DisplayDialog("确认应用 AI 计划",
+                    "计划文件：" + Path.GetFileName(planPath) + "\n\nUnity 将重新校验快照、节点引用和执行安全性，然后原地更新 Prefab。是否继续？",
+                    "确认应用", "取消")) return;
+            PsdHierarchyChatCleanupExecutionResult result =
+                await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(context, planJson);
+            EditorUtility.DisplayDialog("PSDLayoutTool2", result.success ? "AI 计划已应用并完成 Unity 执行链。" : result.message, "确定");
+        }
 
         public static bool TryResolvePrefabAvailability(
             string psdAssetPath,
@@ -87,10 +122,61 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            return PsdHierarchyChatWindow.TryOpen(
-                sourcePsdAssetPath,
-                targetPrefabPath,
-                out error);
+            if (!PsdHierarchyChatContextBuilder.TryCreate(sourcePsdAssetPath, targetPrefabPath,
+                    out PsdHierarchyChatContext context, out error)) return false;
+            PsdHierarchyAiSettingsSnapshot settings = PsdLayoutProjectSettings.instance.ResolveHierarchyAiSettings();
+            if (settings.connectionMode != PsdHierarchyAiConnectionMode.LocalCli)
+            {
+                error = "AI整理已改为直接打开 Windows PowerShell，请使用本地 CLI。";
+                return false;
+            }
+            if (!PsdHierarchyAiCliDiscovery.TryGetInstalled(settings.provider, out PsdHierarchyAiCliDescriptor cli))
+            {
+                error = "全局配置选择的 AI CLI 当前不可用，请重新选择。";
+                return false;
+            }
+            try
+            {
+                PsdHierarchyChatConnection connection = new PsdHierarchyChatConnection(
+                    settings.provider, settings.connectionMode, cli.executablePath,
+                    string.Empty, string.Empty, string.Empty);
+                if (!connection.TryValidate(out error)) return false;
+                // Keep the complete prompt out of Windows command-line length limits and
+                // cmd shim quoting. Each terminal owns a separate, persistent prompt file.
+                string promptDirectory = Path.Combine(context.projectRoot, "Library", "PsdHierarchyTerminal");
+                Directory.CreateDirectory(promptDirectory);
+                string sessionId = Guid.NewGuid().ToString("N");
+                string promptPath = Path.Combine(promptDirectory, sessionId + ".md");
+                string planPath = Path.Combine(promptDirectory, sessionId + ".plan.json");
+                string reviewPath = Path.Combine(promptDirectory, sessionId + ".review.md");
+                string taskPrompt = PsdHierarchyChatClient.BuildPortablePrompt(context) +
+                    "\n\n===== TERMINAL SESSION CONTRACT =====\n" +
+                    "This is an analysis and plan session. Do not claim that Unity assets were changed.\n" +
+                    "Write the complete executable JSON plan (and no partial patch) to: " + planPath.Replace('\\', '/') + "\n" +
+                    "Write the human-readable Chinese review to: " + reviewPath.Replace('\\', '/') + "\n" +
+                    "After every revision, replace both files atomically or rewrite them completely.\n" +
+                    "Only a later Unity validation and explicit APPLY_PLAN action can modify the Prefab.\n";
+                File.WriteAllText(promptPath, taskPrompt, new UTF8Encoding(false));
+                string initialPrompt = "Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
+                    ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file, and remain interactive for follow-up revisions.";
+                string cliPath = cli.executablePath.Replace("'", "''");
+                string command = "Set-Location -LiteralPath '" + context.projectRoot.Replace("'", "''") +
+                    "'; & '" + cliPath + "' '" + initialPrompt.Replace("'", "''") + "'";
+                string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+                Process.Start(new ProcessStartInfo {
+                    FileName = "powershell.exe",
+                    Arguments = "-NoExit -ExecutionPolicy Bypass -EncodedCommand " + encodedCommand,
+                    WorkingDirectory = context.projectRoot,
+                    UseShellExecute = true,
+                });
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = "打开 PowerShell AI 终端失败：" + exception.Message;
+                return false;
+            }
         }
 
         public static bool TryOpenLocalRepair(string sourcePsdAssetPath, out string error)

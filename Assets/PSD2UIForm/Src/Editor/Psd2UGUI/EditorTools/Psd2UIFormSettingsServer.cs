@@ -733,11 +733,20 @@ namespace UGF.EditorTools.Psd2UGUI
                 autoCropNineSlice = settings != null && settings.AutoCropMinimalNineSlice,
                 defaultTextType = ReadInt(serializedObject, "defaultTextType", (int)GUIType.TMPText),
                 defaultImageType = ReadInt(serializedObject, "defaultImageType", (int)GUIType.Image),
+                defaultButtonComponentTypeName = serializedObject.FindProperty("defaultButtonComponentTypeName").stringValue,
                 forceUseTMP = ReadBool(serializedObject, "forceUseTMP", true),
                 sharedAssetsOutput = ReadString(serializedObject, "sharedAssetsOutput", string.Empty),
                 sharedPrefabOutput = ReadString(serializedObject, "sharedPrefabOutput", string.Empty),
                 convertZh2En = ReadBool(serializedObject, "convertZh2En", false),
-                readmeDoc = ReadString(serializedObject, "readmeDoc", string.Empty)
+                readmeDoc = ReadString(serializedObject, "readmeDoc", string.Empty),
+                aiProvider = ReadAiProviderKind(serializedObject.FindProperty("aiProviderConfig")),
+                showCliWindow = ReadAiProviderShowCliWindow(serializedObject.FindProperty("aiProviderConfig")),
+                codexUseCustomApi = ReadAiConnectionUseCustomApi(serializedObject.FindProperty("aiProviderConfig"), "codexConnection"),
+                codexApiUrl = ReadAiConnectionUrl(serializedObject.FindProperty("aiProviderConfig"), "codexConnection"),
+                claudeUseCustomApi = ReadAiConnectionUseCustomApi(serializedObject.FindProperty("aiProviderConfig"), "claudeConnection"),
+                claudeApiUrl = ReadAiConnectionUrl(serializedObject.FindProperty("aiProviderConfig"), "claudeConnection"),
+                codexApiKeyConfigured = AiProviderSecretStore.HasKey(AiProviderKind.CodexCli),
+                claudeApiKeyConfigured = AiProviderSecretStore.HasKey(AiProviderKind.ClaudeCodeCli)
             };
 
             return JsonUtility.ToJson(data, true);
@@ -758,11 +767,22 @@ namespace UGF.EditorTools.Psd2UGUI
                 serializedObject.Update();
                 WriteInt(serializedObject, "defaultTextType", data.defaultTextType);
                 WriteInt(serializedObject, "defaultImageType", data.defaultImageType);
+                if (data.defaultButtonComponentTypeName != null)
+                    WriteString(serializedObject, "defaultButtonComponentTypeName", data.defaultButtonComponentTypeName);
                 WriteBool(serializedObject, "forceUseTMP", data.forceUseTMP);
                 WriteString(serializedObject, "sharedAssetsOutput", data.sharedAssetsOutput);
                 WriteString(serializedObject, "sharedPrefabOutput", data.sharedPrefabOutput);
                 WriteBool(serializedObject, "convertZh2En", data.convertZh2En);
                 WriteString(serializedObject, "readmeDoc", data.readmeDoc);
+                WriteAiProviderKind(serializedObject.FindProperty("aiProviderConfig"), data.aiProvider);
+                WriteAiProviderShowCliWindow(serializedObject.FindProperty("aiProviderConfig"), data.showCliWindow);
+                WriteAiConnection(serializedObject.FindProperty("aiProviderConfig"), "codexConnection", data.codexUseCustomApi, data.codexApiUrl);
+                WriteAiConnection(serializedObject.FindProperty("aiProviderConfig"), "claudeConnection", data.claudeUseCustomApi, data.claudeApiUrl);
+                AiProviderKind activeProvider = data.aiProvider == (int)AiProviderKind.ClaudeCodeCli ? AiProviderKind.ClaudeCodeCli : AiProviderKind.CodexCli;
+                if (data.clearApiKey)
+                    AiProviderSecretStore.Clear(activeProvider);
+                else if (!string.IsNullOrWhiteSpace(data.apiKey))
+                    AiProviderSecretStore.Save(activeProvider, data.apiKey);
                 serializedObject.ApplyModifiedProperties();
 
                 // 立刻落盘：只改内存不落盘，就是"页面/Inspector 一套值、.asset 文件另一套值"的成因
@@ -853,17 +873,87 @@ namespace UGF.EditorTools.Psd2UGUI
             }
         }
 
+        private static int ReadAiProviderKind(SerializedProperty configProperty)
+        {
+            SerializedProperty provider = configProperty == null ? null : configProperty.FindPropertyRelative("provider");
+            return provider != null && provider.intValue == (int)AiProviderKind.ClaudeCodeCli
+                ? (int)AiProviderKind.ClaudeCodeCli
+                : (int)AiProviderKind.CodexCli;
+        }
+
+        private static bool ReadAiProviderShowCliWindow(SerializedProperty configProperty)
+        {
+            SerializedProperty showCliWindow = configProperty == null ? null : configProperty.FindPropertyRelative("showCliWindow");
+            return showCliWindow == null || showCliWindow.boolValue;
+        }
+
+        private static void WriteAiProviderKind(SerializedProperty configProperty, int providerKind)
+        {
+            SerializedProperty provider = configProperty == null ? null : configProperty.FindPropertyRelative("provider");
+            if (provider != null)
+            {
+                provider.intValue = providerKind == (int)AiProviderKind.ClaudeCodeCli
+                    ? (int)AiProviderKind.ClaudeCodeCli
+                    : (int)AiProviderKind.CodexCli;
+            }
+        }
+
+        private static void WriteAiProviderShowCliWindow(SerializedProperty configProperty, bool value)
+        {
+            SerializedProperty showCliWindow = configProperty == null ? null : configProperty.FindPropertyRelative("showCliWindow");
+            if (showCliWindow != null)
+            {
+                showCliWindow.boolValue = value;
+            }
+        }
+
+        private static bool ReadAiConnectionUseCustomApi(SerializedProperty configProperty, string connectionName)
+        {
+            SerializedProperty connection = configProperty == null ? null : configProperty.FindPropertyRelative(connectionName);
+            SerializedProperty useCustomApi = connection == null ? null : connection.FindPropertyRelative("useCustomApi");
+            return useCustomApi != null && useCustomApi.boolValue;
+        }
+
+        private static string ReadAiConnectionUrl(SerializedProperty configProperty, string connectionName)
+        {
+            SerializedProperty connection = configProperty == null ? null : configProperty.FindPropertyRelative(connectionName);
+            SerializedProperty url = connection == null ? null : connection.FindPropertyRelative("customApiUrl");
+            return url == null ? string.Empty : url.stringValue;
+        }
+
+        private static void WriteAiConnection(SerializedProperty configProperty, string connectionName, bool useCustomApi, string apiUrl)
+        {
+            SerializedProperty connection = configProperty == null ? null : configProperty.FindPropertyRelative(connectionName);
+            if (connection == null) return;
+
+            SerializedProperty mode = connection.FindPropertyRelative("useCustomApi");
+            SerializedProperty url = connection.FindPropertyRelative("customApiUrl");
+            if (mode != null) mode.boolValue = useCustomApi;
+            if (url != null) url.stringValue = apiUrl ?? string.Empty;
+        }
+
         [Serializable]
         private class ConfigData
         {
             public bool autoCropNineSlice;
             public int defaultTextType;
             public int defaultImageType;
+            public string defaultButtonComponentTypeName;
             public bool forceUseTMP;
             public string sharedAssetsOutput;
             public string sharedPrefabOutput;
             public bool convertZh2En;
             public string readmeDoc;
+            public int aiProvider;
+            public bool showCliWindow = true;
+            public bool codexUseCustomApi;
+            public string codexApiUrl;
+            public bool claudeUseCustomApi;
+            public string claudeApiUrl;
+            public bool codexApiKeyConfigured;
+            public bool claudeApiKeyConfigured;
+            public string apiKey;
+            public bool clearApiKey;
         }
     }
 }

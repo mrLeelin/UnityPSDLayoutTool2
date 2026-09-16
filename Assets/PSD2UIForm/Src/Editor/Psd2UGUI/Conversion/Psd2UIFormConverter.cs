@@ -2450,6 +2450,7 @@ namespace UGF.EditorTools.Psd2UGUI
                 }
             }
             NotifyGeneratedHierarchyReady(list, list2);
+            PsdButtonComponentPolicy.Apply(val2, list, list2, UGUIParser.Instance.GetDefaultButtonComponentType());
             RemoveUIStringKeyComponents(val2);
             RemoveStaleGeneratedNodes(val2.transform, hashSet);
             FitGeneratedContainersToChildren(val2.transform);

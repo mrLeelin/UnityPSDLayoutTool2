@@ -389,6 +389,15 @@ namespace UiTypeCompatibilityRulesNamespace
             return !((AiAnalysisNodeEntry)aiAnalysisNodeEntry).isTextLayer;
         }
 
+        internal static GUIType ResolveBaseUiType(string label, AiAnalysisNodeEntry node)
+        {
+            // Base labels describe existing source nodes; only owners may synthesize a carrier.
+            if (TryParseBaseLayerType(label, out var type) &&
+                (type == GUIType.Null || IsOwnerNodeCompatible(type, node)))
+                return type;
+            return InferBaseUiType(node);
+        }
+
         internal static GUIType InferBaseUiType(object aiAnalysisNodeEntry)
         {
             if (aiAnalysisNodeEntry != null)
@@ -400,7 +409,8 @@ namespace UiTypeCompatibilityRulesNamespace
                         if (AiPatchValidator.TryParsePatchUiType(((AiAnalysisNodeEntry)aiAnalysisNodeEntry).uiType, out var gUIType))
                         {
                             gUIType = NormalizeUiTypeAlias(gUIType);
-                            if (IsBaseLayerType(gUIType))
+                            if (IsBaseLayerType(gUIType) &&
+                                (gUIType == GUIType.Null || IsOwnerNodeCompatible(gUIType, aiAnalysisNodeEntry)))
                             {
                                 return gUIType;
                             }

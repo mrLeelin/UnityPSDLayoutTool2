@@ -493,7 +493,7 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
                 }
                 if (!_jobManager.HasActiveJobs())
                 {
-                    IAiCliProvider aiCliProvider = (string.IsNullOrWhiteSpace(text2) ? AiCliProviderFactory.GetConfiguredProvider(uGUIParser) : AiCliProviderFactory.CreateProviderById(text2));
+                    IAiCliProvider aiCliProvider = (string.IsNullOrWhiteSpace(text2) ? AiCliProviderFactory.GetConfiguredProvider(uGUIParser) : AiCliProviderFactory.CreateProviderById(text2, uGUIParser.GetAiProviderConfig()));
                     if (aiCliProvider == null)
                     {
                         result2 = ((!string.IsNullOrWhiteSpace(text2)) ? ("AI Provider override 无效: " + text2) : "当前 AI Provider 配置无效。");
@@ -992,7 +992,11 @@ namespace AiHierarchyAnalysisOrchestratorNamespace
 
         private static bool ShouldUseVisibleCliExecution(object value, object value2)
         {
-            if (value != null && (value2 == null || ((AiProviderConfig)value2).showCliWindow) && ((IAiCliProvider)value).GetCapabilities() != null && ((IAiCliProvider)value).GetCapabilities().UsesVisibleCliExecution)
+            AiProviderConfig config = value2 as AiProviderConfig;
+            AiProviderKind providerKind = value != null && ((IAiCliProvider)value).GetProviderId() == "claude-code-cli"
+                ? AiProviderKind.ClaudeCodeCli
+                : AiProviderKind.CodexCli;
+            if (value != null && (config == null || (!config.GetConnection(providerKind).useCustomApi && config.showCliWindow)) && ((IAiCliProvider)value).GetCapabilities() != null && ((IAiCliProvider)value).GetCapabilities().UsesVisibleCliExecution)
             {
                 return Environment.OSVersion.Platform == PlatformID.Win32NT;
             }
