@@ -81,13 +81,14 @@
 
 `BuildLayerTree()` 和 `IsStartGroup()` / `IsEndGroup()` 是图层树构建的核心：
 
-- **`IsStartGroup()`** (`PsdImporter.cs:2797-2812`):
-  1. 优先检查 `layer.IsGroupStart`（`SectionType == 1 || 2`）
-  2. 有 `lsct` 但不是组开始 → 不是组
-  3. 回退：检查 `IsPixelDataIrrelevant`（旧 PSD 格式）
+- **`IsStartGroup()`** (`PsdImporter.cs`):
+  1. `layer.IsGroupEnd`（`SectionType == 3`）→ 绝不是组开始
+  2. 优先检查 `layer.IsGroupStart`（`SectionType == 1 || 2`）
+  3. 回退：`IsPixelDataIrrelevant` **且** rect 宽高为 0（旧 PSD 文件夹）
+  4. 带非空 bounds 的 art layer 即使有 pixel-irrelevant 标记也**不能**当组开始——现代 Photoshop 会在真实图层上误设该位，若当组打开会吞掉后续所有兄弟层
 
-- **`IsEndGroup()`** (`PsdImporter.cs:2817-2823`):
-  1. `layer.IsGroupEnd`（`SectionType == 3`）
+- **`IsEndGroup()`** (`PsdImporter.cs`):
+  1. `layer.IsGroupEnd`（`SectionType == 3`）优先
   2. 回退：名称匹配 `</Layer set>` / `</Layer group>` / ` copy`
 
 - **`SectionType`** (`Layer.cs:197`) — 从 `lsct` adjustment info 读取：

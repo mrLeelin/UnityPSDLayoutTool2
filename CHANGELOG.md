@@ -2,6 +2,18 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.9] - 2026-09-16
+
+### Fixed
+
+- Fixed PSD group hierarchy construction for full Prefab generation. Art layers that Photoshop marked with the pixel-irrelevant flag (but still carry a non-empty bounds and real image data) are no longer treated as folder starts; those false starts swallowed following siblings, inflated group layout rects, and made the generated hierarchy diverge from the PSD panel and import preview.
+- `IsEndGroup` now prefers the `lsct` SectionType=3 bounding marker before falling back to `</Layer set>` / `</Layer group>` name matching, so group closes are reliable even when the end divider keeps a normal folder name.
+- Unclosed groups at end-of-file are flushed while preserving parent-child nesting instead of being dumped as flat roots.
+
+### Added
+
+- Full import logs now include an indented layer-tree dump after `BuildLayerTree`, so hierarchy regressions can be compared against the PSD panel directly from `Library/PSDLayoutTool2/Logs`.
+
 ## [0.1.8] - 2026-09-16
 
 ### Added

@@ -3851,18 +3851,59 @@
                 }
             }
 
-            // flush all remaining unclosed groups into the tree
+            // Flush remaining unclosed groups while preserving nesting. Dumping
+            // them as flat roots orphans inner folders and breaks layout bounds.
             while (currentGroupLayer != null)
             {
-                if (currentGroupLayer.Children.Count > 0)
+                if (previousLayers.Count > 0)
                 {
-                    tree.Add(currentGroupLayer);
-                }
+                    Layer parentLayer = previousLayers.Pop();
+                    if (currentGroupLayer.Children.Count > 0)
+                    {
+                        parentLayer.Children.Add(currentGroupLayer);
+                    }
 
-                currentGroupLayer = previousLayers.Count > 0 ? previousLayers.Pop() : null;
+                    currentGroupLayer = parentLayer;
+                }
+                else
+                {
+                    if (currentGroupLayer.Children.Count > 0)
+                    {
+                        tree.Add(currentGroupLayer);
+                    }
+
+                    currentGroupLayer = null;
+                }
             }
 
+            LogLayerTree(tree, 0);
             return tree;
+        }
+
+        /// <summary>
+        /// Writes the built layer tree to the diagnostic log so hierarchy
+        /// regressions can be compared against the PSD panel without guessing.
+        /// </summary>
+        private static void LogLayerTree(List<Layer> tree, int depth)
+        {
+            if (tree == null)
+            {
+                return;
+            }
+
+            foreach (Layer layer in tree)
+            {
+                string kind = layer.IsGroupStart || layer.IsGroupEnd || layer.Children.Count > 0
+                    ? "Group"
+                    : (layer.IsTextLayer ? "Text" : "Image");
+                PsdLogger.Info(
+                    new string(' ', depth * 2) + "- " + layer.Name +
+                    " [" + kind + "] section=" + layer.SectionType +
+                    " children=" + layer.Children.Count +
+                    " rect=(" + (int)layer.Rect.x + "," + (int)layer.Rect.y + "," +
+                    (int)layer.Rect.width + "x" + (int)layer.Rect.height + ")");
+                LogLayerTree(layer.Children, depth + 1);
+            }
         }
 
         /// <summary>
@@ -3897,7 +3938,18 @@
                 return false;
             }
 
-            return layer.IsGroupStart || layer.IsPixelDataIrrelevant;
+            if (layer.IsGroupStart)
+            {
+                return true;
+            }
+
+            // Legacy PSDs without lsct mark folders via pixel-irrelevant + empty
+            // bounds. Several modern Photoshop saves also set that flag on real
+            // art layers; treating those as folder starts swallows every sibling
+            // after them until the next divider and wrecks the hierarchy.
+            return layer.IsPixelDataIrrelevant &&
+                   layer.Rect.width == 0 &&
+                   layer.Rect.height == 0;
         }
 
         /// <summary>
@@ -3907,7 +3959,10 @@
         /// <returns>True if the layer ends a group, otherwise false.</returns>
         private static bool IsEndGroup(Layer layer)
         {
-            return layer.Name.Contains("</Layer set>") ||
+            // Prefer the lsct bounding marker. Name matching alone misses PSDs
+            // that close groups with SectionType=3 and a normal folder name.
+            return layer.IsGroupEnd ||
+                   layer.Name.Contains("</Layer set>") ||
                    layer.Name.Contains("</Layer group>") ||
                    (layer.Name == " copy" && layer.Rect.height == 0);
         }
