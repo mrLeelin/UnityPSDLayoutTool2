@@ -59,6 +59,46 @@
         "last_turn_id": "01a02467-9e3a-7702-9f65-96bdf9200904",
         "last_thread_id": null
       }
+    },
+    "01a08f2b-b578-7e91-88a5-eb4ad62750aa": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|hi! what would you like to work on?",
+        "first_seen_at": "2026-09-11T06:36:01.262Z",
+        "last_seen_at": "2026-09-11T06:36:01.262Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a08f2d-d8ae-7fe2-b60f-89e0cf2c6c12",
+        "last_thread_id": null
+      }
+    },
+    "01a08fd3-75d9-7fd1-8b7f-4c1c2ad51a74": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|刚刚实测当前运行环境： - 下载速度：约 **9.2–11.0 mbps**（**1.15–1.38 mb/s**） - 到 `1.1.1.1` 平均延迟：约 **72 ms** - 上传速度：未测 这是即时结果，会随测速节点和网络负载波动。",
+        "first_seen_at": "2026-09-11T09:42:45.597Z",
+        "last_seen_at": "2026-09-11T09:42:45.597Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a08fd5-0ae7-7252-adbe-3d8a76caa2af",
+        "last_thread_id": null
+      }
+    },
+    "01a0904f-ec6b-7c52-ae66-6145b363a8ff": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|分两层解决。 临时使用： 1. 关闭现在这个 `file:///.../settings.html`。 2. 在 unity 里选中 `psd2uiformconfig.asset`，点击“打开设置”重新生成网页。 3. 改值后点保存，等待 unity 弹出“已保存”对话框，再确认 `.asset` 的修改时间已更新。 4. 不要切换 inspector 选中对象或让脚本重编译，否则当前服务会被 `ondisable` 停掉。 彻底修复代码： - 服务不要绑定在 `uguiparsereditor` 实例生命周期上。现在 inspector 一关闭就调用 `stop()`，网页仍开着但已变成孤儿页面。 - 保存接口不能先回 `success` 再异步 `delaycall`。应让 http 线程等待主线程完成： `serializedobject.applymodifiedproperties()` → `setdirty(config)` → `assetdatabase.saveassets()`； 成功后才返回 `{\"success\": true}`，失败则返回错误。 - 每次打开生成随机端口或会话 id，不要固定 `9527`，避免多次打开或旧 unity 进程串台。 - 保存成功后主线程重新导出配置并返回它；网页用返回值刷新表单，保证网页显示的是实际已落盘的数据。 - 页面要明确标注：它只编辑 8 个字段，不编辑 `rules`、模板、ai 配置等完整 `.asset` 内容。 核心要改的是 [psd2uiformsettingsserver.cs](e:/project/demo/monsterhunter/assets/unitypsdlayouttool2/assets/psd2uiform/src/editor/psd2ugui/editortools/psd2uiformsettingsserver.cs:129) 的保存时序，以及 [uguiparsereditor.cs](e:/project/demo/monsterhunter/assets/unitypsdlayouttool2/assets/psd2uiform/src/editor/psd2ugui/editortools/uguiparsereditor.cs:578) 对服务的生命周期管理。",
+        "first_seen_at": "2026-09-11T12:01:09.607Z",
+        "last_seen_at": "2026-09-11T12:01:09.607Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a09057-3aef-7910-8608-0f3a6d3e1321",
+        "last_thread_id": null
+      }
+    },
+    "01a0932c-dcae-7cf0-bf27-3d61a5c71a57": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|hi! what would you like to work on?",
+        "first_seen_at": "2026-09-14T03:09:18.236Z",
+        "last_seen_at": "2026-09-14T03:09:18.236Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a09de3-cc1a-76b3-96e6-228f371e76dd",
+        "last_thread_id": null
+      }
     }
   }
 }

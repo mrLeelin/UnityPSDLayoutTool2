@@ -48,9 +48,8 @@ namespace PsdLayoutTool2
     }
 
     /// <summary>
-    /// Bridges a reviewed chat plan to the existing, Unity-validated cleanup
-    /// runner. The AI returns data only; this class owns the local write and
-    /// process execution after a user confirmation.
+        /// Owns the v2 cleanup-plan boundary. The AI returns data only; this
+        /// class validates and executes the same v2 document after confirmation.
     /// </summary>
     internal static class PsdHierarchyChatCleanupExecution
     {
@@ -550,13 +549,13 @@ namespace PsdLayoutTool2
             return true;
         }
 
-        internal static bool TryPrepareRunnerPlan(
+        internal static bool TryPrepareExecutionPlan(
             PsdHierarchyChatContext context,
             string planJson,
-            out string runnerPlanJson,
+            out string executionPlanJson,
             out string error)
         {
-            runnerPlanJson = string.Empty;
+            executionPlanJson = string.Empty;
             if (context == null)
             {
                 error = "缺少当前整理目标。";
@@ -606,10 +605,11 @@ namespace PsdLayoutTool2
                     WriteFlatSiblingFindings(plan, context);
                 }
                 RemoveCandidateDecisionMetadata(plan);
-                plan.Remove("postGroupingExtractionIntents");
-                plan["version"] = 1;
-                plan.Remove("snapshotFingerprint");
-                runnerPlanJson = plan.ToString(Newtonsoft.Json.Formatting.None);
+                // Keep the reviewed v2 contract intact. The execution backend
+                // resolves node:<id> references against this fingerprinted
+                // document; no downgraded runner JSON is produced.
+                plan["version"] = 2;
+                executionPlanJson = plan.ToString(Newtonsoft.Json.Formatting.None);
                 error = string.Empty;
                 return true;
             }
@@ -1493,6 +1493,18 @@ namespace PsdLayoutTool2
 
                 variants.Add(extraction);
             }
+        }
+
+        // Transitional source compatibility for editor tests and callers. This
+        // method no longer creates a v1 runner document; it returns the v2
+        // execution plan unchanged after validation.
+        internal static bool TryPrepareRunnerPlan(
+            PsdHierarchyChatContext context,
+            string planJson,
+            out string executionPlanJson,
+            out string error)
+        {
+            return TryPrepareExecutionPlan(context, planJson, out executionPlanJson, out error);
         }
 
         private static void TryTerminateProcess(Process process)

@@ -253,7 +253,8 @@ namespace PsdLayoutTool2
                 result.nodes.Add(new PsdPrefabNodeModel
                 {
                     stableId = node.stableId,
-                    contentFingerprint = node.contentFingerprint ?? string.Empty
+                    contentFingerprint = node.contentFingerprint ?? string.Empty,
+                    assetFingerprint = node.contentFingerprint ?? string.Empty
                 });
             }
             return result;

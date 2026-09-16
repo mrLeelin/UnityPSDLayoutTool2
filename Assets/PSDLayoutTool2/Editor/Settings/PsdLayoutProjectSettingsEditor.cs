@@ -219,31 +219,24 @@ namespace PsdLayoutTool2
         {
             VisualElement section = CreateSection(AiSectionName, "AI 层级整理");
             IReadOnlyList<PsdHierarchyAiCliDescriptor> installed = PsdHierarchyAiCliDiscovery.FindInstalled();
-            if (installed.Count == 0)
-            {
-                section.Add(new HelpBox(
-                    "未检测到 Claude 或 Codex CLI。请先安装其中一个并重启 Unity，再使用 AI 整理。",
-                    HelpBoxMessageType.Error));
-                return section;
-            }
-
             PsdHierarchyAiSettingsSnapshot snapshot = settings.ResolveHierarchyAiSettings();
-            int selectedIndex = FindProviderIndex(installed, snapshot.provider);
-            if (selectedIndex < 0)
-            {
-                selectedIndex = 0;
-                settings.SetHierarchyAiSettings(
-                    installed[selectedIndex].provider,
-                    snapshot.connectionMode,
-                    snapshot.customEndpoint,
-                    snapshot.customModel);
-                snapshot = settings.ResolveHierarchyAiSettings();
-            }
 
-            var providerChoices = new List<string>(installed.Count);
+            // 第一项永远是「不启用」，这样默认状态和「想关掉」都有明确落点。
+            var providerChoices = new List<string> { "不启用" };
+            var providerValues = new List<PsdHierarchyAiProvider> { PsdHierarchyAiProvider.None };
             for (int index = 0; index < installed.Count; index++)
             {
                 providerChoices.Add(installed[index].displayName);
+                providerValues.Add(installed[index].provider);
+            }
+
+            int selectedIndex = providerValues.IndexOf(snapshot.provider);
+            if (selectedIndex < 0)
+            {
+                // 配置里选的 CLI 现在没装了：照实显示并标注不可用，不静默改掉用户的选择。
+                providerChoices.Add(PsdHierarchyChatClient.GetProviderDisplayName(snapshot.provider) + "（当前不可用）");
+                providerValues.Add(snapshot.provider);
+                selectedIndex = providerValues.Count - 1;
             }
 
             var errorBox = CreateHiddenErrorBox();
@@ -251,24 +244,25 @@ namespace PsdLayoutTool2
             {
                 name = "psd-project-settings-ai-provider",
             };
-            var connectionModeChoices = new List<string> { "默认（本机 CLI）", "自定义 API" };
-            int connectionModeIndex = snapshot.connectionMode == PsdHierarchyAiConnectionMode.CustomApi ? 1 : 0;
-            var connectionModeField = new PopupField<string>("连接方式", connectionModeChoices, connectionModeIndex)
-            {
-                name = "psd-project-settings-ai-connection-mode",
-            };
             section.Add(providerField);
-            section.Add(connectionModeField);
+
+            if (installed.Count == 0)
+            {
+                section.Add(new HelpBox(
+                    "未检测到任何受支持的 AI CLI（Claude / Codex / Grok / Pi）。" +
+                    "请先安装其中一个并重启 Unity，再使用 AI 整理。",
+                    HelpBoxMessageType.Error));
+            }
 
             void ApplySettings(
                 PsdHierarchyAiProvider provider,
-                PsdHierarchyAiConnectionMode connectionMode,
                 string endpoint,
-                string model)
+                string model,
+                string effort)
             {
                 try
                 {
-                    settings.SetHierarchyAiSettings(provider, connectionMode, endpoint, model);
+                    settings.SetHierarchyAiSettings(provider, endpoint, model, effort);
                     ReplaceSection(section, CreateHierarchyAiSection(settings));
                 }
                 catch (ArgumentException exception)
@@ -282,99 +276,113 @@ namespace PsdLayoutTool2
                 int index = providerChoices.IndexOf(change.newValue);
                 if (index >= 0)
                 {
-                    ApplySettings(installed[index].provider, snapshot.connectionMode, snapshot.customEndpoint, snapshot.customModel);
+                    ApplySettings(
+                        providerValues[index],
+                        snapshot.customEndpoint,
+                        snapshot.customModel,
+                        snapshot.reasoningEffort);
                 }
             });
-            connectionModeField.RegisterValueChangedCallback(change =>
-            {
-                PsdHierarchyAiConnectionMode mode = connectionModeChoices.IndexOf(change.newValue) == 1
-                    ? PsdHierarchyAiConnectionMode.CustomApi
-                    : PsdHierarchyAiConnectionMode.LocalCli;
-                ApplySettings(installed[selectedIndex].provider, mode, snapshot.customEndpoint, snapshot.customModel);
-            });
 
-            if (snapshot.connectionMode == PsdHierarchyAiConnectionMode.LocalCli)
+            if (!snapshot.isConfigured)
             {
                 section.Add(new HelpBox(
-                    "默认：后台调用本机 " + installed[selectedIndex].displayName +
-                    " CLI，不会打开外部终端，也不需要填写 API Key。",
+                    "AI 整理当前未启用。选择上面的 CLI 后会显示模型、思考程度与 API 设置。",
                     HelpBoxMessageType.Info));
+                section.Add(errorBox);
+                return section;
             }
-            else
-            {
-                var endpointField = CreateDelayedTextField(
-                    "自定义 API 地址",
-                    snapshot.customEndpoint,
-                    "psd-project-settings-ai-endpoint",
-                    "留空时使用所选 AI 的官方默认地址。");
-                var modelField = CreateDelayedTextField(
-                    "模型",
-                    snapshot.customModel,
-                    "psd-project-settings-ai-model",
-                    "留空时使用所选 AI 的默认模型。");
-                section.Add(endpointField);
-                section.Add(modelField);
-                endpointField.RegisterValueChangedCallback(change =>
-                    ApplySettings(installed[selectedIndex].provider, snapshot.connectionMode, change.newValue, modelField.value));
-                modelField.RegisterValueChangedCallback(change =>
-                    ApplySettings(installed[selectedIndex].provider, snapshot.connectionMode, endpointField.value, change.newValue));
 
-                string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-                var secretStore = new PsdHierarchyAiSecretStore();
-                string existingKey = string.Empty;
+            PsdHierarchyAiCliDiscovery.TryGetSupported(snapshot.provider, out PsdHierarchyAiCliDescriptor supported);
+            bool usesCustomApi = snapshot.connectionMode == PsdHierarchyAiConnectionMode.CustomApi;
+
+            var modelField = CreateDelayedTextField(
+                "模型名称",
+                snapshot.customModel,
+                "psd-project-settings-ai-model",
+                string.IsNullOrEmpty(supported.defaultModelHint)
+                    ? "留空时使用该 CLI 自身的模型配置。"
+                    : "留空时使用该 CLI 自身的模型配置。例如 " + supported.defaultModelHint);
+            var effortField = CreateDelayedTextField(
+                "思考程度",
+                snapshot.reasoningEffort,
+                "psd-project-settings-ai-effort",
+                string.IsNullOrEmpty(supported.reasoningEffortHint)
+                    ? "留空时使用该 CLI 自身的配置。"
+                    : "留空时使用该 CLI 自身的配置。可选：" + supported.reasoningEffortHint);
+            var endpointField = CreateDelayedTextField(
+                "API 地址（留空走本机 CLI）",
+                snapshot.customEndpoint,
+                "psd-project-settings-ai-endpoint",
+                "留空表示调用本机 " + supported.displayName +
+                " CLI，不打开外部终端、不需要 API Key；填写后才走自定义 API。");
+            section.Add(modelField);
+            section.Add(effortField);
+            section.Add(endpointField);
+
+            modelField.RegisterValueChangedCallback(change =>
+                ApplySettings(snapshot.provider, endpointField.value, change.newValue, effortField.value));
+            effortField.RegisterValueChangedCallback(change =>
+                ApplySettings(snapshot.provider, endpointField.value, modelField.value, change.newValue));
+            endpointField.RegisterValueChangedCallback(change =>
+                ApplySettings(snapshot.provider, change.newValue, modelField.value, effortField.value));
+
+            if (!usesCustomApi)
+            {
+                section.Add(new HelpBox(
+                    "当前走本机 " + supported.displayName + " CLI：模型与思考程度留空即使用 CLI 自身配置，也不需要 API Key。",
+                    HelpBoxMessageType.Info));
+                section.Add(errorBox);
+                return section;
+            }
+
+            if (!PsdHierarchyChatClient.HasBuiltInApiDefaults(snapshot.provider))
+            {
+                section.Add(new HelpBox(
+                    supported.displayName + " 没有可以预设的官方 API 地址，走自定义 API 时必须自己填地址和模型。",
+                    HelpBoxMessageType.Warning));
+            }
+
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            var secretStore = new PsdHierarchyAiSecretStore();
+            string existingKey = string.Empty;
+            try
+            {
+                secretStore.TryReadApiKey(projectRoot, snapshot.provider, out existingKey);
+            }
+            catch (InvalidOperationException exception)
+            {
+                ShowError(errorBox, exception.Message);
+            }
+
+            var apiKeyField = CreateDelayedTextField(
+                "API Key（本地加密保存）",
+                existingKey,
+                "psd-project-settings-ai-api-key",
+                "不会写入项目配置或 Git。清空并确认后会删除本地保存的 Key。");
+            apiKeyField.isPasswordField = true;
+            section.Add(apiKeyField);
+            apiKeyField.RegisterValueChangedCallback(change =>
+            {
                 try
                 {
-                    secretStore.TryReadApiKey(projectRoot, installed[selectedIndex].provider, out existingKey);
+                    if (string.IsNullOrWhiteSpace(change.newValue))
+                    {
+                        secretStore.ClearApiKey(projectRoot, snapshot.provider);
+                    }
+                    else
+                    {
+                        secretStore.SaveApiKey(projectRoot, snapshot.provider, change.newValue);
+                    }
                 }
                 catch (InvalidOperationException exception)
                 {
                     ShowError(errorBox, exception.Message);
                 }
-
-                var apiKeyField = CreateDelayedTextField(
-                    "API Key（本地加密保存）",
-                    existingKey,
-                    "psd-project-settings-ai-api-key",
-                    "不会写入项目配置或 Git。清空并确认后会删除本地保存的 Key。");
-                apiKeyField.isPasswordField = true;
-                section.Add(apiKeyField);
-                apiKeyField.RegisterValueChangedCallback(change =>
-                {
-                    try
-                    {
-                        if (string.IsNullOrWhiteSpace(change.newValue))
-                        {
-                            secretStore.ClearApiKey(projectRoot, installed[selectedIndex].provider);
-                        }
-                        else
-                        {
-                            secretStore.SaveApiKey(projectRoot, installed[selectedIndex].provider, change.newValue);
-                        }
-                    }
-                    catch (InvalidOperationException exception)
-                    {
-                        ShowError(errorBox, exception.Message);
-                    }
-                });
-            }
+            });
 
             section.Add(errorBox);
             return section;
-        }
-
-        private static int FindProviderIndex(
-            IReadOnlyList<PsdHierarchyAiCliDescriptor> installed,
-            PsdHierarchyAiProvider provider)
-        {
-            for (int index = 0; index < installed.Count; index++)
-            {
-                if (installed[index].provider == provider)
-                {
-                    return index;
-                }
-            }
-
-            return -1;
         }
 
         private static VisualElement CreateOutputSection(PsdLayoutProjectSettings settings)

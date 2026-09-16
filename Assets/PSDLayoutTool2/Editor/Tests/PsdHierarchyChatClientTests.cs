@@ -488,6 +488,72 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ExternalSessionPromptPinsEveryReferencedPathToAnAbsoluteForwardSlashPath()
+        {
+            string fullSnapshot = new JObject
+            {
+                ["fingerprint"] = "snapshot-123",
+                ["nodes"] = new JArray(new JObject
+                {
+                    ["id"] = "n000001",
+                    ["path"] = "Root",
+                    ["name"] = "Root",
+                    ["components"] = new JArray("UnityEngine.RectTransform"),
+                    ["spriteAssetPath"] = "FULL ASSET PATH MUST NOT BE COPIED",
+                }),
+                ["componentFamilyCandidates"] = new JArray(),
+                ["containmentFindings"] = new JArray(),
+                ["flatSiblingFindings"] = new JArray(),
+            }.ToString(Newtonsoft.Json.Formatting.None);
+            var context = new PsdHierarchyChatContext(
+                "E:\\Project\\Demo\\monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:\\Project\\Demo\\monsterhunter\\Assets\\.agents\\skills\\prefab-hierarchy-cleanup\\SKILL.md",
+                "FULL SKILL BODY MUST NOT BE COPIED",
+                "Prefab Body",
+                "FULL PLAN FORMAT MUST NOT BE COPIED",
+                fullSnapshot,
+                "snapshot-123",
+                "E:\\Project\\Demo\\monsterhunter\\Library\\PSDLayoutTool2\\HierarchySnapshots\\snapshot-123.json");
+
+            string outputDirectory = "E:\\Project\\Demo\\monsterhunter\\Library\\PsdHierarchyTerminal";
+            string prompt = PsdHierarchyChatClient.BuildExternalSessionPrompt(
+                context,
+                outputDirectory + "\\external-1.plan.json",
+                outputDirectory + "\\external-1.review.md");
+
+            Assert.That(prompt, Does.Contain("Use skill prefab-hierarchy-cleanup"));
+            Assert.That(prompt, Does.Contain("EXTERNAL SESSION CONTRACT"));
+            Assert.That(prompt, Does.Contain("Unity project root: E:/Project/Demo/monsterhunter"));
+            Assert.That(
+                prompt,
+                Does.Contain("E:/Project/Demo/monsterhunter/Assets/UI/Prefab/ExampleView.prefab"));
+            Assert.That(prompt, Does.Contain("E:/Project/Demo/monsterhunter/Assets/UI/Source.psd"));
+            Assert.That(
+                prompt,
+                Does.Contain(
+                    "E:/Project/Demo/monsterhunter/Assets/.agents/skills/prefab-hierarchy-cleanup/SKILL.md"));
+            Assert.That(
+                prompt,
+                Does.Contain(
+                    "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json"));
+            Assert.That(
+                prompt,
+                Does.Contain("E:/Project/Demo/monsterhunter/Library/PsdHierarchyTerminal/external-1.plan.json"));
+            Assert.That(
+                prompt,
+                Does.Contain("E:/Project/Demo/monsterhunter/Library/PsdHierarchyTerminal/external-1.review.md"));
+
+            // 工具可能在任意工作目录下启动，任何反斜杠或相对路径都不允许出现在提示词里。
+            Assert.That(prompt, Does.Not.Contain("\\"));
+            Assert.That(prompt, Does.Not.Contain(context.hierarchySnapshotJson));
+            Assert.That(prompt, Does.Not.Contain("FULL ASSET PATH MUST NOT BE COPIED"));
+            Assert.That(prompt, Does.Not.Contain("FULL SKILL BODY MUST NOT BE COPIED"));
+            Assert.That(prompt, Does.Not.Contain("FULL PLAN FORMAT MUST NOT BE COPIED"));
+        }
+
+        [Test]
         public void DefaultPromptRequestsAReviewablePlan()
         {
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("完整、可确认的层级整理方案"));

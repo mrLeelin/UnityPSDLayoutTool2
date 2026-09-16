@@ -44,7 +44,16 @@ namespace PsdLayoutTool2
 
         internal static bool Start(int port)
         {
-            Shutdown(); Error = string.Empty;
+            // 幂等：已经在这个端口上跑着就直接算成功。
+            // 否则下面的 Shutdown 会先关掉自己再重新绑定，而 Shutdown 只要没把 socket
+            // 放干净，重新绑定就会 WSAEADDRINUSE，还会留下一个没人 accept 的孤儿监听。
+            if (IsRunning && Port == port)
+            {
+                return true;
+            }
+
+            Shutdown();
+            Error = string.Empty;
             try
             {
                 SessionState.SetInt(ResumePortKey, port);
@@ -53,11 +62,18 @@ namespace PsdLayoutTool2
                 try { AssetPreview.SetPreviewTextureCacheSize(512); } catch { }
                 Refresh();
                 listener = new TcpListener(IPAddress.Any, port);
+                TryEnableAddressReuse(listener);
                 listener.Start(); Port = port;
                 worker = new Thread(Listen) { IsBackground = true, Name = "PSD Common Preview" };
                 worker.Start(); return true;
             }
-            catch (Exception exception) { Error = exception.Message; Stop(); return false; }
+            catch (Exception exception)
+            {
+                // 注意顺序：Stop() 会清掉 Error，必须先 Stop 再把本次原因写回去。
+                Stop();
+                Error = DescribeListenError(port, exception);
+                return false;
+            }
         }
 
         /// <summary>Stops the service and forgets the resume port, so it stays down
@@ -66,6 +82,8 @@ namespace PsdLayoutTool2
         {
             SessionState.EraseInt(ResumePortKey);
             Shutdown();
+            // 主动停止之后，不该再把上一次的失败原因一直挂在界面上。
+            Error = string.Empty;
         }
 
         /// <summary>Releases the socket without clearing the resume port, so the service
@@ -73,8 +91,84 @@ namespace PsdLayoutTool2
         private static void Shutdown()
         {
             TcpListener active = listener; listener = null; Port = 0;
-            if (active != null) { try { active.Stop(); } catch { } }
+            if (active != null)
+            {
+                try
+                {
+                    active.Stop();
+                }
+                catch (Exception exception)
+                {
+                    // 这里以前是裸 catch{}：Stop 一抛异常 socket 就被漏掉，端口永远绑不上，
+                    // 而界面上只会显示一句「套接字地址只允许使用一次」，完全看不出真正的原因。
+                    Debug.LogWarning("[PSDLayoutTool2] 预览服务关闭监听失败：" + exception.Message);
+                }
+
+                // Stop() 中途失败时补一刀，尽量别把端口漏在外面。
+                try { active.Server.Close(); } catch { }
+            }
+
             lock (Sync) { PreviewCache.Clear(); texturePaths = new Dictionary<string, string>(); }
+        }
+
+        /// <summary>给监听 socket 打开地址复用。Windows 上只要还有上一次的客户端连接停在
+        /// TIME_WAIT，重新绑定同一端口就会失败；打开 ReuseAddress 才谈得上「停止后立刻重启」。</summary>
+        private static void TryEnableAddressReuse(TcpListener target)
+        {
+            try
+            {
+                target.Server.SetSocketOption(
+                    SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            }
+            catch (Exception)
+            {
+                /* 个别平台不允许改；真绑不上时由 Start 的 catch 统一报错。 */
+            }
+        }
+
+        /// <summary>Windows 的网络错误文案由 FormatMessage 生成，尾部本来就带 \r\n，
+        /// 经 Mono 回传时还可能跟一整段 \0 填充（实测 95 个）。直接显示会很难看。</summary>
+        private static string CleanMessage(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+            {
+                return "未知错误";
+            }
+
+            int terminator = message.IndexOf('\0');
+            if (terminator >= 0)
+            {
+                message = message.Substring(0, terminator);
+            }
+
+            return message.Replace("\r", " ").Replace("\n", " ").Trim();
+        }
+
+        /// <summary>把绑不上端口的几种 socket 错误翻成「用户知道下一步该做什么」的话。
+        /// 实测（Windows，本机复现）：同一端口上已经有一个监听 socket 时，
+        /// 不带 ReuseAddress 报 10048「套接字地址只允许使用一次」，
+        /// 带 ReuseAddress 反而报 10013「以访问权限不允许的方式…」——
+        /// 两种都只说明「端口被占着」，光看原文根本不知道该换端口还是重启编辑器。</summary>
+        private static string DescribeListenError(int port, Exception exception)
+        {
+            SocketException socketException = exception as SocketException;
+            if (socketException != null)
+            {
+                if (socketException.SocketErrorCode == SocketError.AddressAlreadyInUse ||
+                    socketException.SocketErrorCode == SocketError.AccessDenied)
+                {
+                    return "端口 " + port + " 已被占用。可能是上一次的预览服务没退干净，" +
+                           "也可能是别的程序在用这个端口。换一个端口再启动；" +
+                           "如果占用的就是刚用过的端口，重启 Unity 才能释放它。";
+                }
+
+                if (socketException.SocketErrorCode == SocketError.AddressNotAvailable)
+                {
+                    return "端口 " + port + " 在本机不可用（通常是被系统或安全软件保留了）。换一个端口再试。";
+                }
+            }
+
+            return "端口 " + port + " 无法监听：" + CleanMessage(exception.Message);
         }
 
         internal static string GetLocalAddress()
@@ -174,10 +268,16 @@ namespace PsdLayoutTool2
             string root = Directory.GetParent(Application.dataPath).FullName;
             int budget = MaxEncodesPerRefresh;
 
+            // The page's Copy button works on real asset names, so it must show the name of the
+            // file on disk (Common_Prefab_Btn). The catalog only stores the stripped key (Btn)
+            // plus the path, so derive the full name from the path rather than the key.
+            PsdCommonAssetNamingSnapshot naming = PsdLayoutProjectSettings.instance.ResolveCommonAssetNaming();
+
             foreach (PsdCommonPrefabCatalogEntry entry in catalog.prefabs)
             {
                 if (entry == null || entry.prefab == null || string.IsNullOrEmpty(entry.guid)) continue;
-                Item item = Add(result, paths, entry.guid, "Prefab", entry.key, entry.assetPath, 0, 0, root);
+                string fullName = PrefixedName(entry.assetPath, entry.key, naming.prefabPrefix, "Common_Prefab_");
+                Item item = Add(result, paths, entry.guid, "Prefab", fullName, entry.assetPath, 0, 0, root);
                 live.Add(entry.guid);
                 if (entry.prefab.transform is RectTransform)
                     EnsureUiPreview(entry.guid, item, entry.prefab, ref budget);
@@ -189,7 +289,8 @@ namespace PsdLayoutTool2
             {
                 if (entry == null || entry.sprite == null || string.IsNullOrEmpty(entry.guid)) continue;
                 Sprite sprite = entry.sprite;
-                Item item = Add(result, paths, entry.guid, "Texture", entry.key, entry.assetPath, sprite.rect.width, sprite.rect.height, root);
+                string fullName = PrefixedName(entry.assetPath, entry.key, naming.texturePrefix, "Common_Texture_");
+                Item item = Add(result, paths, entry.guid, "Texture", fullName, entry.assetPath, sprite.rect.width, sprite.rect.height, root);
                 live.Add(entry.guid);
                 EnsurePreview(entry.guid, item, paths, ref budget, () => sprite.texture, sprite.rect);
             }
@@ -397,6 +498,22 @@ namespace PsdLayoutTool2
             }
         }
 
+        /// <summary>Rebuilds the full asset name the page should display and copy.
+        /// <paramref name="key"/> is the catalog's stripped key and is deliberately NOT used as the
+        /// name: for a file called <c>Common_Prefab_KaTongFbBtn_1.prefab</c> the key is only
+        /// <c>KaTongFbBtn_1</c>, so handing the key to the Copy button silently drops the prefix.
+        /// Prefer the file name on disk; fall back to prefix + key only if the path is unusable.</summary>
+        private static string PrefixedName(string assetPath, string key, string configuredPrefix, string defaultPrefix)
+        {
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                string fileName = Path.GetFileNameWithoutExtension(assetPath);
+                if (!string.IsNullOrEmpty(fileName)) return fileName;
+            }
+
+            return (string.IsNullOrEmpty(configuredPrefix) ? defaultPrefix : configuredPrefix) + key;
+        }
+
         private static Item Add(Payload result, Dictionary<string, string> paths, string id, string kind, string name, string assetPath, float width, float height, string root)
         {
             string fullPath = string.IsNullOrEmpty(assetPath) ? string.Empty : Path.Combine(root, assetPath);
@@ -422,6 +539,6 @@ namespace PsdLayoutTool2
             stream.Write(header, 0, header.Length); stream.Write(body, 0, body.Length);
         }
 
-        private const string Page = "<!doctype html><meta charset=utf-8><title>Common Assets</title><style>body{margin:0;background:#101318;color:#e8edf5;font:14px Arial}header{padding:20px 28px;border-bottom:1px solid #293341}h1{margin:0;font-size:20px}input{margin-top:14px;width:280px;padding:9px;background:#1b222c;border:1px solid #34465e;color:#fff}.grid{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}.card{background:#1b222c;border:1px solid #304157;padding:12px}.card img{width:100%;height:120px;object-fit:contain;background:#101318}.name{font-weight:bold;margin-top:8px}.meta{color:#aab6c5;font-size:12px;margin-top:5px;word-break:break-all}button{margin-top:9px;background:#2778d8;color:#fff;border:0;padding:6px 10px;cursor:pointer}</style><header><h1>Common Asset Library</h1><input id=q placeholder='Search name or path'></header><main class=grid id=g></main><script>let all=[];async function load(){all=(await fetch('/api/catalog').then(r=>r.json())).items;draw()}load();setInterval(load,2000);q.oninput=draw;function draw(){let qv=q.value.toLowerCase();g.innerHTML='';all.filter(x=>(x.name+x.path).toLowerCase().includes(qv)).forEach(x=>{let e=document.createElement('article');e.className='card';if(x.image){let i=document.createElement('img');i.src=x.image;e.append(i)}e.innerHTML+='<div class=name>'+x.kind+' · '+x.name+'</div><div class=meta>'+x.size+'</div><div class=meta>'+x.path+'</div>';let b=document.createElement('button');b.textContent='Copy name';b.onclick=()=>navigator.clipboard.writeText(x.name);e.append(b);g.append(e)})}</script>";
+        private const string Page = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Common Assets</title><style>body{margin:0;background:#101318;color:#e8edf5;font:14px Arial}header{padding:20px 28px;border-bottom:1px solid #293341}h1{margin:0;font-size:20px}input{margin-top:14px;width:280px;max-width:100%;padding:9px;background:#1b222c;border:1px solid #34465e;color:#fff}.grid{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}.card{background:#1b222c;border:1px solid #304157;padding:12px}.card img{width:100%;height:120px;object-fit:contain;background:#101318}.name{font-weight:bold;margin-top:8px}.meta{color:#aab6c5;font-size:12px;margin-top:5px;word-break:break-all}button{margin-top:9px;background:#2778d8;color:#fff;border:0;padding:6px 10px;cursor:pointer}button.ok{background:#1f9d55}button.bad{background:#c0392b}</style><header><h1>Common Asset Library</h1><input id=q placeholder='Search name or path'></header><main class=grid id=g></main><script> var all=[],sig=''; var qEl=document.getElementById('q'),gEl=document.getElementById('g'); /* 复制文本。页面常常是通过局域网 IP（http://172.16.2.138:52343/）打开的， 那不是「安全上下文」，navigator.clipboard 直接是 undefined， 点一次就抛 TypeError 且页面上毫无反应。所以这里必须带 execCommand 兜底。 */ function copyText(t){ if(navigator.clipboard&&navigator.clipboard.writeText){ try{return navigator.clipboard.writeText(t).then(function(){return true},function(){return legacyCopy(t)})}catch(e){} } return Promise.resolve(legacyCopy(t)); } function legacyCopy(t){ var ta=document.createElement('textarea'); ta.value=t;ta.setAttribute('readonly',''); ta.style.cssText='position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0'; document.body.appendChild(ta); var ok=false; try{ta.focus();ta.select();ta.setSelectionRange(0,ta.value.length);ok=document.execCommand('copy')}catch(e){ok=false} document.body.removeChild(ta); return ok; } function flash(b,txt,bad){ clearTimeout(b._t);b.textContent=txt;b.className=bad?'bad':'ok'; b._t=setTimeout(function(){b.textContent='Copy name';b.className=''},1400); } function makeCard(x){ var e=document.createElement('article');e.className='card'; if(x.image){var i=document.createElement('img');i.src=x.image;e.appendChild(i)} var n=document.createElement('div');n.className='name';n.textContent=x.kind+' · '+x.name;e.appendChild(n); var s=document.createElement('div');s.className='meta';s.textContent=x.size;e.appendChild(s); var p=document.createElement('div');p.className='meta';p.textContent=x.path;e.appendChild(p); var b=document.createElement('button');b.type='button';b.textContent='Copy name'; b.onclick=function(){ copyText(x.name).then(function(ok){ if(ok){flash(b,'已复制')} else{flash(b,'复制失败',true);window.prompt('浏览器拦下了自动复制，请手动复制：',x.name)} }); }; e.appendChild(b);return e; } function draw(){ var v=qEl.value.toLowerCase(),f=document.createDocumentFragment(); gEl.innerHTML=''; all.filter(function(x){return ((x.name||'')+(x.path||'')).toLowerCase().indexOf(v)>=0}).forEach(function(x){f.appendChild(makeCard(x))}); gEl.appendChild(f); } /* 轮询只在目录内容真的变了时才重画：否则每 2 秒重建一次 DOM， 既让图片反复重新加载，也会把刚点出来的「已复制」冲掉。 */ function load(){ fetch('/api/catalog').then(function(r){return r.json()}).then(function(d){ var items=d.items||[],s=JSON.stringify(items); if(s===sig)return; sig=s;all=items;draw(); }).catch(function(){}); } qEl.oninput=draw; load(); setInterval(load,2000); </script>";
     }
 }

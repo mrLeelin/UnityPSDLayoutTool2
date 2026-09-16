@@ -1515,17 +1515,21 @@ namespace PsdLayoutTool2
             {
                 if (!PsdHierarchyAiCliDiscovery.TryGetInstalled(settings.provider, out PsdHierarchyAiCliDescriptor cli))
                 {
-                    error = "全局配置选择的 AI CLI 当前不可用，请打开全局配置重新选择。";
+                    error = "全局配置选择的 " + PsdHierarchyChatClient.GetProviderDisplayName(settings.provider) +
+                        " CLI 当前不可用，请打开全局配置重新选择。";
                     return false;
                 }
 
+                // 本地 CLI 下模型与思考程度留空就表示不传对应参数、使用 CLI 自身配置，
+                // 所以这里传原始值，而不是会补上 provider 默认模型的 ResolveModel()。
                 connection = new PsdHierarchyChatConnection(
                     settings.provider,
                     settings.connectionMode,
                     cli.executablePath,
                     string.Empty,
+                    settings.customModel,
                     string.Empty,
-                    string.Empty);
+                    settings.ResolveReasoningEffort());
             }
             else
             {
@@ -1542,7 +1546,8 @@ namespace PsdLayoutTool2
                     string.Empty,
                     settings.ResolveEndpoint(),
                     settings.ResolveModel(),
-                    apiKey);
+                    apiKey,
+                    settings.ResolveReasoningEffort());
             }
 
             if (!connection.TryValidate(out error))
@@ -1571,11 +1576,29 @@ namespace PsdLayoutTool2
             }
 
             PsdHierarchyAiSettingsSnapshot settings = PsdLayoutProjectSettings.instance.ResolveHierarchyAiSettings();
-            string model = settings.connectionMode == PsdHierarchyAiConnectionMode.LocalCli
-                ? "本地 CLI 默认"
-                : settings.ResolveModel();
+            string model = settings.connectionMode == PsdHierarchyAiConnectionMode.CustomApi
+                ? settings.ResolveModel()
+                : BuildLocalCliModelSummary(settings);
             return "Agent：" + PsdHierarchyChatClient.GetProviderDisplayName(settings.provider) +
                 "    模型：" + model;
+        }
+
+        /// <summary>本地 CLI 下把「没填就用 CLI 默认」如实显示出来，而不是补一个 provider 默认模型。</summary>
+        private static string BuildLocalCliModelSummary(PsdHierarchyAiSettingsSnapshot settings)
+        {
+            string model = (settings.customModel ?? string.Empty).Trim();
+            string effort = settings.ResolveReasoningEffort();
+            if (string.IsNullOrEmpty(model) && string.IsNullOrEmpty(effort))
+            {
+                return "CLI 默认";
+            }
+
+            if (string.IsNullOrEmpty(model))
+            {
+                return "CLI 默认 · 思考 " + effort;
+            }
+
+            return string.IsNullOrEmpty(effort) ? model : model + " · 思考 " + effort;
         }
 
         private void RefreshConnectionUi()

@@ -12,8 +12,20 @@ namespace PsdLayoutTool2
 
     internal enum PsdHierarchyAiProvider
     {
-        Claude,
-        Codex,
+        /// <summary>
+        /// 未选择任何 AI 模型。默认值，用于「AI 整理尚未配置」的状态。
+        /// 取 -1 是为了保留 Claude=0 / Codex=1 的既有序列化值，
+        /// 否则老项目配置里的 provider 会被静默改写成别的模型。
+        /// </summary>
+        None = -1,
+
+        Claude = 0,
+
+        Codex = 1,
+
+        Grok = 2,
+
+        Pi = 3,
     }
 
     internal enum PsdHierarchyAiConnectionMode
@@ -24,24 +36,60 @@ namespace PsdLayoutTool2
 
     internal readonly struct PsdHierarchyAiCliDescriptor
     {
-        internal PsdHierarchyAiCliDescriptor(PsdHierarchyAiProvider provider, string displayName, string executablePath)
+        internal PsdHierarchyAiCliDescriptor(
+            PsdHierarchyAiProvider provider,
+            string displayName,
+            string executablePath,
+            string defaultModelHint,
+            string reasoningEffortHint)
         {
             this.provider = provider;
             this.displayName = displayName ?? string.Empty;
             this.executablePath = executablePath ?? string.Empty;
+            this.defaultModelHint = defaultModelHint ?? string.Empty;
+            this.reasoningEffortHint = reasoningEffortHint ?? string.Empty;
         }
 
         internal readonly PsdHierarchyAiProvider provider;
         internal readonly string displayName;
         internal readonly string executablePath;
+
+        /// <summary>模型名称输入框的占位提示，说明该 CLI 认什么样的取值。</summary>
+        internal readonly string defaultModelHint;
+
+        /// <summary>思考程度输入框的占位提示，列出该 CLI 支持的档位。</summary>
+        internal readonly string reasoningEffortHint;
     }
 
     internal static class PsdHierarchyAiCliDiscovery
     {
+        // 每项末尾的两个提示串只用于界面占位，不参与调用。
         private static readonly PsdHierarchyAiCliDescriptor[] SupportedClis =
         {
-            new PsdHierarchyAiCliDescriptor(PsdHierarchyAiProvider.Claude, "Claude", "claude"),
-            new PsdHierarchyAiCliDescriptor(PsdHierarchyAiProvider.Codex, "Codex", "codex"),
+            new PsdHierarchyAiCliDescriptor(
+                PsdHierarchyAiProvider.Claude,
+                "Claude",
+                "claude",
+                "例如 opus、sonnet，或完整名 claude-sonnet-5",
+                "low / medium / high / xhigh / max"),
+            new PsdHierarchyAiCliDescriptor(
+                PsdHierarchyAiProvider.Codex,
+                "Codex",
+                "codex",
+                "例如 gpt-5、gpt-5-codex",
+                "minimal / low / medium / high"),
+            new PsdHierarchyAiCliDescriptor(
+                PsdHierarchyAiProvider.Grok,
+                "Grok",
+                "grok",
+                "例如 grok-4、grok-code-fast-1",
+                "low / medium / high"),
+            new PsdHierarchyAiCliDescriptor(
+                PsdHierarchyAiProvider.Pi,
+                "Pi",
+                "pi",
+                "例如 openai/gpt-5、anthropic/claude-sonnet-5",
+                "off / minimal / low / medium / high / xhigh / max"),
         };
 
         internal static IReadOnlyList<PsdHierarchyAiCliDescriptor> FindInstalled()
@@ -64,11 +112,34 @@ namespace PsdLayoutTool2
                     installed.Add(new PsdHierarchyAiCliDescriptor(
                         supported.provider,
                         supported.displayName,
-                        executablePath));
+                        executablePath,
+                        supported.defaultModelHint,
+                        supported.reasoningEffortHint));
                 }
             }
 
             return installed;
+        }
+
+        /// <summary>
+        /// 返回该 provider 的支持信息（占位提示等），与是否安装无关。
+        /// 未支持的 provider 返回 false。
+        /// </summary>
+        internal static bool TryGetSupported(
+            PsdHierarchyAiProvider provider,
+            out PsdHierarchyAiCliDescriptor descriptor)
+        {
+            for (int index = 0; index < SupportedClis.Length; index++)
+            {
+                if (SupportedClis[index].provider == provider)
+                {
+                    descriptor = SupportedClis[index];
+                    return true;
+                }
+            }
+
+            descriptor = default(PsdHierarchyAiCliDescriptor);
+            return false;
         }
 
         internal static bool TryGetInstalled(
@@ -126,20 +197,32 @@ namespace PsdLayoutTool2
     {
         internal PsdHierarchyAiSettingsSnapshot(
             PsdHierarchyAiProvider provider,
-            PsdHierarchyAiConnectionMode connectionMode,
             string customEndpoint,
-            string customModel)
+            string customModel,
+            string reasoningEffort)
         {
             this.provider = provider;
-            this.connectionMode = connectionMode;
             this.customEndpoint = customEndpoint ?? string.Empty;
             this.customModel = customModel ?? string.Empty;
+            this.reasoningEffort = reasoningEffort ?? string.Empty;
         }
 
         internal readonly PsdHierarchyAiProvider provider;
-        internal readonly PsdHierarchyAiConnectionMode connectionMode;
         internal readonly string customEndpoint;
         internal readonly string customModel;
+        internal readonly string reasoningEffort;
+
+        /// <summary>是否已选择 AI 模型。未选择时 AI 整理不可用。</summary>
+        internal bool isConfigured => provider != PsdHierarchyAiProvider.None;
+
+        /// <summary>
+        /// 连接方式不再单独落盘：API 地址留空即走本机 CLI，填了才走自定义 API。
+        /// 这样设置面板只有一个「留空就是默认」的规则，不会出现地址为空却标记成自定义 API 的矛盾状态。
+        /// </summary>
+        internal PsdHierarchyAiConnectionMode connectionMode =>
+            !isConfigured || string.IsNullOrWhiteSpace(customEndpoint)
+                ? PsdHierarchyAiConnectionMode.LocalCli
+                : PsdHierarchyAiConnectionMode.CustomApi;
 
         internal string ResolveEndpoint()
         {
@@ -155,25 +238,45 @@ namespace PsdLayoutTool2
                 : customModel.Trim();
         }
 
+        /// <summary>思考程度留空表示不传该参数，完全交给 CLI 自己的配置。</summary>
+        internal string ResolveReasoningEffort() => (reasoningEffort ?? string.Empty).Trim();
+
         internal bool TryValidate(out string error)
         {
-            if (provider != PsdHierarchyAiProvider.Claude && provider != PsdHierarchyAiProvider.Codex)
+            // 「不启用」是一个合法且可保存的状态，不算校验失败。
+            // 「尚未选择 AI 模型」的拦截放在真正要用 AI 的地方（连接校验与 AI整理入口）。
+            if (provider == PsdHierarchyAiProvider.None)
+            {
+                error = string.Empty;
+                return true;
+            }
+
+            if (!PsdHierarchyAiCliDiscovery.TryGetSupported(provider, out _))
             {
                 error = "选择的 AI 不受支持。";
                 return false;
             }
 
-            if (connectionMode != PsdHierarchyAiConnectionMode.LocalCli &&
-                connectionMode != PsdHierarchyAiConnectionMode.CustomApi)
+            // 思考程度会原样拼进命令行: Codex 走 -c 裸值形式，其余走带引号的参数。
+            // 含空格或引号会让拼接结果在不同 shell 下行为不一致，直接拒绝比猜要好。
+            string effort = (reasoningEffort ?? string.Empty).Trim();
+            if (effort.IndexOfAny(new[] { ' ', '\t', '"', '\'' }) >= 0)
             {
-                error = "选择的连接方式不受支持。";
+                error = "思考程度不能包含空格或引号，请填写单个档位名，例如 high。";
                 return false;
             }
 
             if (connectionMode == PsdHierarchyAiConnectionMode.CustomApi)
             {
-                if (!Uri.TryCreate(ResolveEndpoint(), UriKind.Absolute, out Uri endpoint) ||
-                    (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
+                string endpoint = ResolveEndpoint();
+                if (string.IsNullOrWhiteSpace(endpoint))
+                {
+                    error = "所选 AI 没有内置的官方 API 地址，请填写自定义 API 地址。";
+                    return false;
+                }
+
+                if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri parsedEndpoint) ||
+                    (parsedEndpoint.Scheme != Uri.UriSchemeHttp && parsedEndpoint.Scheme != Uri.UriSchemeHttps))
                 {
                     error = "自定义 API 地址必须是 http 或 https 的完整地址。";
                     return false;
@@ -195,50 +298,69 @@ namespace PsdLayoutTool2
     internal sealed class PsdHierarchyAiSettings
     {
         [SerializeField]
-        private PsdHierarchyAiProvider provider = PsdHierarchyAiProvider.Claude;
+        private PsdHierarchyAiProvider provider = PsdHierarchyAiProvider.None;
+
+        /// <summary>
+        /// 历史字段：旧配置用它保存「自定义 API 的模型名」。
+        /// 现在它同时充当本地 CLI 的模型参数，留空即不传 --model，用 CLI 自身配置。
+        /// 保留字段名是为了让老配置里的值原样迁移过来。
+        /// </summary>
+        [SerializeField]
+        private string customModel = string.Empty;
 
         [SerializeField]
-        private PsdHierarchyAiConnectionMode connectionMode = PsdHierarchyAiConnectionMode.LocalCli;
+        private string reasoningEffort = string.Empty;
 
         [SerializeField]
         private string customEndpoint = string.Empty;
 
-        [SerializeField]
-        private string customModel = string.Empty;
-
         internal PsdHierarchyAiSettingsSnapshot Resolve()
         {
-            return new PsdHierarchyAiSettingsSnapshot(provider, connectionMode, customEndpoint, customModel);
+            return new PsdHierarchyAiSettingsSnapshot(provider, customEndpoint, customModel, reasoningEffort);
         }
 
         internal bool Set(
             PsdHierarchyAiProvider newProvider,
-            PsdHierarchyAiConnectionMode newConnectionMode,
             string newCustomEndpoint,
-            string newCustomModel)
+            string newCustomModel,
+            string newReasoningEffort)
         {
             var candidate = new PsdHierarchyAiSettingsSnapshot(
                 newProvider,
-                newConnectionMode,
                 (newCustomEndpoint ?? string.Empty).Trim(),
-                (newCustomModel ?? string.Empty).Trim());
+                (newCustomModel ?? string.Empty).Trim(),
+                (newReasoningEffort ?? string.Empty).Trim());
             if (!candidate.TryValidate(out string error))
             {
                 throw new ArgumentException(error);
             }
 
             if (provider == candidate.provider &&
-                connectionMode == candidate.connectionMode &&
                 string.Equals(customEndpoint, candidate.customEndpoint, StringComparison.Ordinal) &&
-                string.Equals(customModel, candidate.customModel, StringComparison.Ordinal))
+                string.Equals(customModel, candidate.customModel, StringComparison.Ordinal) &&
+                string.Equals(reasoningEffort, candidate.reasoningEffort, StringComparison.Ordinal))
             {
                 return false;
             }
 
             provider = candidate.provider;
-            connectionMode = candidate.connectionMode;
             customEndpoint = candidate.customEndpoint;
             customModel = candidate.customModel;
+            reasoningEffort = candidate.reasoningEffort;
+            return true;
+        }
+
+        /// <summary>
+        /// 关闭 AI 整理时使用：只改 provider，保留模型与地址，方便下次重新启用时不用重填。
+        /// </summary>
+        internal bool Clear()
+        {
+            if (provider == PsdHierarchyAiProvider.None)
+            {
+                return false;
+            }
+
+            provider = PsdHierarchyAiProvider.None;
             return true;
         }
     }

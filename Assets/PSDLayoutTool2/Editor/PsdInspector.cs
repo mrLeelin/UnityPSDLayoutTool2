@@ -349,6 +349,15 @@
                                     "读取终端生成的最新计划，重新校验后应用到当前 Prefab。",
                                     "Validate and apply the latest terminal plan to the current Prefab.")),
                             true);
+                        if (DrawFullWidthAction(new GUIContent(
+                                PsdHierarchyOrganizerEntry.CopyPromptButtonLabel,
+                                Localize(
+                                    "复制一份自带绝对路径的 AI 提示词，可粘贴到任意 CLI 或桌面 AI 里执行；不要求本机先配置好 AI 模型。",
+                                    "Copies a self-contained AI prompt that references absolute paths only, so any external CLI or desktop AI can run it without a configured local AI model."))))
+                        {
+                            CopyExternalAiPrompt(assetPath);
+                        }
+
                         if (hierarchyActions.firstClicked)
                         {
                             string chatError;
@@ -518,6 +527,48 @@
 
             GUILayout.Space(ActionRowSpacing);
             return new ActionPairResult(firstClicked, secondClicked);
+        }
+
+        /// <summary>
+        /// Draws a full-width action below a paired row, for an action that has no
+        /// natural partner button and should not be squeezed into half the width.
+        /// </summary>
+        private static bool DrawFullWidthAction(GUIContent content)
+        {
+            Rect rect = EditorGUILayout.GetControlRect(false, ActionButtonHeight);
+            bool clicked = GUI.Button(rect, content);
+            GUILayout.Space(ActionRowSpacing);
+            return clicked;
+        }
+
+        /// <summary>
+        /// Copies the prompt for an external CLI or desktop AI and reports the absolute
+        /// paths that session must write, so the user knows where the plan will appear.
+        /// </summary>
+        private static void CopyExternalAiPrompt(string assetPath)
+        {
+            PsdHierarchyExternalPrompt externalPrompt;
+            string copyError;
+            if (!PsdHierarchyOrganizerEntry.TryCopyAiPrompt(assetPath, out externalPrompt, out copyError))
+            {
+                EditorUtility.DisplayDialog("PSDLayoutTool2", copyError, Localize("确定", "OK"));
+                return;
+            }
+
+            EditorUtility.DisplayDialog(
+                "PSDLayoutTool2",
+                Localize(
+                    "AI 提示词已复制到剪贴板（" + externalPrompt.text.Length + " 字符）。\n\n" +
+                    "可直接粘贴到任意 CLI 或桌面 AI 里执行。提示词里的路径全部是绝对路径，工具不必在 Unity 项目目录下运行。\n\n" +
+                    "让 AI 把计划写到：\n" + externalPrompt.planFullPath + "\n\n" +
+                    "执行完回到 Unity 点「应用AI计划」应用结果。\n\n" +
+                    "提示词副本：\n" + externalPrompt.promptFullPath,
+                    "AI prompt copied to the clipboard (" + externalPrompt.text.Length + " characters).\n\n" +
+                    "Paste it into any external CLI or desktop AI. Every path inside is absolute, so the tool does not need to run from the Unity project folder.\n\n" +
+                    "Ask the AI to write the plan to:\n" + externalPrompt.planFullPath + "\n\n" +
+                    "Then return to Unity and click Apply AI Plan.\n\n" +
+                    "Prompt copy:\n" + externalPrompt.promptFullPath),
+                Localize("确定", "OK"));
         }
 
         /// <summary>

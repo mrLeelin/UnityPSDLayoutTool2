@@ -23,7 +23,8 @@ namespace PsdLayoutTool2
             string cliExecutablePath,
             string endpoint,
             string model,
-            string apiKey)
+            string apiKey,
+            string reasoningEffort = null)
         {
             this.provider = provider;
             this.connectionMode = connectionMode;
@@ -31,6 +32,7 @@ namespace PsdLayoutTool2
             this.endpoint = endpoint ?? string.Empty;
             this.model = model ?? string.Empty;
             this.apiKey = apiKey ?? string.Empty;
+            this.reasoningEffort = reasoningEffort ?? string.Empty;
         }
 
         internal readonly PsdHierarchyAiProvider provider;
@@ -40,9 +42,18 @@ namespace PsdLayoutTool2
         internal readonly string model;
         internal readonly string apiKey;
 
+        /// <summary>思考程度。留空表示不传该参数，交给 CLI 自身配置。</summary>
+        internal readonly string reasoningEffort;
+
         internal bool TryValidate(out string error)
         {
-            if (provider != PsdHierarchyAiProvider.Claude && provider != PsdHierarchyAiProvider.Codex)
+            if (provider == PsdHierarchyAiProvider.None)
+            {
+                error = "尚未选择 AI 模型。请先打开全局配置，在「AI 层级整理」里选择一个本机已安装的 CLI。";
+                return false;
+            }
+
+            if (!PsdHierarchyAiCliDiscovery.TryGetSupported(provider, out _))
             {
                 error = "选择的 AI 不受支持。";
                 return false;
@@ -1832,7 +1843,9 @@ namespace PsdLayoutTool2
             }
 
             var info = new FileInfo(psdFullPath);
-            return "PSD path: " + sourcePsdAssetPath + "\n" +
+            // 与便携提示词同一条规则：交给 AI 的路径一律是绝对路径，
+            // 否则在 Unity 之外的工具里无法定位这个 PSD。
+            return "PSD path: " + PsdHierarchyChatClient.ToPortableFullPath(psdFullPath) + "\n" +
                    "PSD bytes: " + info.Length + "\n" +
                    "PSD layer parsing is deferred; the Unity hierarchy snapshot is authoritative.";
         }
@@ -1941,18 +1954,26 @@ namespace PsdLayoutTool2
             string executablePath,
             string arguments,
             string workingDirectory,
-            bool writePromptToStandardInput)
+            bool writePromptToStandardInput,
+            string promptFilePath = null)
         {
             this.executablePath = executablePath ?? string.Empty;
             this.arguments = arguments ?? string.Empty;
             this.workingDirectory = workingDirectory ?? string.Empty;
             this.writePromptToStandardInput = writePromptToStandardInput;
+            this.promptFilePath = promptFilePath ?? string.Empty;
         }
 
         internal readonly string executablePath;
         internal readonly string arguments;
         internal readonly string workingDirectory;
         internal readonly bool writePromptToStandardInput;
+
+        /// <summary>
+        /// 非空时改为把提示词写进该文件，再由 CLI 用 --prompt-file 读取。
+        /// 给不接受 stdin、也不便用命令行传长文本的 CLI 使用（当前是 Grok）。
+        /// </summary>
+        internal readonly string promptFilePath;
     }
 
     internal static class PsdHierarchyChatClient
@@ -2294,24 +2315,76 @@ namespace PsdLayoutTool2
 
         internal static string DefaultEndpoint(PsdHierarchyAiProvider provider)
         {
-            return provider == PsdHierarchyAiProvider.Codex ? OpenAiEndpoint : AnthropicEndpoint;
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    return AnthropicEndpoint;
+                case PsdHierarchyAiProvider.Codex:
+                    return OpenAiEndpoint;
+                default:
+                    // Grok 与 Pi 没有可以写死的官方直连地址：Pi 由 --provider 决定后端，
+                    // Grok 的直连地址随账号与区域不同。留空即要求用户显式填写，避免猜错地址。
+                    return string.Empty;
+            }
         }
 
         internal static string DefaultModel(PsdHierarchyAiProvider provider)
         {
-            return provider == PsdHierarchyAiProvider.Codex ? "gpt-5" : "claude-sonnet-5";
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    return "claude-sonnet-5";
+                case PsdHierarchyAiProvider.Codex:
+                    return "gpt-5";
+                default:
+                    return string.Empty;
+            }
         }
 
         internal static string GetProviderDisplayName(PsdHierarchyAiProvider provider)
         {
-            return provider == PsdHierarchyAiProvider.Codex ? "Codex" : "Claude";
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    return "Claude";
+                case PsdHierarchyAiProvider.Codex:
+                    return "Codex";
+                case PsdHierarchyAiProvider.Grok:
+                    return "Grok";
+                case PsdHierarchyAiProvider.Pi:
+                    return "Pi";
+                default:
+                    return "未选择";
+            }
+        }
+
+        /// <summary>是否是需要模型名称才能正确调用的 provider（用于界面提示，不参与校验）。</summary>
+        internal static bool HasBuiltInApiDefaults(PsdHierarchyAiProvider provider)
+        {
+            return provider == PsdHierarchyAiProvider.Claude || provider == PsdHierarchyAiProvider.Codex;
         }
 
         internal static string GetModelDisplayName(PsdHierarchyChatConnection connection)
         {
-            return connection.connectionMode == PsdHierarchyAiConnectionMode.LocalCli
-                ? "本地 CLI 默认"
-                : connection.model.Trim();
+            string model = (connection.model ?? string.Empty).Trim();
+            string effort = (connection.reasoningEffort ?? string.Empty).Trim();
+            if (connection.connectionMode == PsdHierarchyAiConnectionMode.CustomApi)
+            {
+                return model;
+            }
+
+            // 本地 CLI：模型与思考程度都留空时才是真正的「CLI 默认」。
+            if (string.IsNullOrEmpty(model) && string.IsNullOrEmpty(effort))
+            {
+                return "CLI 默认";
+            }
+
+            if (string.IsNullOrEmpty(model))
+            {
+                return "CLI 默认 · 思考 " + effort;
+            }
+
+            return string.IsNullOrEmpty(effort) ? model : model + " · 思考 " + effort;
         }
 
         internal static bool TryOpenInteractiveCli(
@@ -2394,30 +2467,212 @@ namespace PsdLayoutTool2
                 throw new ArgumentException("恢复 CLI 会话时必须提供会话 ID。", nameof(cliSessionId));
             }
 
-            string sessionArguments = connection.provider == PsdHierarchyAiProvider.Claude && hasSessionId
-                ? (resumeCliSession ? " --resume " : " --session-id ") + QuoteProcessArgument(cliSessionId)
-                : string.Empty;
-            if (connection.provider == PsdHierarchyAiProvider.Claude && !string.IsNullOrWhiteSpace(prompt))
+            bool hasPrompt = !string.IsNullOrWhiteSpace(prompt);
+            string modelArguments = BuildModelArguments(connection);
+            string effortArguments = BuildReasoningEffortArguments(connection);
+
+            if (connection.provider == PsdHierarchyAiProvider.Grok)
             {
-                string directClaudeExecutable = ResolveClaudeDirectExecutable(connection.cliExecutablePath);
-                if (!string.IsNullOrEmpty(directClaudeExecutable))
-                {
-                    return new PsdHierarchyCliInvocation(
-                        directClaudeExecutable,
-                        "--print --output-format json --permission-mode dontAsk --safe-mode " +
-                        "--tools Read --add-dir " + QuoteProcessArgument(workingDirectory) +
-                        sessionArguments,
-                        workingDirectory,
-                        true);
-                }
+                return CreateGrokCliInvocation(
+                    connection,
+                    workingDirectory,
+                    hasPrompt,
+                    cliSessionId,
+                    resumeCliSession,
+                    modelArguments,
+                    effortArguments);
             }
 
-            string arguments = connection.provider == PsdHierarchyAiProvider.Claude
-                ? "--print --output-format json --permission-mode plan --safe-mode" + sessionArguments
-                : resumeCliSession
-                    ? "exec resume --json " + QuoteProcessArgument(cliSessionId) + " -"
-                    : "exec --json --sandbox read-only -";
-            string cliPath = connection.cliExecutablePath;
+            if (connection.provider == PsdHierarchyAiProvider.Pi)
+            {
+                return CreatePiCliInvocation(
+                    connection,
+                    workingDirectory,
+                    cliSessionId,
+                    resumeCliSession,
+                    modelArguments,
+                    effortArguments);
+            }
+
+            if (connection.provider == PsdHierarchyAiProvider.Claude)
+            {
+                string claudeSessionArguments = hasSessionId
+                    ? (resumeCliSession ? " --resume " : " --session-id ") + QuoteProcessArgument(cliSessionId)
+                    : string.Empty;
+                if (hasPrompt)
+                {
+                    string directClaudeExecutable = ResolveClaudeDirectExecutable(connection.cliExecutablePath);
+                    if (!string.IsNullOrEmpty(directClaudeExecutable))
+                    {
+                        return new PsdHierarchyCliInvocation(
+                            directClaudeExecutable,
+                            "--print --output-format json --permission-mode dontAsk --safe-mode " +
+                            "--tools Read --add-dir " + QuoteProcessArgument(workingDirectory) +
+                            claudeSessionArguments + modelArguments + effortArguments,
+                            workingDirectory,
+                            true);
+                    }
+                }
+
+                return WrapForCommandShim(
+                    connection.cliExecutablePath,
+                    "--print --output-format json --permission-mode plan --safe-mode" +
+                    claudeSessionArguments + modelArguments + effortArguments,
+                    workingDirectory,
+                    true);
+            }
+
+            // Codex：会话 ID 由 CLI 自己生成，只能在 resume 时才带上。
+            string codexArguments = resumeCliSession
+                ? "exec resume --json " + QuoteProcessArgument(cliSessionId) + " -"
+                : "exec --json --sandbox read-only -";
+            return WrapForCommandShim(
+                connection.cliExecutablePath,
+                codexArguments + modelArguments + effortArguments,
+                workingDirectory,
+                true);
+        }
+
+        /// <summary>
+        /// Grok 不接受 stdin（不给提示词会进入交互 TUI 并挂住），也没有适合传长文本的命令行参数，
+        /// 因此把提示词落到文件，再用 --prompt-file 交给它。
+        /// 返回的调用只包含路径，真正的写文件由执行方完成。
+        /// </summary>
+        private static PsdHierarchyCliInvocation CreateGrokCliInvocation(
+            PsdHierarchyChatConnection connection,
+            string workingDirectory,
+            bool hasPrompt,
+            string cliSessionId,
+            bool resumeCliSession,
+            string modelArguments,
+            string effortArguments)
+        {
+            bool hasSessionId = !string.IsNullOrWhiteSpace(cliSessionId);
+            string sessionArguments = hasSessionId
+                ? (resumeCliSession ? " --resume " : " --session-id ") + QuoteProcessArgument(cliSessionId)
+                : string.Empty;
+            string promptPath = string.Empty;
+            string promptArguments = string.Empty;
+            if (hasPrompt)
+            {
+                promptPath = Path.Combine(
+                    workingDirectory ?? string.Empty,
+                    "Library",
+                    "PsdHierarchyCliPrompts",
+                    Guid.NewGuid().ToString("N") + ".md");
+                promptArguments = " --prompt-file " + QuoteProcessArgument(promptPath);
+            }
+
+            PsdHierarchyCliInvocation invocation = WrapForCommandShim(
+                connection.cliExecutablePath,
+                "--output-format json --permission-mode plan" +
+                sessionArguments + modelArguments + effortArguments + promptArguments,
+                workingDirectory,
+                false);
+            return new PsdHierarchyCliInvocation(
+                invocation.executablePath,
+                invocation.arguments,
+                invocation.workingDirectory,
+                false,
+                promptPath);
+        }
+
+        /// <summary>
+        /// Pi 支持从 stdin 读取提示词（实测 --print --mode json 配合管道输入可正常返回），
+        /// 所以长提示词不会撞到 Windows 命令行长度上限。
+        /// </summary>
+        private static PsdHierarchyCliInvocation CreatePiCliInvocation(
+            PsdHierarchyChatConnection connection,
+            string workingDirectory,
+            string cliSessionId,
+            bool resumeCliSession,
+            string modelArguments,
+            string effortArguments)
+        {
+            bool hasSessionId = !string.IsNullOrWhiteSpace(cliSessionId);
+            // pi 的 --resume 是交互式选择器，定位具体会话要用 --session。
+            string sessionArguments = hasSessionId
+                ? " --session " + QuoteProcessArgument(cliSessionId)
+                : string.Empty;
+            return WrapForCommandShim(
+                connection.cliExecutablePath,
+                "--print --mode json" + sessionArguments + modelArguments + effortArguments,
+                workingDirectory,
+                true);
+        }
+
+        private static string BuildModelArguments(PsdHierarchyChatConnection connection)
+        {
+            return BuildModelArguments(connection, QuoteProcessArgument);
+        }
+
+        private static string BuildReasoningEffortArguments(PsdHierarchyChatConnection connection)
+        {
+            return BuildReasoningEffortArguments(connection, QuoteProcessArgument);
+        }
+
+        /// <summary>
+        /// 按 provider 拼出「模型 + 思考程度」参数，供 PowerShell 终端入口复用。
+        /// 两处的引号规则不同（CreateProcess 参数 vs PowerShell 字面量），所以引号由调用方给。
+        /// </summary>
+        internal static string BuildModelAndEffortArguments(
+            PsdHierarchyChatConnection connection,
+            Func<string, string> quote)
+        {
+            if (quote == null) throw new ArgumentNullException(nameof(quote));
+            return BuildModelArguments(connection, quote) + BuildReasoningEffortArguments(connection, quote);
+        }
+
+        private static string BuildModelArguments(
+            PsdHierarchyChatConnection connection,
+            Func<string, string> quote)
+        {
+            string model = (connection.model ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(model))
+            {
+                return string.Empty;
+            }
+
+            // Codex 用短选项，其余三个都用 --model。
+            string option = connection.provider == PsdHierarchyAiProvider.Codex ? "-m " : "--model ";
+            return " " + option + quote(model);
+        }
+
+        /// <summary>思考程度留空时不生成任何参数，完全使用 CLI 自身的配置。</summary>
+        private static string BuildReasoningEffortArguments(
+            PsdHierarchyChatConnection connection,
+            Func<string, string> quote)
+        {
+            string effort = (connection.reasoningEffort ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(effort))
+            {
+                return string.Empty;
+            }
+
+            switch (connection.provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    return " --effort " + quote(effort);
+                case PsdHierarchyAiProvider.Grok:
+                    return " --reasoning-effort " + quote(effort);
+                case PsdHierarchyAiProvider.Pi:
+                    return " --thinking " + quote(effort);
+                case PsdHierarchyAiProvider.Codex:
+                    // codex 的 --config 值先按 TOML 解析，解析失败就按字面量使用，
+                    // 所以这里给裸值即可，不必在 cmd 包装层里再嵌一层引号。
+                    // 设置层已保证思考程度不含空格与引号。
+                    return " -c model_reasoning_effort=" + effort;
+                default:
+                    return string.Empty;
+            }
+        }
+
+        private static PsdHierarchyCliInvocation WrapForCommandShim(
+            string cliPath,
+            string arguments,
+            string workingDirectory,
+            bool writePromptToStandardInput)
+        {
             if (cliPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
                 cliPath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
             {
@@ -2431,10 +2686,10 @@ namespace PsdLayoutTool2
                     commandProcessor,
                     "/d /s /c \"\"" + cliPath.Replace("\"", "\"\"") + "\" " + arguments + "\"",
                     workingDirectory,
-                    true);
+                    writePromptToStandardInput);
             }
 
-            return new PsdHierarchyCliInvocation(cliPath, arguments, workingDirectory, true);
+            return new PsdHierarchyCliInvocation(cliPath, arguments, workingDirectory, writePromptToStandardInput);
         }
 
         internal static PsdHierarchyCliInvocation CreateInteractiveCliInvocation(
@@ -2452,10 +2707,25 @@ namespace PsdLayoutTool2
                 throw new ArgumentException("恢复 CLI 会话时必须提供会话 ID。", nameof(cliSessionId));
             }
 
-            string arguments = connection.provider == PsdHierarchyAiProvider.Claude
-                ? "--resume " + QuoteProcessArgument(cliSessionId) +
-                  " --permission-mode plan --safe-mode --add-dir " + QuoteProcessArgument(workingDirectory)
-                : "-s read-only resume " + QuoteProcessArgument(cliSessionId);
+            string arguments;
+            switch (connection.provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    arguments = "--resume " + QuoteProcessArgument(cliSessionId) +
+                        " --permission-mode plan --safe-mode --add-dir " + QuoteProcessArgument(workingDirectory);
+                    break;
+                case PsdHierarchyAiProvider.Grok:
+                    arguments = "--resume " + QuoteProcessArgument(cliSessionId) +
+                        " --permission-mode plan";
+                    break;
+                case PsdHierarchyAiProvider.Pi:
+                    arguments = "--session " + QuoteProcessArgument(cliSessionId);
+                    break;
+                default:
+                    arguments = "-s read-only resume " + QuoteProcessArgument(cliSessionId);
+                    break;
+            }
+
             string commandProcessor = Environment.GetEnvironmentVariable("ComSpec");
             if (string.IsNullOrWhiteSpace(commandProcessor))
             {
@@ -2542,9 +2812,11 @@ namespace PsdLayoutTool2
         {
             if (context == null) throw new ArgumentNullException(nameof(context));
 
-            string targetPrefabFullPath = context.projectRoot.TrimEnd('/', '\\') + "/" +
-                                          context.targetPrefabAssetPath.TrimStart('/', '\\');
-            string normalizedSkillPath = context.skillFullPath.Replace('\\', '/');
+            // 这份提示词也会被复制到 Unity 之外的 CLI / 桌面 AI 里执行，那些工具的工作目录
+            // 不受控，所以统一输出「绝对路径 + 正斜杠」，不留相对路径或混合分隔符。
+            string targetPrefabFullPath = ToPortableFullPath(context.projectRoot.TrimEnd('/', '\\') + "/" +
+                                                             context.targetPrefabAssetPath.TrimStart('/', '\\'));
+            string normalizedSkillPath = ToPortableFullPath(context.skillFullPath);
             int skillSeparatorIndex = normalizedSkillPath.LastIndexOf('/');
             string planFormatFullPath = skillSeparatorIndex >= 0
                 ? normalizedSkillPath.Substring(0, skillSeparatorIndex + 1) + "references/plan-format.md"
@@ -2552,10 +2824,10 @@ namespace PsdLayoutTool2
             var builder = new StringBuilder();
             builder.AppendLine("Use skill prefab-hierarchy-cleanup. Read these local files:");
             builder.AppendLine("全部使用中文输出。");
-            builder.AppendLine("Skill: " + context.skillFullPath);
+            builder.AppendLine("Skill: " + normalizedSkillPath);
             builder.AppendLine("Plan format: " + planFormatFullPath);
             builder.AppendLine("Prefab: " + targetPrefabFullPath);
-            builder.AppendLine("Hierarchy snapshot: " + context.hierarchySnapshotFullPath);
+            builder.AppendLine("Hierarchy snapshot: " + ToPortableFullPath(context.hierarchySnapshotFullPath));
             builder.AppendLine("Accuracy rules:");
             builder.AppendLine("- Inspect the complete hierarchy, geometry, component types, active states, sibling order, nested Prefab boundaries, and repeated structures; names alone are insufficient.");
             builder.AppendLine("- Treat the hierarchy snapshot as authoritative. Read only targeted Prefab sections when the snapshot lacks evidence or conflicts with serialized data; do not repeatedly read the complete Prefab and snapshot.");
@@ -2576,6 +2848,63 @@ namespace PsdLayoutTool2
             builder.AppendLine("- Time budget: at most one JSON repair before confirmation, one Apply per stage, and one read-only verification after an indeterminate Apply. The automatic second stage gets no repair retry. Never reinstall tools, rerun a failed plan, restore, or reimport automatically.");
             builder.AppendLine("- Finish with a final verification report; do not claim that local assets changed unless the apply and verification commands prove it.");
             builder.AppendLine("If these paths are inaccessible, ask the user to upload the Prefab and snapshot; never guess their contents.");
+            return builder.ToString();
+        }
+
+        /// <summary>
+        /// Normalizes every path that leaves Unity into one absolute, forward-slash form.
+        /// A tool started outside the Unity project cannot resolve a path against the project
+        /// directory, and mixed separators or backslashes survive command-line quoting badly.
+        /// </summary>
+        internal static string ToPortableFullPath(string path)
+        {
+            return (path ?? string.Empty).Replace('\\', '/');
+        }
+
+        /// <summary>
+        /// Builds the prompt for an external CLI or desktop AI the user starts by hand. It keeps
+        /// the portable prompt unchanged, then pins the project root, the source PSD and the two
+        /// output files as absolute paths, so the external session can run from any working
+        /// directory and still hand Unity a reviewed, applicable plan.
+        /// </summary>
+        internal static string BuildExternalSessionPrompt(
+            PsdHierarchyChatContext context,
+            string planFullPath,
+            string reviewFullPath)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+            if (string.IsNullOrWhiteSpace(planFullPath))
+            {
+                throw new ArgumentException("外部会话的计划输出路径不能为空。", nameof(planFullPath));
+            }
+
+            if (string.IsNullOrWhiteSpace(reviewFullPath))
+            {
+                throw new ArgumentException("外部会话的复核输出路径不能为空。", nameof(reviewFullPath));
+            }
+
+            string projectRoot = ToPortableFullPath(context.projectRoot.TrimEnd('/', '\\'));
+            string sourcePsdFullPath = string.IsNullOrWhiteSpace(context.sourcePsdAssetPath)
+                ? string.Empty
+                : ToPortableFullPath(projectRoot + "/" + context.sourcePsdAssetPath.TrimStart('/', '\\'));
+
+            var builder = new StringBuilder(BuildPortablePrompt(context));
+            builder.AppendLine();
+            builder.AppendLine("===== EXTERNAL SESSION CONTRACT =====");
+            builder.AppendLine("Unity project root: " + projectRoot);
+            if (sourcePsdFullPath.Length > 0)
+            {
+                builder.AppendLine("Source PSD: " + sourcePsdFullPath);
+            }
+
+            builder.AppendLine("Every path above and below is an absolute path on this machine. Use each value verbatim: never resolve it against your working directory, never rewrite, shorten or re-normalize it, and never substitute a guessed path.");
+            builder.AppendLine("If your tool has no skill mechanism, read the SKILL.md file listed above and follow it directly.");
+            builder.AppendLine("If a listed file cannot be read, stop and report that exact absolute path instead of guessing its contents.");
+            builder.AppendLine("This is an analysis and plan session started outside Unity. Do not modify Unity assets and do not claim that any asset was changed.");
+            builder.AppendLine("Write the complete executable version 2 JSON plan (and no partial patch) to: " + ToPortableFullPath(planFullPath));
+            builder.AppendLine("Write the human-readable Chinese review to: " + ToPortableFullPath(reviewFullPath));
+            builder.AppendLine("After every revision, replace both files atomically or rewrite them completely.");
+            builder.AppendLine("Only the later Unity-side apply action may modify the target Prefab.");
             return builder.ToString();
         }
 
@@ -2909,7 +3238,11 @@ namespace PsdLayoutTool2
                 string cliSessionId)
             {
                 bool resumeCliSession = !string.IsNullOrWhiteSpace(cliSessionId);
-                string requestedSessionId = connection.provider == PsdHierarchyAiProvider.Claude && !resumeCliSession
+                // Claude 与 Grok 都支持用 --session-id 预先指定新会话 ID。
+                // Pi 的会话 ID 由它自己生成（首轮不给 --session，从 session 事件里读回来）。
+                bool supportsPresetSessionId = connection.provider == PsdHierarchyAiProvider.Claude ||
+                                               connection.provider == PsdHierarchyAiProvider.Grok;
+                string requestedSessionId = supportsPresetSessionId && !resumeCliSession
                     ? Guid.NewGuid().ToString()
                     : cliSessionId;
                 string prompt = resumeCliSession
@@ -2923,6 +3256,18 @@ namespace PsdLayoutTool2
                     prompt,
                     requestedSessionId,
                     resumeCliSession);
+                // Grok 只能用 --prompt-file 接收长提示词，这里把提示词落盘。
+                if (!string.IsNullOrEmpty(invocation.promptFilePath))
+                {
+                    string promptDirectory = Path.GetDirectoryName(invocation.promptFilePath);
+                    if (!string.IsNullOrEmpty(promptDirectory))
+                    {
+                        Directory.CreateDirectory(promptDirectory);
+                    }
+
+                    File.WriteAllText(invocation.promptFilePath, prompt, new UTF8Encoding(false));
+                }
+
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = invocation.executablePath,
@@ -2942,6 +3287,7 @@ namespace PsdLayoutTool2
                 {
                     if (process == null)
                     {
+                        DeletePromptFile(invocation.promptFilePath);
                         return new PsdHierarchyChatSendResult(false, "无法启动所选 AI CLI。" );
                     }
 
@@ -2954,6 +3300,7 @@ namespace PsdLayoutTool2
                     Task<string> errorTask = process.StandardError.ReadToEndAsync();
                     if (!await WaitForExitAsync(process, AiRequestTimeoutSeconds))
                     {
+                        DeletePromptFile(invocation.promptFilePath);
                         return new PsdHierarchyChatSendResult(
                             false,
                             "AI CLI 超过 " + AiRequestTimeoutSeconds + " 秒未完成，已停止本次请求。不会自动重试或启动新的会话。");
@@ -2961,11 +3308,13 @@ namespace PsdLayoutTool2
 
                     string output = await outputTask;
                     string error = await errorTask;
-                    if (process.ExitCode != 0)
+                    int exitCode = process.ExitCode;
+                    DeletePromptFile(invocation.promptFilePath);
+                    if (exitCode != 0)
                     {
                         return new PsdHierarchyChatSendResult(
                             false,
-                            "AI CLI 返回错误：" + FirstNonEmptyLine(error, output, "退出码 " + process.ExitCode));
+                            "AI CLI 返回错误：" + FirstNonEmptyLine(error, output, "退出码 " + exitCode));
                     }
 
                     if (string.IsNullOrWhiteSpace(output))
@@ -2977,14 +3326,167 @@ namespace PsdLayoutTool2
                 }
             }
 
+            private static void DeletePromptFile(string promptFilePath)
+            {
+                if (string.IsNullOrEmpty(promptFilePath))
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (File.Exists(promptFilePath))
+                    {
+                        File.Delete(promptFilePath);
+                    }
+                }
+                catch (IOException)
+                {
+                    // 清理失败不影响本次结果，残留文件在 Library 下且下次同目录复用。
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+
             private static PsdHierarchyChatSendResult ParseCliResponse(
                 PsdHierarchyAiProvider provider,
                 string output,
                 string fallbackSessionId)
             {
-                return provider == PsdHierarchyAiProvider.Claude
-                    ? ParseClaudeCliResponse(output, fallbackSessionId)
-                    : ParseCodexCliResponse(output, fallbackSessionId);
+                switch (provider)
+                {
+                    case PsdHierarchyAiProvider.Claude:
+                        return ParseClaudeCliResponse(output, fallbackSessionId);
+                    case PsdHierarchyAiProvider.Grok:
+                        return ParseGrokCliResponse(output, fallbackSessionId);
+                    case PsdHierarchyAiProvider.Pi:
+                        return ParsePiCliResponse(output, fallbackSessionId);
+                    default:
+                        return ParseCodexCliResponse(output, fallbackSessionId);
+                }
+            }
+
+            /// <summary>
+            /// Grok 的 --output-format json 返回单个对象：
+            /// {"text": "...", "sessionId": "...", ...}（camelCase，与 Claude 的 result/session_id 不同）。
+            /// </summary>
+            private static PsdHierarchyChatSendResult ParseGrokCliResponse(
+                string output,
+                string fallbackSessionId)
+            {
+                try
+                {
+                    GrokCliResult response = JsonUtility.FromJson<GrokCliResult>(output);
+                    string message = response == null ? string.Empty : response.text;
+                    if (string.IsNullOrWhiteSpace(message))
+                    {
+                        return new PsdHierarchyChatSendResult(false, "Grok CLI 未返回可显示的文本。");
+                    }
+
+                    string sessionId = !string.IsNullOrWhiteSpace(response.sessionId)
+                        ? response.sessionId
+                        : fallbackSessionId;
+                    if (string.IsNullOrWhiteSpace(sessionId))
+                    {
+                        return new PsdHierarchyChatSendResult(false, "Grok CLI 未返回可恢复的会话 ID。");
+                    }
+
+                    return new PsdHierarchyChatSendResult(true, message.Trim(), sessionId);
+                }
+                catch (ArgumentException exception)
+                {
+                    return new PsdHierarchyChatSendResult(false, "解析 Grok CLI 会话失败：" + exception.Message);
+                }
+            }
+
+            /// <summary>
+            /// Pi 的 --mode json 是 NDJSON 事件流，不是单个 JSON 对象。实测结构：
+            ///   {"type":"session","id":"<会话 ID>",...}
+            ///   {"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"..."}]}}
+            /// 因此会话 ID 取第一条 session 事件，正文取最后一条 assistant 的 turn_end。
+            /// </summary>
+            private static PsdHierarchyChatSendResult ParsePiCliResponse(
+                string output,
+                string fallbackSessionId)
+            {
+                string sessionId = fallbackSessionId;
+                string message = string.Empty;
+                int parsedEvents = 0;
+                using (var reader = new StringReader(output))
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            PiCliEvent cliEvent = JsonUtility.FromJson<PiCliEvent>(line);
+                            if (cliEvent == null)
+                            {
+                                continue;
+                            }
+
+                            parsedEvents++;
+                            if (string.Equals(cliEvent.type, "session", StringComparison.Ordinal) &&
+                                !string.IsNullOrWhiteSpace(cliEvent.id))
+                            {
+                                sessionId = cliEvent.id;
+                                continue;
+                            }
+
+                            if (!string.Equals(cliEvent.type, "turn_end", StringComparison.Ordinal) ||
+                                cliEvent.message == null ||
+                                !string.Equals(cliEvent.message.role, "assistant", StringComparison.Ordinal) ||
+                                cliEvent.message.content == null)
+                            {
+                                continue;
+                            }
+
+                            var builder = new StringBuilder();
+                            for (int index = 0; index < cliEvent.message.content.Length; index++)
+                            {
+                                PiCliContent part = cliEvent.message.content[index];
+                                if (part != null &&
+                                    string.Equals(part.type, "text", StringComparison.Ordinal) &&
+                                    !string.IsNullOrEmpty(part.text))
+                                {
+                                    builder.Append(part.text);
+                                }
+                            }
+
+                            if (builder.Length > 0)
+                            {
+                                message = builder.ToString();
+                            }
+                        }
+                        catch (ArgumentException)
+                        {
+                            // 事件流里混入非 JSON 行时跳过该行，不影响后续事件。
+                        }
+                    }
+                }
+
+                if (parsedEvents == 0)
+                {
+                    return new PsdHierarchyChatSendResult(false, "无法解析 Pi 返回的事件流。");
+                }
+
+                if (string.IsNullOrWhiteSpace(message))
+                {
+                    return new PsdHierarchyChatSendResult(false, "Pi CLI 未返回可显示的文本。");
+                }
+
+                if (string.IsNullOrWhiteSpace(sessionId))
+                {
+                    return new PsdHierarchyChatSendResult(false, "Pi CLI 未返回可恢复的会话 ID。");
+                }
+
+                return new PsdHierarchyChatSendResult(true, message.Trim(), sessionId);
             }
 
             private static PsdHierarchyChatSendResult ParseClaudeCliResponse(
@@ -3143,6 +3645,41 @@ namespace PsdLayoutTool2
 
             [Serializable]
             private sealed class CodexCliItem
+            {
+                public string type;
+                public string text;
+            }
+
+            /// <summary>Grok --output-format json 的返回对象。字段名是 camelCase。</summary>
+            [Serializable]
+            private sealed class GrokCliResult
+            {
+                public string text;
+                public string sessionId;
+                public string stopReason;
+            }
+
+            /// <summary>
+            /// Pi --mode json 的一行 NDJSON 事件。<c>type</c> 为 session / turn_end 时会带出
+            /// <c>id</c> 或 <c>message</c>，其余事件类型这两个字段为空，直接跳过。
+            /// </summary>
+            [Serializable]
+            private sealed class PiCliEvent
+            {
+                public string type;
+                public string id;
+                public PiCliMessage message;
+            }
+
+            [Serializable]
+            private sealed class PiCliMessage
+            {
+                public string role;
+                public PiCliContent[] content;
+            }
+
+            [Serializable]
+            private sealed class PiCliContent
             {
                 public string type;
                 public string text;

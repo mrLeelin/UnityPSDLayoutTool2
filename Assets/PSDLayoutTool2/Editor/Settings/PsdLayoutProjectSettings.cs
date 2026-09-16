@@ -609,7 +609,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 7;
+        private const int CurrentSettingsVersion = 8;
 
         [SerializeField]
         private int settingsVersion;
@@ -692,12 +692,47 @@ namespace PsdLayoutTool2
 
         internal void SetHierarchyAiSettings(
             PsdHierarchyAiProvider provider,
-            PsdHierarchyAiConnectionMode connectionMode,
             string customEndpoint,
-            string customModel)
+            string customModel,
+            string reasoningEffort)
         {
             EnsureData();
-            if (hierarchyAiSettings.Set(provider, connectionMode, customEndpoint, customModel))
+            if (hierarchyAiSettings.Set(provider, customEndpoint, customModel, reasoningEffort))
+            {
+                SaveAsset();
+            }
+        }
+
+        /// <summary>
+        /// 设置面板用的非抛出版本：校验失败时返回错误文案，由调用方展示。
+        /// </summary>
+        internal bool TrySetHierarchyAiSettings(
+            PsdHierarchyAiProvider provider,
+            string customEndpoint,
+            string customModel,
+            string reasoningEffort,
+            out string error)
+        {
+            EnsureData();
+            try
+            {
+                SetHierarchyAiSettings(provider, customEndpoint, customModel, reasoningEffort);
+            }
+            catch (ArgumentException exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
+        /// <summary>关闭 AI 整理，保留已填写的模型与地址。</summary>
+        internal void ClearHierarchyAiSettings()
+        {
+            EnsureData();
+            if (hierarchyAiSettings.Clear())
             {
                 SaveAsset();
             }
