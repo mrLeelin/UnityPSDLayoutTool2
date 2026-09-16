@@ -79,12 +79,14 @@ namespace PsdLayoutTool2
     /// </summary>
     internal readonly struct PsdLayoutProjectNineSliceSnapshot
     {
-        internal PsdLayoutProjectNineSliceSnapshot(bool autoCropOnExport)
+        internal PsdLayoutProjectNineSliceSnapshot(bool autoCropOnExport, bool showImageMarkers)
         {
             this.autoCropOnExport = autoCropOnExport;
+            this.showImageMarkers = showImageMarkers;
         }
 
         internal readonly bool autoCropOnExport;
+        internal readonly bool showImageMarkers;
     }
 
     /// <summary>
@@ -452,9 +454,13 @@ namespace PsdLayoutTool2
         /// 想省图集空间的项目再主动打开。
         /// </summary>
         internal const bool DefaultAutoCropOnExport = false;
+        internal const bool DefaultShowImageMarkers = false;
 
         [SerializeField]
         private bool autoCropOnExport = DefaultAutoCropOnExport;
+
+        [SerializeField]
+        private bool showImageMarkers = DefaultShowImageMarkers;
 
         internal bool Set(bool newAutoCropOnExport)
         {
@@ -469,7 +475,18 @@ namespace PsdLayoutTool2
 
         internal PsdLayoutProjectNineSliceSnapshot Resolve()
         {
-            return new PsdLayoutProjectNineSliceSnapshot(autoCropOnExport);
+            return new PsdLayoutProjectNineSliceSnapshot(autoCropOnExport, showImageMarkers);
+        }
+
+        internal bool SetShowImageMarkers(bool value)
+        {
+            if (showImageMarkers == value)
+            {
+                return false;
+            }
+
+            showImageMarkers = value;
+            return true;
         }
     }
 
@@ -741,6 +758,15 @@ namespace PsdLayoutTool2
         {
             EnsureData();
             if (nineSliceSettings.Set(autoCropOnExport))
+            {
+                SaveAsset();
+            }
+        }
+
+        internal void SetNineSliceImageMarkers(bool showImageMarkers)
+        {
+            EnsureData();
+            if (nineSliceSettings.SetShowImageMarkers(showImageMarkers))
             {
                 SaveAsset();
             }

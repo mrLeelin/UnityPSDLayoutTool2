@@ -655,6 +655,7 @@ namespace PsdLayoutTool2
             root["texturePrefix"] = naming.texturePrefix;
 
             root["autoCropNineSlice"] = settings.ResolveNineSliceSettings().autoCropOnExport;
+            root["showNineSliceMarkers"] = settings.ResolveNineSliceSettings().showImageMarkers;
 
             PsdHierarchyAiSettingsSnapshot ai = settings.ResolveHierarchyAiSettings();
             root["aiProvider"] = (int)ai.provider;
@@ -895,6 +896,11 @@ namespace PsdLayoutTool2
                 if (data["autoCropNineSlice"] != null)
                 {
                     settings.SetNineSliceAutoCrop(data.Value<bool>("autoCropNineSlice"));
+                }
+
+                if (data["showNineSliceMarkers"] != null)
+                {
+                    settings.SetNineSliceImageMarkers(data.Value<bool>("showNineSliceMarkers"));
                 }
 
                 lastError = messages.Count == 0 ? string.Empty : string.Join("\n", messages);
@@ -1360,6 +1366,17 @@ border-top:0;padding-top:0;flex:0 0 auto}
       </div>
       <label class='switch'>
         <input type='checkbox' id='autoCropNineSlice'>
+        <span class='switch-track'></span>
+      </label>
+    </div>
+
+    <div class='switch-row'>
+      <div class='switch-text'>
+        <span class='switch-main'>在 Hierarchy 显示图片标识</span>
+        <span class='switch-sub'>显示所有 Image、RawImage、SpriteRenderer 的图片标识；绿色代表已设置九宫，灰色代表普通图片。点击标识可打开九宫编辑器。</span>
+      </div>
+      <label class='switch'>
+        <input type='checkbox' id='showNineSliceMarkers'>
         <span class='switch-track'></span>
       </label>
     </div>
@@ -2084,6 +2101,7 @@ function load(){
     updateCleanupBanner();
     if(!dirty.autoCropNineSlice)applyField('autoCropNineSlice',cfg.autoCropNineSlice);
     updateNineSliceBanner();
+    if(!dirty.showNineSliceMarkers)applyField('showNineSliceMarkers',cfg.showNineSliceMarkers);
     if(!dirty.previewServerPort)applyField('previewServerPort',cfg.previewServerPort);
     updateSharePanel(cfg);
     hasKey=!!cfg.aiHasApiKey;
@@ -2112,6 +2130,7 @@ function payload(){
   body.outputMode=parseInt(byId('outputMode').value,10);
   body.cleanupBackend=parseInt(byId('cleanupBackend').value,10);
   body.autoCropNineSlice=!!byId('autoCropNineSlice').checked;
+  body.showNineSliceMarkers=!!byId('showNineSliceMarkers').checked;
   var port=parseInt(byId('previewServerPort').value,10);
   if(!isNaN(port))body.previewServerPort=port;
   body.aiProvider=parseInt(byId('aiProvider').value,10);
@@ -2479,6 +2498,10 @@ byId('cleanupBackend').addEventListener('change',function(){
 });
 byId('autoCropNineSlice').addEventListener('change',function(){
   dirty.autoCropNineSlice=true;updateNineSliceBanner();
+});
+byId('showNineSliceMarkers').addEventListener('change',function(){
+  dirty.showNineSliceMarkers=true;
+  post(payload(),'图片标识显示设置已保存',null);
 });
 byId('previewServerPort').addEventListener('input',function(){dirty.previewServerPort=true;});
 TEXT_FIELDS.forEach(function(id){

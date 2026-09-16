@@ -93,6 +93,7 @@
         /// The current file path to use to save layers as .png files
         /// </summary>
         private static string currentPath;
+        private static string currentSourcePsdPath;
 
         /// <summary>
         /// The <see cref="GameObject"/> representing the root PSD layer.  It contains all of the other layers as children GameObjects.
@@ -942,6 +943,7 @@
                 currentPendingRedundantTexturePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 currentOutputRootDirectory = string.Empty;
                 string normalizedAssetPath = asset.Replace('\\', '/');
+                currentSourcePsdPath = normalizedAssetPath;
                 string fullPath = Path.Combine(GetFullProjectPath(), normalizedAssetPath);
 
                 PsdLogger.Step("Read PSD file: " + fullPath);
@@ -4747,6 +4749,8 @@
                 {
                     textureImporter.userData =
                         PsdNineSliceAssetState.WriteLayerIdentity(textureImporter.userData, layer.Id);
+                    textureImporter.userData =
+                        PsdNineSliceAssetState.WriteSourcePsdIdentity(textureImporter.userData, currentSourcePsdPath);
                 }
 
                 Vector4 nineSliceBorder;

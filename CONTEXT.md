@@ -22,3 +22,7 @@ _Avoid_: 仅导出 Prefab、图片复用
 **实例差异**：多个公共组件实例之间需要保留的内容、外观、布局或状态差别。
 
 **状态组件**：将公共部分与不同状态的内容组织在同一组件中的结构。名称带 Variant 不代表它采用 Unity Prefab Variant 继承。
+
+**九宫可观察性**：在不改变 Prefab 名称或运行时行为的前提下，通过编辑器层级标识与 Inspector 诊断，让开发者确认任意 Unity UI 节点是否使用了九宫 Sprite 和对应边距；不以节点是否由 PSD Layout Tool 生成作为过滤条件。
+
+**九宫诊断**：Inspector 顶部的只读信息块。它仅在当前选中对象含有效九宫 Image 时出现，显示 Sprite、Sliced 状态和四边 Border；不替换 Unity 或第三方的 Image Inspector。

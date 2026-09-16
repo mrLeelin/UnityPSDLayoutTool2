@@ -12,6 +12,7 @@ namespace PsdLayoutTool2
     public sealed class PsdNineSliceAssetState
     {
         private const string LayerIdentityPrefix = "psd-layout-layer-id:v1:";
+        private const string SourceIdentityPrefix = "psd-layout-source-psd:v1:";
         private const string NineSlicePrefix = "psd-layout-nine-slice:v2:";
 
         private PsdNineSliceAssetState(uint layerId, string sourceHash, string outputHash, PsdNineSliceBorder border)
@@ -48,6 +49,19 @@ namespace PsdLayoutTool2
             }
 
             return uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out layerId) && layerId != 0U;
+        }
+
+        public static string WriteSourcePsdIdentity(string userData, string sourcePsdPath)
+        {
+            return string.IsNullOrEmpty(sourcePsdPath)
+                ? userData
+                : ReplaceLine(userData, SourceIdentityPrefix, SourceIdentityPrefix + sourcePsdPath.Replace('\\', '/'));
+        }
+
+        public static bool TryReadSourcePsdIdentity(string userData, out string sourcePsdPath)
+        {
+            return TryReadLinePayload(userData, SourceIdentityPrefix, out sourcePsdPath) &&
+                !string.IsNullOrEmpty(sourcePsdPath);
         }
 
         /// <summary>

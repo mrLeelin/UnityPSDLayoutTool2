@@ -1,6 +1,7 @@
 namespace PsdLayoutTool2
 {
     using System;
+    using System.Collections.Generic;
     using UnityEditor;
     using UnityEngine;
 
@@ -30,6 +31,9 @@ namespace PsdLayoutTool2
         private string assetPath;
         private PsdNineSliceInference inference;
         private PsdNineSlicePsdLayerSession psdSession;
+        private Dictionary<uint, PsdNineSliceExportedBorder> exportedBordersByLayerId;
+        private Dictionary<uint, PsdNineSliceOverride> overridesByLayerId;
+        private PsdNineSliceExportedBorder selectedExportedBorder;
         private Vector2 layerScroll;
         private string layerSearchText = string.Empty;
         private int selectedLayerIndex = -1;
@@ -68,6 +72,9 @@ namespace PsdLayoutTool2
             window.selectedLayerIndex = -1;
             window.activeDrag = DragGuide.None;
             window.statusIsError = false;
+            window.exportedBordersByLayerId = null;
+            window.overridesByLayerId = null;
+            window.selectedExportedBorder = null;
 
             if (window.assetPath.EndsWith(".psd", StringComparison.OrdinalIgnoreCase))
             {
@@ -75,6 +82,7 @@ namespace PsdLayoutTool2
                 try
                 {
                     window.psdSession = PsdNineSlicePsdLayerSession.Open(window.assetPath);
+                    window.RefreshLayerState();
                     window.status = window.psdSession.Layers.Count == 0
                         ? "This PSD has no visible raster layers with pixels."
                         : "Select an image, then drag the four cyan guides or type exact pixel values.";
@@ -102,6 +110,21 @@ namespace PsdLayoutTool2
             window.Show();
         }
 
+        public static void Open(string path, uint layerId)
+        {
+            Open(path);
+            PsdNineSliceWindow window = GetWindow<PsdNineSliceWindow>();
+            if (window.psdSession == null || layerId == 0U) return;
+            for (int index = 0; index < window.psdSession.Layers.Count; index++)
+            {
+                if (window.psdSession.Layers[index].LayerId == layerId)
+                {
+                    window.SelectPsdLayer(index);
+                    return;
+                }
+            }
+        }
+
         private void OnDisable()
         {
             EditorApplication.update -= ProcessPendingAutoSave;
@@ -112,6 +135,36 @@ namespace PsdLayoutTool2
         {
             EditorApplication.update -= ProcessPendingAutoSave;
             EditorApplication.update += ProcessPendingAutoSave;
+        }
+
+        /// <summary>
+        /// Coming back to the window is the natural refresh point: the exported PNG
+        /// borders may have changed while another tool or a reimport ran.
+        /// </summary>
+        private void OnFocus()
+        {
+            if (mode != EditorMode.Psd)
+            {
+                return;
+            }
+
+            RefreshLayerState();
+            LoadSelectedPsdLayerState();
+            Repaint();
+        }
+
+        /// <summary>
+        /// Rebuilds the per-layer view of what is already on disk: the border written
+        /// into each exported PNG and the manual overrides recorded on the PSD asset.
+        /// </summary>
+        private void RefreshLayerState()
+        {
+            exportedBordersByLayerId = PsdNineSliceExportedBorderLookup.Build(assetPath);
+
+            AssetImporter importer = AssetImporter.GetAtPath(assetPath);
+            overridesByLayerId = importer == null
+                ? new Dictionary<uint, PsdNineSliceOverride>()
+                : PsdNineSliceOverrideStore.ReadAll(importer.userData);
         }
 
         private void OnGUI()
@@ -172,10 +225,18 @@ namespace PsdLayoutTool2
                 string id = entry.LayerId == 0U ? "no layer id" : "#" + entry.LayerId;
                 string label = prefix + entry.DisplayName + "  [" + Mathf.RoundToInt(entry.Rect.width) + "x" + Mathf.RoundToInt(entry.Rect.height) + "]  " + id;
                 bool selected = index == selectedLayerIndex;
-                if (GUILayout.Toggle(selected, label, "Button", GUILayout.ExpandWidth(true)) && !selected)
+                PsdNineSliceExportedBorder exported = ResolveExportedBorder(entry.LayerId);
+
+                // The badge owns a column of its own: Unity clips a long Toggle label
+                // from the tail, which would hide a marker appended to the text.
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Toggle(selected, new GUIContent(label, BuildLayerStatusTooltip(entry, exported)), "Button", GUILayout.ExpandWidth(true)) && !selected)
                 {
                     SelectPsdLayer(index);
                 }
+
+                DrawLayerStatusBadge(entry, exported);
+                EditorGUILayout.EndHorizontal();
             }
 
             if (visibleCount == 0)
@@ -185,6 +246,72 @@ namespace PsdLayoutTool2
 
             EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
+        }
+
+        private static GUIStyle s_LayerStatusBadgeStyle;
+
+        /// <summary>
+        /// Filled dot: the exported PNG already carries a 9-slice border. Hollow dot:
+        /// it does not. This is the asset-side state, independent of manual overrides.
+        /// </summary>
+        private void DrawLayerStatusBadge(PsdNineSlicePsdLayerEntry entry, PsdNineSliceExportedBorder exported)
+        {
+            if (s_LayerStatusBadgeStyle == null)
+            {
+                s_LayerStatusBadgeStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    fontSize = 11,
+                    margin = new RectOffset(2, 0, 0, 0),
+                    padding = new RectOffset(0, 0, 0, 0)
+                };
+            }
+
+            bool isNineSlice = exported != null && exported.IsNineSlice;
+            s_LayerStatusBadgeStyle.normal.textColor = isNineSlice
+                ? new Color(0.42f, 0.78f, 0.57f)
+                : new Color(0.56f, 0.56f, 0.56f);
+            GUILayout.Label(
+                new GUIContent(isNineSlice ? "●" : "○", BuildLayerStatusTooltip(entry, exported)),
+                s_LayerStatusBadgeStyle,
+                GUILayout.Width(14f));
+        }
+
+        private string BuildLayerStatusTooltip(PsdNineSlicePsdLayerEntry entry, PsdNineSliceExportedBorder exported)
+        {
+            string text;
+            if (exported == null)
+            {
+                text = "No exported PNG found for this layer, so its 9-slice state is unknown.";
+            }
+            else if (exported.IsNineSlice)
+            {
+                text = "Exported PNG is already 9-slice: " + exported.Describe() + "\n" + exported.AssetPath;
+            }
+            else
+            {
+                text = "Exported PNG has no 9-slice border (" + exported.Describe() + ")\n" + exported.AssetPath;
+            }
+
+            PsdNineSliceOverride manual;
+            if (entry != null && entry.LayerId != 0U && overridesByLayerId != null &&
+                overridesByLayerId.TryGetValue(entry.LayerId, out manual) && manual.Enabled && manual.Border != null)
+            {
+                text += "\nManual override recorded: L" + manual.Border.Left + " T" + manual.Border.Top +
+                    " R" + manual.Border.Right + " B" + manual.Border.Bottom +
+                    "\nIt applies to the PNG on the next PSD import.";
+            }
+
+            return text;
+        }
+
+        private PsdNineSliceExportedBorder ResolveExportedBorder(uint layerId)
+        {
+            PsdNineSliceExportedBorder exported;
+            return layerId != 0U && exportedBordersByLayerId != null &&
+                exportedBordersByLayerId.TryGetValue(layerId, out exported)
+                ? exported
+                : null;
         }
 
         private static bool MatchesLayerSearch(PsdNineSlicePsdLayerEntry entry, string query)
@@ -250,6 +377,8 @@ namespace PsdLayoutTool2
                 HandleGuideDrag(imageRect, preview.width, preview.height);
             }
 
+            DrawExportedBorderStatus();
+
             EditorGUILayout.BeginHorizontal();
             bool enabled = EditorGUILayout.ToggleLeft("Use manual 9-slice override", nineSliceEnabled, GUILayout.Width(210));
             if (enabled != nineSliceEnabled)
@@ -259,12 +388,17 @@ namespace PsdLayoutTool2
             }
 
             GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField(hasManualOverride ? "Manual override" : "No manual override", EditorStyles.miniLabel, GUILayout.Width(105));
+            string overrideState = hasManualOverride
+                ? "Manual override"
+                : (selectedExportedBorder != null && selectedExportedBorder.IsNineSlice
+                    ? "No override - exported border"
+                    : "No manual override");
+            EditorGUILayout.LabelField(overrideState, EditorStyles.miniLabel, GUILayout.Width(190));
             EditorGUILayout.EndHorizontal();
 
             EditorGUI.BeginDisabledGroup(!nineSliceEnabled || preview == null);
             GUILayout.Space(4f);
-            if (DrawBorderFields(preview == null ? 0 : preview.width, preview == null ? 0 : preview.height))
+            if (DrawBorderFields(preview == null ? 0 : preview.width, preview == null ? 0 : preview.height) && nineSliceEnabled)
             {
                 ScheduleAutoSave();
             }
@@ -276,10 +410,60 @@ namespace PsdLayoutTool2
             EditorGUILayout.EndHorizontal();
             EditorGUI.EndDisabledGroup();
 
+            EditorGUILayout.Space(4f);
+            EditorGUI.BeginDisabledGroup(!nineSliceEnabled || selectedExportedBorder == null);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button(
+                    new GUIContent(
+                        "Crop & apply to exported PNG",
+                        "Cuts the exported PNG down to the minimum stretchable 9-slice size (protected edges + a two-pixel stretch sample), " +
+                        "writes these four values into its spriteBorder, reimports that texture, and switches every Image using it to Sliced.\n" +
+                        "The pixel values are used exactly as shown here: no target-canvas rescale."),
+                    GUILayout.Height(22f)))
+            {
+                ApplyToExportedPng(entry, preview);
+            }
+
+            EditorGUILayout.EndHorizontal();
+            EditorGUI.EndDisabledGroup();
+            if (selectedExportedBorder == null)
+            {
+                EditorGUILayout.LabelField("No exported PNG for this layer yet, so there is nothing to update.", EditorStyles.miniLabel);
+            }
+
             EditorGUILayout.HelpBox(
-                "Checked: this layer uses the manual left, top, right, bottom pixels. Unchecked: automatic PSD naming/XMP rules are used. Changes save to this PSD asset's .meta automatically after you stop editing.",
+                "Checked: this layer uses the manual left, top, right, bottom pixels. Unchecked: automatic PSD naming/XMP rules are used. Changes save to this PSD asset's .meta automatically after you stop editing.\n" +
+                "Editing the PSD itself is not required to see a manual border: tick the override, adjust it, then Apply to exported PNG now.",
                 MessageType.None);
             EditorGUILayout.EndVertical();
+        }
+
+        /// <summary>
+        /// States the exported PNG's 9-slice state explicitly, so "No manual override"
+        /// cannot be read as "this image is not nine-sliced".
+        /// </summary>
+        private void DrawExportedBorderStatus()
+        {
+            if (selectedExportedBorder == null)
+            {
+                EditorGUILayout.HelpBox(
+                    "No exported PNG found for this layer, so its 9-slice state is unknown. Export the PSD layers once, then reopen this window.",
+                    MessageType.None);
+                return;
+            }
+
+            if (selectedExportedBorder.IsNineSlice)
+            {
+                EditorGUILayout.HelpBox(
+                    "Exported PNG is already 9-slice: " + selectedExportedBorder.Describe() + "  (" + selectedExportedBorder.FileName + ")" +
+                    (nineSliceEnabled ? string.Empty : " - values are read-only until the manual override below is ticked."),
+                    MessageType.Info);
+                return;
+            }
+
+            EditorGUILayout.HelpBox(
+                "Exported PNG has no 9-slice border: " + selectedExportedBorder.Describe() + "  (" + selectedExportedBorder.FileName + ")",
+                MessageType.None);
         }
 
         private bool DrawBorderFields(int width, int height)
@@ -301,22 +485,40 @@ namespace PsdLayoutTool2
             if (!BordersEqual(next, editableBorder))
             {
                 editableBorder = next;
-                hasManualOverride = true;
+                if (nineSliceEnabled)
+                {
+                    hasManualOverride = true;
+                }
+
                 return true;
             }
 
             return false;
         }
 
+        /// <summary>
+        /// Guides are drawn for the manual override being edited and for the border the
+        /// exported PNG already carries, so an already nine-sliced layer never renders
+        /// as if nothing were set.
+        /// </summary>
+        private bool ShouldDrawNineSliceGuides()
+        {
+            return nineSliceEnabled || (selectedExportedBorder != null && selectedExportedBorder.IsNineSlice);
+        }
+
         private void DrawNineSliceGuides(Rect imageRect, int width, int height)
         {
-            if (!nineSliceEnabled || editableBorder == null || width <= 0 || height <= 0)
+            if (!ShouldDrawNineSliceGuides() || editableBorder == null || width <= 0 || height <= 0)
             {
                 return;
             }
 
             Color old = Handles.color;
-            Handles.color = new Color(0.1f, 0.85f, 1f, 0.95f);
+            // Cyan while a manual override is being edited; dim white while showing the
+            // border that the exported PNG already has.
+            Handles.color = nineSliceEnabled
+                ? new Color(0.1f, 0.85f, 1f, 0.95f)
+                : new Color(1f, 1f, 1f, 0.5f);
             float left = imageRect.xMin + (imageRect.width * editableBorder.Left / width);
             float right = imageRect.xMax - (imageRect.width * editableBorder.Right / width);
             float top = imageRect.yMin + (imageRect.height * editableBorder.Top / height);
@@ -379,6 +581,52 @@ namespace PsdLayoutTool2
             statusIsError = false;
         }
 
+        /// <summary>
+        /// Pushes the edited border onto the exported PNG so the generated UI updates
+        /// right away, instead of waiting for the next full PSD import.
+        /// </summary>
+        private void ApplyToExportedPng(PsdNineSlicePsdLayerEntry entry, Texture2D preview)
+        {
+            if (editableBorder == null || entry == null)
+            {
+                status = "There is no border to apply.";
+                statusIsError = true;
+                return;
+            }
+
+            // Keep the PSD asset's own record in step with what is pushed to the PNG.
+            SaveCurrentOverride(entry, preview);
+            string overrideNote = statusIsError ? " (PSD override not saved: " + status + ")" : string.Empty;
+
+            PsdNineSliceApplyReport report = PsdNineSliceExportedBorderApplier.Apply(
+                selectedExportedBorder == null ? null : selectedExportedBorder.AssetPath,
+                entry.LayerId,
+                editableBorder);
+            if (!report.Succeeded)
+            {
+                status = report.Error;
+                statusIsError = true;
+                return;
+            }
+
+            RefreshLayerState();
+            LoadSelectedPsdLayerState();
+            string sizeText = report.WasCropped
+                ? "cropped " + report.SourceWidth + "x" + report.SourceHeight + " -> " + report.Width + "x" + report.Height
+                : "kept " + report.Width + "x" + report.Height + " (already minimal)";
+            status = report.FileName + ": " + sizeText +
+                ", applied L" + report.Border.Left + " T" + report.Border.Top +
+                " R" + report.Border.Right + " B" + report.Border.Bottom +
+                ", switched " + report.ImageCount + " Image(s) to Sliced" +
+                (report.PrefabCount > 0 ? " (" + report.PrefabCount + " prefab(s) saved)." : ".") +
+                (report.RawImageCount > 0
+                    ? " Warning: " + report.RawImageCount + " RawImage(s) also use this texture and cannot be sliced."
+                    : string.Empty) +
+                overrideNote;
+            statusIsError = false;
+            Repaint();
+        }
+
         private void SaveCurrentOverride(PsdNineSlicePsdLayerEntry entry, Texture2D preview)
         {
             if (entry.LayerId == 0U)
@@ -408,6 +656,8 @@ namespace PsdLayoutTool2
                 : PsdNineSliceOverrideStore.Remove(importer.userData, entry.LayerId);
             AssetDatabase.WriteImportSettingsIfDirty(assetPath);
             hasManualOverride = nineSliceEnabled;
+            overridesByLayerId = PsdNineSliceOverrideStore.ReadAll(importer.userData);
+            Repaint();
             status = nineSliceEnabled
                 ? "Saved manual 9-slice override. The next PSD-to-Prefab import uses it first."
                 : "Manual override removed. The next PSD-to-Prefab import uses PSD naming/XMP automatic rules.";
@@ -457,9 +707,15 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            AssetImporter importer = AssetImporter.GetAtPath(assetPath);
+            if (overridesByLayerId == null || exportedBordersByLayerId == null)
+            {
+                RefreshLayerState();
+            }
+
+            selectedExportedBorder = ResolveExportedBorder(entry.LayerId);
+
             PsdNineSliceOverride saved;
-            if (importer != null && PsdNineSliceOverrideStore.TryGet(importer.userData, entry.LayerId, out saved) && saved.Enabled)
+            if (overridesByLayerId.TryGetValue(entry.LayerId, out saved) && saved.Enabled && saved.Border != null)
             {
                 hasManualOverride = true;
                 nineSliceEnabled = true;
@@ -467,17 +723,21 @@ namespace PsdLayoutTool2
                 return;
             }
 
+            int width = Mathf.RoundToInt(entry.Rect.width);
+            int height = Mathf.RoundToInt(entry.Rect.height);
             hasManualOverride = false;
+            nineSliceEnabled = false;
             PsdNineSliceNameRule rule;
-            if (PsdNineSliceNameRules.TryParse(entry.DisplayName, out rule))
+            editableBorder = PsdNineSliceNameRules.TryParse(entry.DisplayName, out rule) && rule.ExplicitBorder != null
+                ? rule.ExplicitBorder
+                : CreateDefaultBorder(width, height);
+
+            // The layer may already be nine-sliced in its exported PNG (name tag or an
+            // earlier import). Show the border that is actually in effect instead of a
+            // default guess; editing still needs the manual override switch.
+            if (selectedExportedBorder != null && selectedExportedBorder.IsNineSlice)
             {
-                nineSliceEnabled = false;
-                editableBorder = rule.ExplicitBorder ?? CreateDefaultBorder(Mathf.RoundToInt(entry.Rect.width), Mathf.RoundToInt(entry.Rect.height));
-            }
-            else
-            {
-                nineSliceEnabled = false;
-                editableBorder = CreateDefaultBorder(Mathf.RoundToInt(entry.Rect.width), Mathf.RoundToInt(entry.Rect.height));
+                editableBorder = ClampBorder(selectedExportedBorder.ToAuthorBorder(), width, height);
             }
         }
 

@@ -1,7 +1,11 @@
 namespace PsdLayoutTool2.Tests
 {
+    using System.Collections.Generic;
+    using System.IO;
     using NUnit.Framework;
     using UnityEditor;
+    using UnityEngine;
+    using UnityEngine.UI;
 
     /// <summary>
     /// Regression coverage for the Unity-owned 9-slice pixel pipeline.
@@ -264,6 +268,56 @@ namespace PsdLayoutTool2.Tests
             Assert.That(state.Border.Bottom, Is.EqualTo(2));
         }
 
+        [Test]
+        public void ExportedBorderIsReadFromThePngForTheEditorPanel()
+        {
+            // Unity stores spriteBorder as left, bottom, right, top while the PSD
+            // editor and the override store use left, top, right, bottom.
+            var exported = new PsdNineSliceExportedBorder(
+                "Assets/Examples/daily_bgbig1_932.png",
+                new Vector4(10f, 20f, 30f, 40f));
+
+            PsdNineSliceBorder author = exported.ToAuthorBorder();
+            Assert.That(author.Left, Is.EqualTo(10));
+            Assert.That(author.Bottom, Is.EqualTo(20));
+            Assert.That(author.Right, Is.EqualTo(30));
+            Assert.That(author.Top, Is.EqualTo(40));
+            Assert.That(exported.IsNineSlice, Is.True);
+            Assert.That(exported.FileName, Is.EqualTo("daily_bgbig1_932.png"));
+        }
+
+        [Test]
+        public void ExportedBorderWithoutPixelsIsNotNineSlice()
+        {
+            var exported = new PsdNineSliceExportedBorder(
+                "Assets/Examples/daily_bghead3_951.png",
+                Vector4.zero);
+
+            Assert.That(exported.IsNineSlice, Is.False);
+            Assert.That(exported.Describe(), Is.EqualTo("L0 T0 R0 B0"));
+        }
+
+        [Test]
+        public void ExportedBorderDescribesItsValuesInAuthorOrder()
+        {
+            var exported = new PsdNineSliceExportedBorder(
+                "Assets/Examples/panel_7.png",
+                new Vector4(104f, 104f, 104f, 104f));
+
+            Assert.That(exported.Describe(), Is.EqualTo("L104 T104 R104 B104"));
+        }
+
+        [Test]
+        public void TextureFolderConventionMatchesTheGeneratedLayout()
+        {
+            Assert.That(
+                PsdNineSliceExportedBorderLookup.ConventionTextureFolder("Assets/Examples/7日任务拆分.psd"),
+                Is.EqualTo("Assets/Examples/7日任务拆分/Texture"));
+            Assert.That(
+                PsdNineSliceExportedBorderLookup.ConventionTextureFolder("Assets/Examples/panel.png"),
+                Is.Empty);
+        }
+
         private static PsdNineSliceRaster CreateFramedRaster(int width, int height, int frame)
         {
             byte[] pixels = new byte[width * height * 4];
@@ -297,6 +351,215 @@ namespace PsdLayoutTool2.Tests
             }
 
             return new PsdNineSliceRaster(width, height, pixels);
+        }
+    }
+
+    /// <summary>
+    /// Integration coverage for the PSD editor panel state: the exported border has to
+    /// come from the generated PNG itself, keyed by the layer id stored in that PNG's
+    /// TextureImporter userData.
+    /// </summary>
+    public sealed class PsdNineSliceExportedBorderLookupTests
+    {
+        private const string TestsFolderPath = "Assets/PSDLayoutTool2/Editor/Tests";
+        private const string RootPath = TestsFolderPath + "/ExportedBorderLookupTemp";
+        private const string PsdPath = RootPath + "/Sample.psd";
+        private const string SampleFolderPath = RootPath + "/Sample";
+        private const string TextureFolderPath = SampleFolderPath + "/Texture";
+
+        [SetUp]
+        public void SetUp()
+        {
+            AssetDatabase.DeleteAsset(RootPath);
+            AssetDatabase.CreateFolder(TestsFolderPath, "ExportedBorderLookupTemp");
+            AssetDatabase.CreateFolder(RootPath, "Sample");
+            AssetDatabase.CreateFolder(SampleFolderPath, "Texture");
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            AssetDatabase.DeleteAsset(RootPath);
+        }
+
+        [Test]
+        public void BuildMapsLayerIdsToTheBorderWrittenIntoEachPng()
+        {
+            WriteGeneratedPng(TextureFolderPath + "/daily_bgbig1_932.png", 932U, new Vector4(104f, 104f, 104f, 104f));
+            WriteGeneratedPng(TextureFolderPath + "/daily_bghead3_951.png", 951U, Vector4.zero);
+
+            Dictionary<uint, PsdNineSliceExportedBorder> borders = PsdNineSliceExportedBorderLookup.Build(PsdPath);
+
+            Assert.That(borders.ContainsKey(932U), Is.True);
+            Assert.That(borders[932U].IsNineSlice, Is.True);
+            Assert.That(borders[932U].Describe(), Is.EqualTo("L104 T104 R104 B104"));
+            Assert.That(borders.ContainsKey(951U), Is.True);
+            Assert.That(borders[951U].IsNineSlice, Is.False);
+        }
+
+        [Test]
+        public void BuildIgnoresPngsWithoutALayerIdentity()
+        {
+            WriteGeneratedPng(TextureFolderPath + "/plain.png", 0U, new Vector4(10f, 10f, 10f, 10f));
+
+            Assert.That(PsdNineSliceExportedBorderLookup.Build(PsdPath), Is.Empty);
+        }
+
+        private static void WriteGeneratedPng(string assetPath, uint layerId, Vector4 spriteBorder)
+        {
+            var texture = new Texture2D(8, 8, TextureFormat.RGBA32, false);
+            string fullPath = Path.Combine(
+                Directory.GetParent(Application.dataPath).FullName,
+                assetPath.Replace('/', Path.DirectorySeparatorChar));
+            File.WriteAllBytes(fullPath, texture.EncodeToPNG());
+            Object.DestroyImmediate(texture);
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+
+            var importer = (TextureImporter)AssetImporter.GetAtPath(assetPath);
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteBorder = spriteBorder;
+            if (layerId != 0U)
+            {
+                importer.userData = PsdNineSliceAssetState.WriteLayerIdentity(importer.userData, layerId);
+            }
+
+            importer.SaveAndReimport();
+        }
+    }
+
+    /// <summary>
+    /// Integration coverage for the PSD editor's "Apply to exported PNG now" action:
+    /// the border must reach the PNG immediately and the nodes that use that texture
+    /// must end up Sliced, otherwise nothing visible would change.
+    /// </summary>
+    public sealed class PsdNineSliceExportedBorderApplierTests
+    {
+        private const string TestsFolderPath = "Assets/PSDLayoutTool2/Editor/Tests";
+        private const string RootPath = TestsFolderPath + "/ExportedBorderApplyTemp";
+        private const string SampleFolderPath = RootPath + "/Sample";
+        private const string TextureFolderPath = SampleFolderPath + "/Texture";
+        private const string PrefabFolderPath = SampleFolderPath + "/Prefab";
+        private const string PngPath = TextureFolderPath + "/panel_932.png";
+        private const string PrefabPath = PrefabFolderPath + "/Sample.prefab";
+
+        [SetUp]
+        public void SetUp()
+        {
+            AssetDatabase.DeleteAsset(RootPath);
+            AssetDatabase.CreateFolder(TestsFolderPath, "ExportedBorderApplyTemp");
+            AssetDatabase.CreateFolder(RootPath, "Sample");
+            AssetDatabase.CreateFolder(SampleFolderPath, "Texture");
+            AssetDatabase.CreateFolder(SampleFolderPath, "Prefab");
+
+            WriteSpritePng(PngPath);
+
+            var root = new GameObject("Sample", typeof(RectTransform), typeof(Image));
+            Image image = root.GetComponent<Image>();
+            image.sprite = AssetDatabase.LoadAssetAtPath<Sprite>(PngPath);
+            image.type = Image.Type.Simple;
+            PrefabUtility.SaveAsPrefabAsset(root, PrefabPath);
+            Object.DestroyImmediate(root);
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            AssetDatabase.DeleteAsset(RootPath);
+        }
+
+        [Test]
+        public void ApplyCropsThePngAndSwitchesThePrefabImageToSliced()
+        {
+            PsdNineSliceApplyReport report = PsdNineSliceExportedBorderApplier.Apply(
+                PngPath,
+                932U,
+                new PsdNineSliceBorder(2, 1, 2, 1));
+
+            Assert.That(report.Succeeded, Is.True, report.Error);
+            Assert.That(report.ImageCount, Is.EqualTo(1));
+            Assert.That(report.PrefabCount, Is.EqualTo(1));
+
+            // 8x8 with left/right 2 and top/bottom 1 keeps two protected edges plus the
+            // two-pixel stretch sample: 2+2+2 by 1+2+1.
+            Assert.That(report.WasCropped, Is.True);
+            Assert.That(report.SourceWidth, Is.EqualTo(8));
+            Assert.That(report.SourceHeight, Is.EqualTo(8));
+            Assert.That(report.Width, Is.EqualTo(6));
+            Assert.That(report.Height, Is.EqualTo(4));
+
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(PngPath);
+            Assert.That(texture.width, Is.EqualTo(6));
+            Assert.That(texture.height, Is.EqualTo(4));
+
+            // Unity order is left, bottom, right, top.
+            var importer = (TextureImporter)AssetImporter.GetAtPath(PngPath);
+            Assert.That(importer.spriteBorder, Is.EqualTo(new Vector4(2f, 1f, 2f, 1f)));
+            Assert.That(PsdNineSliceAssetState.TryRead(importer.userData, out PsdNineSliceAssetState state), Is.True);
+            Assert.That(state.LayerId, Is.EqualTo(932U));
+            Assert.That(state.Border.Left, Is.EqualTo(2));
+
+            Image prefabImage = AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath).GetComponent<Image>();
+            Assert.That(prefabImage.type, Is.EqualTo(Image.Type.Sliced));
+        }
+
+        [Test]
+        public void ApplyRejectsABorderWithoutAStretchCenter()
+        {
+            PsdNineSliceApplyReport report = PsdNineSliceExportedBorderApplier.Apply(
+                PngPath,
+                932U,
+                new PsdNineSliceBorder(4, 4, 4, 4));
+
+            Assert.That(report.Succeeded, Is.False);
+            var importer = (TextureImporter)AssetImporter.GetAtPath(PngPath);
+            Assert.That(importer.spriteBorder, Is.EqualTo(Vector4.zero));
+
+            // A rejected border must not touch the pixels either.
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(PngPath);
+            Assert.That(texture.width, Is.EqualTo(8));
+            Assert.That(texture.height, Is.EqualTo(8));
+
+            Image prefabImage = AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath).GetComponent<Image>();
+            Assert.That(prefabImage.type, Is.EqualTo(Image.Type.Simple));
+        }
+
+        [Test]
+        public void ApplyRejectsALayerWithoutAStablePhotoshopId()
+        {
+            PsdNineSliceApplyReport report = PsdNineSliceExportedBorderApplier.Apply(
+                PngPath,
+                0U,
+                new PsdNineSliceBorder(2, 1, 2, 1));
+
+            Assert.That(report.Succeeded, Is.False);
+            Assert.That(AssetDatabase.LoadAssetAtPath<Texture2D>(PngPath).width, Is.EqualTo(8));
+        }
+
+        [Test]
+        public void GeneratedPrefabFolderMatchesTheGeneratedLayout()
+        {
+            Assert.That(
+                PsdNineSliceExportedBorderApplier.GeneratedPrefabFolder("Assets/Examples/7日任务拆分/Texture/panel_932.png"),
+                Is.EqualTo("Assets/Examples/7日任务拆分/Prefab"));
+            Assert.That(
+                PsdNineSliceExportedBorderApplier.GeneratedPrefabFolder("Assets/Examples/panel_932.png"),
+                Is.Empty);
+        }
+
+        private static void WriteSpritePng(string assetPath)
+        {
+            var texture = new Texture2D(8, 8, TextureFormat.RGBA32, false);
+            string fullPath = Path.Combine(
+                Directory.GetParent(Application.dataPath).FullName,
+                assetPath.Replace('/', Path.DirectorySeparatorChar));
+            File.WriteAllBytes(fullPath, texture.EncodeToPNG());
+            Object.DestroyImmediate(texture);
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+
+            var importer = (TextureImporter)AssetImporter.GetAtPath(assetPath);
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteImportMode = SpriteImportMode.Single;
+            importer.SaveAndReimport();
         }
     }
 }
