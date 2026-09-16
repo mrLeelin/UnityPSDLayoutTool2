@@ -224,7 +224,9 @@ Bind repeated labels, badges, counters, and interaction targets to their matchin
 }
 ```
 
-Use inner-to-outer order so nested groups are tightened before their parents. When omitted, every new wrapper is tightened automatically.
+Use inner-to-outer order so nested groups are tightened before their parents. When omitted, every new wrapper is tightened automatically. **In this project's NativeUnity engine that is NOT true:**
+a new wrapper keeps `sizeDelta = 0` unless it is listed explicitly. Always emit `tightBounds` for every new
+wrapper, inner -> outer (see SKILL.md -> Project-verified engine realities, R1).
 
 ## Component Family Decisions
 
@@ -538,7 +540,10 @@ When the full private Texture directory belongs to this Prefab, list every Textu
 
 ## Verification Contract
 
-Use counts captured during the read-only snapshot. `hierarchy` paths are post-apply paths and make the final tree reviewable after a timeout.
+Use counts captured during the read-only snapshot. **Exception for extraction stages** (`componentExtractions`,
+`stateComponentExtractions`, `variantComponentExtractions`, `statefulComponentExtractions`): the saved tree expands,
+so the counts must be the post-expansion expectation — otherwise the apply saves first and then reports
+`VERIFY_WARN issue=nodes expected=.. actual=..`. Omit them or re-snapshot first (SKILL.md R2). `hierarchy` paths are post-apply paths and make the final tree reviewable after a timeout.
 
 ```json
 {

@@ -26,3 +26,11 @@ StyleCop.Cache
 
 # WorkBuddy 工作区数据（记忆、改动备份），不进版本库
 .workbuddy/
+
+# Python 字节码缓存（.agents/scripts 下的工具链产生）
+__pycache__/
+*.pyc
+
+# AI 清理会话的 plan 是运行产物，一律放 Library/PrefabCleanupPlans/（Library/ 已忽略）。
+# 此规则是保险：万一又有会话往 skill 目录里写 plan，也不会进版本库。
+.agents/skills/*/plans/

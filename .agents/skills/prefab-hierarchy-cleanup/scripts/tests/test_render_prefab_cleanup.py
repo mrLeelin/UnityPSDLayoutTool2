@@ -41,7 +41,10 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertIn("render_prefab_cleanup.py", snapshot)
 
     def load_plan(self, filename):
-        return json.loads((SKILL_DIRECTORY / "plans" / filename).read_text(encoding="utf-8"))
+        # 测试夹具固定放 fixtures/；skill 根下的 plans/ 目录已被撤销，
+        # 运行期生成的 plan 一律写到项目 Library/PrefabCleanupPlans/（gitignore 已覆盖）。
+        fixtures = SCRIPT_DIRECTORY / "tests" / "fixtures"
+        return json.loads((fixtures / filename).read_text(encoding="utf-8"))
 
     def test_numbered_family_candidate_keeps_size_variants_and_recommends_stateful(self):
         root = self.make_candidate_node("Root", 0, 1)

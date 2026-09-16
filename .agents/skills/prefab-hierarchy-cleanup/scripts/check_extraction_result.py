@@ -4,9 +4,14 @@
 
 Checks, per declared extraction:
   * every declared instance exists, keeps its name and its list position
-  * variant/stateful: the instance has direct `[Common]` then `[States]`, the state branches are
-    present in the declared order, and exactly ONE branch is active - the one the plan maps
-  * `[Common]` is empty when the plan declares no common members
+  * variant: the instance has direct `[Common]` then `[States]`, the state branches are present in
+    the declared order, and exactly ONE branch is active - the one the plan maps
+  * stateful: the instance has direct `[States]` then `[Common]`, the state branches are present in
+    the declared order, exactly one is active, and `[Common]` / the active branch carry exactly the
+    declared Common and state member names in order
+  * state: the instance has a direct `[States]` container with the declared branches and exactly
+    one active branch (the plan's `defaultState`)
+  * `[Common]` is empty when the plan declares no common members (variant/component shape)
   * component extraction: the instance is a leaf (no children)
   * separately: `verify.hierarchy` / `verify.directChildren` of the plan still hold, and the
     forbidden-name gate still passes
@@ -77,6 +82,64 @@ def main():
                 errors.append("激活分支不符 %s: %s != %s" % (src, active[0], by_id.get(inst["state"])))
             if children(src + "/[Common]"):
                 errors.append("[Common] 非空（计划声明无共同成员）: " + src)
+    for extract in plan.get("stateComponentExtractions", []):
+        want_branches = [s["name"] for s in extract["states"]]
+        default_name = next((s["name"] for s in extract["states"]
+                             if s["id"] == extract.get("defaultState")), None)
+        for state in extract["states"]:
+            inst = state["source"]
+            if inst not in rec:
+                errors.append("实例不存在: " + inst)
+                continue
+            names = [leaf_name(c) for c in children(inst)]
+            if names != ["[States]"]:
+                errors.append("state 实例子节点应仅为 [States]: %s -> %s" % (inst, names))
+                continue
+            bnames = [leaf_name(c) for c in children(inst + "/[States]")]
+            if bnames != want_branches:
+                errors.append("状态分支顺序不符 %s -> %s" % (inst, bnames))
+                continue
+            active = [leaf_name(c) for c in children(inst + "/[States]")
+                      if rec[c].get("active") == "True"]
+            if len(active) != 1:
+                errors.append("应恰好 1 个激活分支 %s -> %s" % (inst, active))
+            elif default_name and active[0] != default_name:
+                errors.append("激活分支不符 %s: %s != %s" % (inst, active[0], default_name))
+    for extract in plan.get("statefulComponentExtractions", []):
+        want_branches = [s["name"] for s in extract["states"]]
+        by_state = {s["id"]: s for s in extract["states"]}
+        want_common = [m["name"] for m in extract["common"]["members"]]
+        for inst in extract["instances"]:
+            src = inst["source"]
+            if src not in rec:
+                errors.append("实例不存在: " + src)
+                continue
+            names = [leaf_name(c) for c in children(src)]
+            if names != ["[States]", "[Common]"]:
+                errors.append("stateful 实例子节点应为 [States],[Common]: %s -> %s" % (src, names))
+                continue
+            bnames = [leaf_name(c) for c in children(src + "/[States]")]
+            if bnames != want_branches:
+                errors.append("状态分支顺序不符 %s -> %s" % (src, bnames))
+                continue
+            active = [leaf_name(c) for c in children(src + "/[States]")
+                      if rec[c].get("active") == "True"]
+            if len(active) != 1:
+                errors.append("应恰好 1 个激活分支 %s -> %s" % (src, active))
+                continue
+            state = by_state.get(inst.get("state"))
+            if state is None:
+                errors.append("实例状态未在 states 中声明 %s -> %s" % (src, inst.get("state")))
+                continue
+            if active[0] != state["name"]:
+                errors.append("激活分支不符 %s: %s != %s" % (src, active[0], state["name"]))
+            got_common = [leaf_name(c) for c in children(src + "/[Common]")]
+            if got_common != want_common:
+                errors.append("[Common] 成员不符 %s: %s != %s" % (src, got_common, want_common))
+            got_state = [leaf_name(c) for c in children(src + "/[States]/" + state["name"])]
+            want_state = [m["name"] for m in state["members"]]
+            if got_state != want_state:
+                errors.append("状态分支成员不符 %s: %s != %s" % (src, got_state, want_state))
     for extract in plan.get("componentExtractions", []):
         for inst in extract["instances"]:
             if inst not in rec:
@@ -109,8 +172,10 @@ def main():
                 errors.append("禁用命名 %s 命中 %s" % (pat, path))
 
     if not args.quiet:
-        print("checked extractions: %d component / %d variant" %
-              (len(plan.get("componentExtractions", [])), len(plan.get("variantComponentExtractions", []))))
+        print("checked extractions: %d component / %d state / %d variant / %d stateful" %
+              (len(plan.get("componentExtractions", [])), len(plan.get("stateComponentExtractions", [])),
+               len(plan.get("variantComponentExtractions", [])),
+               len(plan.get("statefulComponentExtractions", []))))
         print("errors: %d" % len(errors))
         for e in errors:
             print("  - " + e)

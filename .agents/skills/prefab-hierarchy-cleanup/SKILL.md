@@ -182,7 +182,32 @@ Reopen the saved Prefab and compare it with the before snapshot. Report evidence
 - each separately extracted stateful component is a nested instance of the one reviewed `Prefab/Common` asset, has non-empty `[Common]` and `[States]` containers, contains each approved state branch once, maps every source direct member exactly once, and has exactly its mapped branch active;
 - all private Texture files in scope use the exact `PrefabName_` filename prefix, and `verify.forbiddenObjectNamePatterns` rejects residual PSD/export or text-value node names;
 - `Missing Component = 0`;
+- every pre-existing node is still present with an unchanged fingerprint (component types, `Image`
+  sprite, TMP text, `sizeDelta`/anchors/pivot/`localScale`/`rotationZ`), and every extracted unit's
+  `[Common]` + active state branch reproduces the unit it replaced - prove it with
+  `audit_prefab_preservation.py --mode compare` against a capture taken **before** the apply;
+  compare on reparent-invariant values, never on `anchoredPosition`, and treat world rects as AABBs
+  (four corners), because `corner[0]`/`corner[2]` mis-measures a rotated rect by `s*(cos-sin)` vs
+  `s*(cos+sin)` and fakes a sub-pixel difference across tools;
 - visual comparison in Prefab Stage when available.
+
+The preservation audit is the only check that proves *content* survival, and it needs a capture from
+BEFORE the apply - so capture at the start of every mutating stage, not at verification time:
+
+```bash
+# once, before the stage's Apply (read-only; ~2-5 s)
+python scripts/audit_prefab_preservation.py --project-path <project> --mode capture \
+       --prefab-path Assets/.../Target.prefab --out before.json
+# after the Apply (pure offline, no Editor needed; needs --plan for extraction stages)
+python scripts/audit_prefab_preservation.py --mode compare \
+       --before before.json --after after.json --plan stage.plan.json
+```
+
+It reports `A` lost/changed nodes, `B` per-unit content loss/duplication (which is also the proof
+that per-instance overrides really wrote each instance's own values), and `C` instance links,
+the naming gate and target-owned missing Sprites. `capture` must run before the apply: pointing it
+at a post-apply tree makes `B` compare an instance's inactive branches against itself and report a
+false loss (the tool warns about this).
 
 Run a Unity compilation only when C# source changed. Asset-only cleanup does not need a compilation claim; report whether Unity successfully loaded, saved, and verified the Prefab instead.
 
@@ -275,6 +300,13 @@ so they are rules, not tips.
   with `[` are written as `m_Name: '[Name]'` (quote-aware greps, or you get false "missing" results),
   and non-ASCII names are written escaped as `"日..."` — unescape before comparing. Never edit
   these files as text; this is only for read-only evidence.
+- **R9 — Authored plan files never live inside this skill directory.** A plan JSON is a per-run
+  artifact, not skill knowledge. Write every authored/frozen plan to
+  `<project-root>/Library/PrefabCleanupPlans/` (already covered by the `Library/` gitignore rule);
+  the runner's own evidence stays in `Library/PrefabCleanupRuns/<run-id>/`. Test fixtures are the
+  only plan files that belong to the skill, and they live in `scripts/tests/fixtures/`. The former
+  `plans/` directory at the skill root was removed on 2026-09-16 precisely because runtime output
+  kept landing there untracked.
 
 ### Read-only toolbox added by this project
 
@@ -283,11 +315,15 @@ so they are rules, not tips.
 | `scripts/parse_hierarchy_snapshot.py` | normalise a text/JSON snapshot, print metrics + tree, emit a v1 plan skeleton |
 | `scripts/validate_plan_locally.py` | offline linter: refs, uniqueness, removals, naming gate, directChildren, plus R1/R2 warnings |
 | `scripts/simulate_and_verify_plan.py` | rebuild the final tree offline and prove `verify.hierarchy/directChildren/absentPaths` (caught a real double-wrapper defect) |
-| `scripts/check_extraction_result.py` | prove a finished extraction: instance names/order, `[Common]`/`[States]`, exactly one active mapped state |
+| `scripts/check_extraction_result.py` | prove a finished extraction: instance names/order, `[Common]`/`[States]`, exactly one active mapped state, and (stateful) the declared Common + state member names - covers `component`, `state`, `variant` and `stateful` |
+| `scripts/audit_prefab_preservation.py` | **before/after preservation audit**: prove that every pre-existing node survived with the same components, sprite, TMP text and reparent-invariant RectTransform values, and that each extracted unit's `[Common]` + active branch reproduces the unit it replaced (`--mode capture` needs Unity, `--mode compare` is pure offline) |
 | `scripts/read_unity_selection.py` | read the user's live Editor selection / Prefab Stage / nested-instance links (read-only, `--mode selection|instance-links|prefab-stage`) |
 | `scripts/payloads/read_selection.cs` | the eval_file payload behind it (template for R5) |
+| `scripts/payloads/audit_prefab_dump.cs` | the read-only tree+fingerprint dump behind the preservation audit (marker `DUMP_BEGIN`/`DUMP_END`) |
 
 Typical session order: snapshot -> semantics -> plan -> `validate_plan_locally.py` ->
-`simulate_and_verify_plan.py` -> Unity preflight -> user confirmation -> one Apply ->
-read-only verification (`check_extraction_result.py`, container tightness, world-rect preservation,
+`simulate_and_verify_plan.py` -> `audit_prefab_preservation.py --mode capture` (BEFORE, per stage) ->
+Unity preflight -> user confirmation -> one Apply ->
+read-only verification (`check_extraction_result.py`, `audit_prefab_preservation.py --mode compare`,
+container tightness, world-rect preservation,
 `--mode instance-links`) -> record evidence in the review file.
