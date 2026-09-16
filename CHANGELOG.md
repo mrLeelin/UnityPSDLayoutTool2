@@ -2,6 +2,31 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.1.8] - 2026-09-16
+
+### Added
+
+- Added a browser-based project settings page (`PsdLayoutProjectSettingsWebServer`) so shared output paths, TMP, Common naming, and AI hierarchy options can be edited outside the IMGUI window. The page listens on `localhost:9528` and keeps all writes on the Unity main thread.
+- Added nine-slice exported-border lookup and applier so imported sprites can keep Photoshop/PSD border data instead of relying only on pixel inference.
+- Added nine-slice observability diagnostics and source-PSD path resolution, so a sliced Image can report its border and recover the originating PSD from common export-folder conventions.
+- Added a persistent hierarchy-plan conflict surface: failed AI analysis is retained as a reviewable workspace with recovery actions, instead of vanishing as a chat-only error.
+- Added AI hierarchy organizer provider-secret storage and a web review workflow for organizing generated UI Prefabs.
+- Added real UI Prefab preview rendering in the Common Asset Library (Canvas graphics no longer rely on `AssetPreview`).
+
+### Fixed
+
+- Fixed the Common Asset Library copy control on LAN origins: clipboard access now falls back when `navigator.clipboard` is unavailable, the button reports success/failure, and the copied name is the on-disk asset name with the configured Common prefix.
+- Stopped the Common Asset Library preview poll from wiping click feedback and rebuilding thumbnails while the catalog is unchanged.
+- Routed preview start/stop and other settings-page actions through a main-thread queue so HTTP listener threads never mutate Unity state directly.
+- Stopped deterministic flat-sibling grouping from invalidating unrelated AI cleanup plan steps; nested empty-container removals run deepest-first and only conflict-carrying container removals are dropped.
+- Kept hierarchy workspace diagnostics outside imported assets so review evidence survives without polluting the asset database or version-control scope.
+
+### Changed
+
+- Improved the nine-slice editor window and auto-processor, including shared image-source handling and exported-border application.
+- Expanded AI hierarchy settings and chat-client plumbing for provider configuration, cleanup execution, and web review.
+- Hardened project settings validation (enum checks, cached runtime state) before applying server-side updates.
+
 ## [0.1.7] - 2026-08-03
 
 ### Changed
