@@ -263,33 +263,12 @@ namespace PsdLayoutTool2
         private static VisualElement CreateHierarchyCleanupExecutionSection(PsdLayoutProjectSettings settings)
         {
             VisualElement section = CreateSection(CleanupExecutionSectionName, "Prefab Cleanup Execution");
-            PsdHierarchyCleanupExecutionSettingsSnapshot snapshot =
-                settings.ResolveHierarchyCleanupExecutionSettings();
-            var choices = new List<string>
-            {
-                "Native Unity (default)",
-                "Unity CLI runner (optional)",
-            };
-            int selectedIndex = snapshot.backend == PsdHierarchyCleanupExecutionBackend.UnityCliRunner ? 1 : 0;
-            var backendField = new PopupField<string>("Backend", choices, selectedIndex)
-            {
-                name = "psd-project-settings-cleanup-execution-backend",
-                tooltip = "Native Unity executes cleanup in the current Editor. Unity CLI remains an optional alternate runner.",
-            };
+            // ADR 0001/0002：正式清理固定 Native Unity；不再提供 CLI Runner 切换。
             section.Add(new HelpBox(
-                selectedIndex == 0
-                    ? "Native Unity is active. Hierarchy cleanup, component Prefab extraction, private asset renames, validation, and failure handling run in the current Unity Editor."
-                    : "Unity CLI runner is active for this project. It supports component extraction and asset renames.",
-                selectedIndex == 0 ? HelpBoxMessageType.Info : HelpBoxMessageType.Warning));
-            section.Add(backendField);
-            backendField.RegisterValueChangedCallback(change =>
-            {
-                settings.SetHierarchyCleanupExecutionBackend(
-                    choices.IndexOf(change.newValue) == 1
-                        ? PsdHierarchyCleanupExecutionBackend.UnityCliRunner
-                        : PsdHierarchyCleanupExecutionBackend.NativeUnity);
-                ReplaceSection(section, CreateHierarchyCleanupExecutionSection(settings));
-            });
+                "Cleanup execution is fixed to Native Unity (ADR 0001/0002). " +
+                "Version 2 node-id plans are applied inside this Editor; " +
+                "the Python CLI is read-only diagnostics only.",
+                HelpBoxMessageType.Info));
             return section;
         }
 
@@ -338,14 +317,13 @@ namespace PsdLayoutTool2
                 string model,
                 string effort)
             {
-                try
+                if (settings.TrySetHierarchyAiSettings(provider, endpoint, model, effort, out string error))
                 {
-                    settings.SetHierarchyAiSettings(provider, endpoint, model, effort);
                     ReplaceSection(section, CreateHierarchyAiSection(settings));
                 }
-                catch (ArgumentException exception)
+                else
                 {
-                    ShowError(errorBox, exception.Message);
+                    ShowError(errorBox, error);
                 }
             }
 
@@ -974,12 +952,13 @@ namespace PsdLayoutTool2
             VisualElement section = CreateSection("psd-project-settings-preview-server", "本地资源预览服务");
             var port = new IntegerField("端口") { value = settings.ResolvePreviewServerPort(), isDelayed = true, name = "psd-project-settings-preview-server-port" };
             var status = new Label();
+            var errorBox = CreateHiddenErrorBox();
             var actions = new VisualElement(); actions.style.flexDirection = FlexDirection.Row;
             var start = new Button { text = "启动", name = "psd-project-settings-preview-server-start" };
             var stop = new Button { text = "停止" };
             var open = new Button { text = "在浏览器打开" };
             actions.Add(start); actions.Add(stop); actions.Add(open);
-            section.Add(port); section.Add(status); section.Add(actions);
+            section.Add(port); section.Add(status); section.Add(errorBox); section.Add(actions);
             void Refresh()
             {
                 bool running = PsdCommonAssetPreviewServer.IsRunning;
@@ -988,7 +967,17 @@ namespace PsdLayoutTool2
                 status.style.color = running ? new Color(0.25f, 0.85f, 0.5f) : new Color(0.75f, 0.78f, 0.84f);
                 start.SetEnabled(!running); stop.SetEnabled(running); open.SetEnabled(running);
             }
-            port.RegisterValueChangedCallback(change => { settings.TrySetPreviewServerPort(change.newValue, out _); Refresh(); });
+            port.RegisterValueChangedCallback(change =>
+            {
+                settings.TrySetPreviewServerPort(change.newValue, out string error);
+                ShowError(errorBox, error);
+                if (!string.IsNullOrEmpty(error))
+                {
+                    port.SetValueWithoutNotify(settings.ResolvePreviewServerPort());
+                }
+
+                Refresh();
+            });
             start.clicked += () => { PsdCommonAssetPreviewServer.Start(settings.ResolvePreviewServerPort()); Refresh(); };
             stop.clicked += () => { PsdCommonAssetPreviewServer.Stop(); Refresh(); };
             open.clicked += () => Application.OpenURL(PsdCommonAssetPreviewServer.GetLocalAddress());

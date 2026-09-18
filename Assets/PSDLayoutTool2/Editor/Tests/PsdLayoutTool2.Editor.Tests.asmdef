@@ -4,6 +4,7 @@
   "references": [
     "PsdLayoutTool2.Editor",
     "PsdLayoutTool2.Runtime",
+    "PsdLayoutTool2.TestSupport",
     "Unity.TextMeshPro",
     "UnityEngine.UI"
   ],

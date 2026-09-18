@@ -7,48 +7,68 @@ namespace PsdLayoutTool2.Tests
     using System.Threading.Tasks;
     using Newtonsoft.Json.Linq;
     using NUnit.Framework;
+    using UnityEditor;
+    using UnityEngine;
 
     public sealed class PsdHierarchyChatClientTests
     {
-        private const string SourcePsdPath = "Assets/PSDLayoutTool2/TestData/跳格子切图.psd";
-        private const string TargetPrefabPath =
-            "Assets/PSDLayoutTool2/TestData/跳格子切图/Prefab/跳格子切图.prefab";
+        private const string ContextFixtureFolder = "Assets/__PsdHierarchyChatClientTests";
+        private const string SourcePsdPath = ContextFixtureFolder + "/Source.psd";
+        private const string TargetPrefabPath = ContextFixtureFolder + "/ExampleView.prefab";
 
         [Test]
         public void ContextBuilderReadsTheCleanupSkillAndActualTargetPrefab()
         {
-            bool created = PsdHierarchyChatContextBuilder.TryCreate(
-                SourcePsdPath,
-                TargetPrefabPath,
-                out PsdHierarchyChatContext context,
-                out string error);
+            Assert.That(AssetDatabase.IsValidFolder(ContextFixtureFolder), Is.False, "Test fixture path is already occupied.");
+            try
+            {
+                CreateContextFixturePrefab();
+                bool created = PsdHierarchyChatContextBuilder.TryCreate(
+                    SourcePsdPath,
+                    TargetPrefabPath,
+                    out PsdHierarchyChatContext context,
+                    out string error);
 
-            Assert.That(created, Is.True, error);
-            Assert.That(context.sourcePsdAssetPath, Is.EqualTo(SourcePsdPath));
-            Assert.That(context.targetPrefabAssetPath, Is.EqualTo(TargetPrefabPath));
-            Assert.That(context.skillContent, Does.Contain("prefab-hierarchy-cleanup"));
-            Assert.That(context.prefabContent, Does.Contain("%YAML"));
-            Assert.That(context.BuildInstructions(), Does.Contain("===== BEGIN TARGET PREFAB NODE SNAPSHOT ====="));
-            Assert.That(context.BuildInstructions(), Does.Contain("跳格子切图"));
+                Assert.That(created, Is.True, error);
+                Assert.That(context.sourcePsdAssetPath, Is.EqualTo(SourcePsdPath));
+                Assert.That(context.targetPrefabAssetPath, Is.EqualTo(TargetPrefabPath));
+                Assert.That(context.skillContent, Does.Contain("prefab-hierarchy-cleanup"));
+                Assert.That(context.prefabContent, Does.Contain("%YAML"));
+                Assert.That(context.BuildInstructions(), Does.Contain("===== BEGIN TARGET PREFAB NODE SNAPSHOT ====="));
+                Assert.That(context.BuildInstructions(), Does.Contain("ExampleView"));
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(ContextFixtureFolder);
+            }
         }
 
         [Test]
         public void ContextBuilderCreatesAnAuthoritativeNodeSnapshotForTheAi()
         {
-            bool created = PsdHierarchyChatContextBuilder.TryCreate(
-                SourcePsdPath,
-                TargetPrefabPath,
-                out PsdHierarchyChatContext context,
-                out string error);
+            Assert.That(AssetDatabase.IsValidFolder(ContextFixtureFolder), Is.False, "Test fixture path is already occupied.");
+            try
+            {
+                CreateContextFixturePrefab();
+                bool created = PsdHierarchyChatContextBuilder.TryCreate(
+                    SourcePsdPath,
+                    TargetPrefabPath,
+                    out PsdHierarchyChatContext context,
+                    out string error);
 
-            Assert.That(created, Is.True, error);
-            Assert.That(context.hierarchySnapshotJson, Does.Contain("\"nodes\"").And.Contain("\"id\":\"n"));
-            Assert.That(context.hierarchySnapshotJson, Does.Contain("跳格子切图"));
-            Assert.That(context.hierarchySnapshotFingerprint, Is.Not.Empty);
-            Assert.That(File.Exists(context.hierarchySnapshotFullPath), Is.True);
-            Assert.That(context.BuildInstructions(), Does.Contain("TARGET PREFAB NODE SNAPSHOT"));
-            Assert.That(context.BuildInstructions(), Does.Contain("node:<id>"));
-            Assert.That(context.BuildInstructions(), Does.Not.Contain("BEGIN TARGET PREFAB YAML"));
+                Assert.That(created, Is.True, error);
+                Assert.That(context.hierarchySnapshotJson, Does.Contain("\"nodes\"").And.Contain("\"id\":\"n"));
+                Assert.That(context.hierarchySnapshotJson, Does.Contain("ExampleView"));
+                Assert.That(context.hierarchySnapshotFingerprint, Is.Not.Empty);
+                Assert.That(File.Exists(context.hierarchySnapshotFullPath), Is.True);
+                Assert.That(context.BuildInstructions(), Does.Contain("TARGET PREFAB NODE SNAPSHOT"));
+                Assert.That(context.BuildInstructions(), Does.Contain("node:<id>"));
+                Assert.That(context.BuildInstructions(), Does.Not.Contain("BEGIN TARGET PREFAB YAML"));
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(ContextFixtureFolder);
+            }
         }
 
         [Test]
@@ -521,7 +541,8 @@ namespace PsdLayoutTool2.Tests
             string prompt = PsdHierarchyChatClient.BuildExternalSessionPrompt(
                 context,
                 outputDirectory + "\\external-1.plan.json",
-                outputDirectory + "\\external-1.review.md");
+                outputDirectory + "\\external-1.review.md",
+                outputDirectory + "\\external-1.apply");
 
             Assert.That(prompt, Does.Contain("Use skill prefab-hierarchy-cleanup"));
             Assert.That(prompt, Does.Contain("EXTERNAL SESSION CONTRACT"));
@@ -544,6 +565,23 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 prompt,
                 Does.Contain("E:/Project/Demo/monsterhunter/Library/PsdHierarchyTerminal/external-1.review.md"));
+            Assert.That(
+                prompt,
+                Does.Contain("E:/Project/Demo/monsterhunter/Library/PsdHierarchyTerminal/external-1.apply"));
+            Assert.That(
+                prompt,
+                Does.Contain("E:/Project/Demo/monsterhunter/Library/PsdHierarchyTerminal/external-1.apply-result.json"));
+            Assert.That(prompt, Does.Contain(".apply file is the only signal Unity needs"));
+            Assert.That(prompt, Does.Contain("apply-result.json"));
+            Assert.That(prompt, Does.Contain("componentFamilyDecisions"));
+            Assert.That(prompt, Does.Contain("recommendedMode is advisory only"));
+            Assert.That(prompt, Does.Contain("must match the actual extraction list or postGroupingExtractionIntents entry"));
+            Assert.That(
+                prompt,
+                Does.Contain("Any corrected plan is a new request that requires a complete new review and explicit human approval"));
+            Assert.That(prompt, Does.Not.Contain("no extra human approval"));
+            Assert.That(prompt, Does.Not.Contain("fix-and-reapply"));
+            Assert.That(prompt, Does.Contain("node:<id>"));
 
             // 工具可能在任意工作目录下启动，任何反斜杠或相对路径都不允许出现在提示词里。
             Assert.That(prompt, Does.Not.Contain("\\"));
@@ -563,12 +601,15 @@ namespace PsdLayoutTool2.Tests
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("Markdown 表格"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("分组与命名表"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("子 Prefab 抽取表"));
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("状态的 ID/名称/成员列表"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("不要输出原始内部推理"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("```json 计划代码块"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("用户只确认一次"));
-            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("自动完成全部已审阅阶段"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("只会执行已审阅的原地整理、公共组件抽取、状态抽取、变体抽取、有状态抽取、私有资源改名以及分组后子 Prefab 抽取并核验"));
             Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("不要声称已经修改本地文件"));
+            // 仍未迁移的能力必须明确要求空数组，而不是让 AI 产出会被拒绝的计划；
+            // 分组后抽取已经可以在第二阶段执行，因此它必须被描述成可执行能力。
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("必须保持空数组"));
+            Assert.That(PsdHierarchyChatClient.DefaultUserPrompt, Does.Contain("postGroupingExtractionIntents 可以非空"));
         }
 
         [Test]
@@ -580,13 +621,13 @@ namespace PsdLayoutTool2.Tests
             Assert.That(instructions, Does.Contain("The only allowed output mode is in_place"));
             Assert.That(instructions, Does.Contain("already confirmed for in-place cleanup"));
             Assert.That(instructions, Does.Contain(".cleaned.prefab"));
-            Assert.That(instructions, Does.Contain("include the complete reviewed extraction contract"));
-            Assert.That(instructions, Does.Contain("requiresExtraction:false are advisory"));
-            Assert.That(instructions, Does.Contain("do not force a variant solely because sibling names repeat"));
-            Assert.That(instructions, Does.Contain("flatSiblingFindings").And.Contain("flatSiblingResolutions"));
-            Assert.That(instructions, Does.Contain("Never move a finding into an existing unrelated container"));
-            Assert.That(instructions, Does.Contain("one observed state for every distinct recursive structure"));
-            Assert.That(instructions, Does.Contain("must not be skipped"));
+            // 层级操作、抽取、改名与分组后抽取都可执行；只有 containment/flat-sibling 与局部选区仍未迁移。
+            Assert.That(instructions, Does.Contain("Component extraction IS executable"));
+            Assert.That(instructions, Does.Contain("componentFamilyDecisions"));
+            Assert.That(instructions, Does.Contain("Post-grouping extraction IS executable"));
+            Assert.That(instructions, Does.Contain("are still NOT executable"));
+            Assert.That(instructions, Does.Not.Contain("Unity derives the internal prefabName"));
+            Assert.That(instructions, Does.Not.Contain("captures its current AssetDatabase GUID"));
             Assert.That(instructions, Does.Contain("Return an auditable review"));
             Assert.That(instructions, Does.Contain("Markdown tables"));
             Assert.That(instructions, Does.Contain("exactly one confirmation"));
@@ -617,10 +658,9 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("```json"));
             Assert.That(prompt, Does.Contain("must be exactly @wrapperId"));
             Assert.That(prompt, Does.Contain("node:<id>"));
-            Assert.That(prompt, Does.Contain("stateSourceNames").And.Contain("direct children"));
-            Assert.That(prompt, Does.Contain("commonSourceNames").And.Contain("derive the other"));
-            Assert.That(prompt, Does.Contain("Repeated unit structure differs for component extraction"));
-            Assert.That(prompt, Does.Contain("flatSiblingFindings").And.Contain("flatSiblingResolutions"));
+            Assert.That(prompt, Does.Contain("as EMPTY arrays"));
+            Assert.That(prompt, Does.Contain("runs wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents"));
+            Assert.That(prompt, Does.Contain("refuses any other non-empty array"));
             Assert.That(prompt, Does.Not.Contain("original pre-apply full path"));
         }
 
@@ -636,7 +676,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void NativeCapabilityRepairPromptStillRequiresComponentOperations()
+        public void RepairPromptForbidsNotYetMigratedComponentOperations()
         {
             var context = new PsdHierarchyChatContext(
                 "E:/Project/Demo/monsterhunter",
@@ -664,15 +704,18 @@ namespace PsdLayoutTool2.Tests
                 context);
             string initialInstructions = context.BuildInstructions();
 
-            Assert.That(prompt, Does.Not.Contain("hierarchy-only replacement plan"));
-            Assert.That(prompt, Does.Contain("BEGIN REQUIRED COMPONENT FAMILIES"));
-            Assert.That(prompt, Does.Contain("mode must not be skip"));
+            Assert.That(prompt, Does.Contain("as EMPTY arrays"));
+            Assert.That(prompt, Does.Contain("runs wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents"));
+            Assert.That(prompt, Does.Contain("refuses any other non-empty array"));
+            Assert.That(prompt, Does.Not.Contain("BEGIN REQUIRED COMPONENT FAMILIES"));
+            Assert.That(prompt, Does.Not.Contain("mode must not be skip"));
             Assert.That(initialInstructions, Does.Not.Contain("NATIVE UNITY EXECUTION CONSTRAINT"));
-            Assert.That(initialInstructions, Does.Contain("requiresExtraction:true must use"));
+            Assert.That(initialInstructions, Does.Contain("Component extraction IS executable"));
+            Assert.That(initialInstructions, Does.Not.Contain("requiresExtraction:true must use"));
         }
 
         [Test]
-        public void PlanRepairPromptReplaysMandatoryComponentFamilyRecordsExactly()
+        public void PlanRepairPromptNoLongerReplaysComponentFamilyRecords()
         {
             var context = new PsdHierarchyChatContext(
                 "E:/Project/Demo/monsterhunter",
@@ -698,17 +741,15 @@ namespace PsdLayoutTool2.Tests
                 "componentFamilyDecisions[0] must cover family_002",
                 context);
 
-            Assert.That(prompt, Does.Contain("BEGIN REQUIRED COMPONENT FAMILIES"));
-            Assert.That(prompt, Does.Contain("family_002").And.Contain("Milestone"));
-            Assert.That(prompt, Does.Contain("node:n000010"));
-            Assert.That(prompt, Does.Contain("node:n000011").And.Contain("node:n000012").And.Contain("node:n000013"));
-            Assert.That(prompt, Does.Contain("stateful"));
-            Assert.That(prompt, Does.Contain("mode must not be skip"));
-            Assert.That(prompt, Does.Contain("lower_snake_case extractionId"));
+            Assert.That(prompt, Does.Not.Contain("BEGIN REQUIRED COMPONENT FAMILIES"));
+            Assert.That(prompt, Does.Not.Contain("mode must not be skip"));
+            Assert.That(prompt, Does.Not.Contain("lower_snake_case extractionId"));
+            Assert.That(prompt, Does.Contain("componentExtractions"));
+            Assert.That(prompt, Does.Contain("as EMPTY arrays"));
         }
 
         [Test]
-        public void PlanRepairPromptIncludesDirectChildMatrixForMandatoryStatefulFamilies()
+        public void PlanRepairPromptDropsTheStatefulMatrixButKeepsDirectChildRules()
         {
             const string snapshot =
                 "{\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
@@ -739,27 +780,15 @@ namespace PsdLayoutTool2.Tests
                 "snapshot has 3 direct children but the contracts require 1 Common plus 3 selected-state members",
                 context);
 
-            Assert.That(prompt, Does.Contain("directChildCount == common.members.Count + selectedState.members.Count"));
-            int recordsStart = prompt.IndexOf("===== BEGIN REQUIRED COMPONENT FAMILIES =====", StringComparison.Ordinal);
-            int jsonStart = prompt.IndexOf('[', recordsStart);
-            int jsonEnd = prompt.IndexOf("===== END REQUIRED COMPONENT FAMILIES =====", jsonStart, StringComparison.Ordinal);
-            var records = JArray.Parse(prompt.Substring(jsonStart, jsonEnd - jsonStart).Trim());
-            JArray structures = (JArray)records[0]["sourceStructures"];
-            Assert.That(structures.Count, Is.EqualTo(2));
-            Assert.That(structures.Select(row => row.Value<string>("source")), Is.EqualTo(new[]
-            {
-                "node:n000011", "node:n000015",
-            }));
-            Assert.That(
-                structures[0]["directChildren"].Values<string>(),
-                Is.EqualTo(new[] { "MilestoneIcon", "MilestoneFrame", "MilestoneValue" }));
-            Assert.That(
-                structures[1]["directChildren"].Values<string>(),
-                Is.EqualTo(new[] { "RewardIcon", "RequiredScore" }));
+            Assert.That(prompt, Does.Not.Contain("directChildCount == common.members.Count + selectedState.members.Count"));
+            Assert.That(prompt, Does.Not.Contain("BEGIN REQUIRED COMPONENT FAMILIES"));
+            Assert.That(prompt, Does.Contain("statefulComponentExtractions"));
+            Assert.That(prompt, Does.Contain("as EMPTY arrays"));
+            Assert.That(prompt, Does.Contain("verify.directChildren"));
         }
 
         [Test]
-        public void PlanRepairPromptReplaysEveryFlatSiblingFindingExactly()
+        public void PlanRepairPromptRequiresEmptyFlatSiblingResolutions()
         {
             const string snapshot =
                 "{\"fingerprint\":\"snapshot-123\",\"nodes\":[]," +
@@ -783,14 +812,15 @@ namespace PsdLayoutTool2.Tests
                 "flatSiblingResolutions must resolve flat_sibling_001, flat_sibling_002, and flat_sibling_003.",
                 context);
 
-            Assert.That(prompt, Does.Contain("BEGIN FLAT SIBLING FINDINGS"));
-            Assert.That(prompt, Does.Contain("flat_sibling_001").And.Contain("flat_sibling_002").And.Contain("flat_sibling_003"));
-            Assert.That(prompt, Does.Contain("node:n000002").And.Contain("node:n000011"));
-            Assert.That(prompt, Does.Contain("mode=group").And.Contain("wrapperId=<findingId>_group"));
+            Assert.That(prompt, Does.Not.Contain("BEGIN FLAT SIBLING FINDINGS"));
+            Assert.That(prompt, Does.Not.Contain("wrapperId=<findingId>_group"));
+            Assert.That(prompt, Does.Not.Contain("mode=group"));
+            Assert.That(prompt, Does.Contain("flatSiblingResolutions"));
+            Assert.That(prompt, Does.Contain("as EMPTY arrays"));
         }
 
         [Test]
-        public void PlanRepairPromptRejectsMissingMandatorySourceEvidence()
+        public void PlanRepairPromptDoesNotDemandUnmigratedMandatorySources()
         {
             var context = new PsdHierarchyChatContext(
                 "E:/Project/Demo/monsterhunter",
@@ -806,10 +836,12 @@ namespace PsdLayoutTool2.Tests
                 "snapshot-123",
                 "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
 
-            InvalidDataException exception = Assert.Throws<InvalidDataException>(() =>
-                PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt("invalid stateful mapping", context));
+            // 未迁移的强制候选不再由修复提示词要求补全：计划必须保持空数组，因此这里不再抛异常。
+            string prompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt("invalid stateful mapping", context);
 
-            Assert.That(exception.Message, Does.Contain("family_002").And.Contain("node:n000011"));
+            Assert.That(prompt, Does.Contain("invalid stateful mapping"));
+            Assert.That(prompt, Does.Contain("as EMPTY arrays"));
+            Assert.That(prompt, Does.Not.Contain("BEGIN REQUIRED COMPONENT FAMILIES"));
         }
 
         [Test]
@@ -837,18 +869,20 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void InitialAndRepairPromptsTreatPrefabNameAsUnityDerivedForPrivateAssetRenames()
+        public void InitialAndRepairPromptsTreatPrivateAssetRenamesAsNotYetExecutable()
         {
             PsdHierarchyChatContext context = CreateSmallContext();
             string initialPrompt = context.BuildInstructions();
             string repairPrompt = PsdHierarchyChatClient.BuildJsonOnlyPlanRepairPrompt(
                 "prefabName must be PascalCase and end with View when renaming private assets.");
 
-            Assert.That(initialPrompt, Does.Contain("Unity derives the internal prefabName"));
-            Assert.That(initialPrompt, Does.Contain("textureRenames[].toName"));
-            Assert.That(initialPrompt, Does.Contain("spriteAtlasRenames[].toName"));
-            Assert.That(repairPrompt, Does.Contain("Do not repair prefabName by guessing"));
-            Assert.That(repairPrompt, Does.Contain("reviewed toName values"));
+            Assert.That(initialPrompt, Does.Contain("Private-asset renames ARE executable"));
+            Assert.That(initialPrompt, Does.Contain("textureRenames").And.Contain("spriteAtlasRenames"));
+            Assert.That(initialPrompt, Does.Not.Contain("Unity derives the internal prefabName"));
+            Assert.That(initialPrompt, Does.Not.Contain("captures its current AssetDatabase GUID"));
+            Assert.That(repairPrompt, Does.Contain("as EMPTY arrays"));
+            Assert.That(repairPrompt, Does.Not.Contain("Do not repair prefabName by guessing"));
+            Assert.That(repairPrompt, Does.Not.Contain("reviewed toName values"));
         }
 
         [Test]
@@ -921,11 +955,11 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("snapshot-123.json"));
             Assert.That(prompt, Does.Contain("node:<id>"));
             Assert.That(prompt, Does.Contain("wrappers[].id must use lower snake_case").And.Contain("screen_root"));
-            Assert.That(prompt, Does.Contain("Unity derives the internal prefabName"));
-            Assert.That(prompt, Does.Contain("one observed state for every distinct recursive structure"));
-            Assert.That(prompt, Does.Contain("must not be skipped"));
-            Assert.That(prompt, Does.Contain("Keep the five-section review concise")
-                .And.Contain("complete JSON plan has priority"));
+            Assert.That(prompt, Does.Contain("EXECUTABLE OPERATIONS"));
+            Assert.That(prompt, Does.Contain("Everything else must stay empty"));
+            Assert.That(prompt, Does.Not.Contain("Unity derives the internal prefabName"));
+            Assert.That(prompt, Does.Contain("Keep the tables compact but complete")
+                .And.Contain("The complete JSON plan has priority"));
             Assert.That(prompt, Does.Not.Contain("Target Prefab: E:/Project"));
         }
 
@@ -956,7 +990,7 @@ namespace PsdLayoutTool2.Tests
                 string.Empty);
 
             Assert.That(PsdHierarchyChatClient.GetProviderDisplayName(connection.provider), Is.EqualTo("Claude"));
-            Assert.That(PsdHierarchyChatClient.GetModelDisplayName(connection), Is.EqualTo("本地 CLI 默认"));
+            Assert.That(PsdHierarchyChatClient.GetModelDisplayName(connection), Is.EqualTo("CLI 默认"));
         }
 
         [Test]
@@ -1129,6 +1163,23 @@ namespace PsdLayoutTool2.Tests
                     ["sizeDelta"] = new JArray(width, height),
                 },
             };
+        }
+
+        private static void CreateContextFixturePrefab()
+        {
+            AssetDatabase.CreateFolder("Assets", "__PsdHierarchyChatClientTests");
+
+            GameObject root = new GameObject("ExampleView", typeof(RectTransform));
+            try
+            {
+                var child = new GameObject("Content", typeof(RectTransform));
+                child.transform.SetParent(root.transform, false);
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, TargetPrefabPath), Is.Not.Null);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
         }
 
         private static JObject CreateFlatSiblingNode(

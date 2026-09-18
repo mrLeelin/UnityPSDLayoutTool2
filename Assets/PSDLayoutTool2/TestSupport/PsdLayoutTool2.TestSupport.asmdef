@@ -1,0 +1,7 @@
+{
+  "name": "PsdLayoutTool2.TestSupport",
+  "rootNamespace": "PsdLayoutTool2.Tests",
+  "autoReferenced": false,
+  "defineConstraints": ["UNITY_INCLUDE_TESTS"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}

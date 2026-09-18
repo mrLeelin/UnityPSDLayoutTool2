@@ -656,26 +656,6 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertIn("if (!(node.parent == null && string.Equals(node.name, rootName, StringComparison.Ordinal)) && IsNonSemanticObjectName(node.name))", generated)
         self.assertIn("System.IO.Path.GetFileNameWithoutExtension(prefabPath)", generated)
 
-    def test_tight_bounds_removes_only_empty_generated_wrappers(self):
-        raw_plan = json.loads(
-            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
-        )
-
-        generated = render(normalize_plan(raw_plan, "apply"), "apply")
-
-        self.assertIn(
-            "void TightenToChildren(RectTransform rect, bool removeEmptyWrapper)",
-            generated,
-        )
-        self.assertIn(
-            "if (!removeEmptyWrapper) throw new InvalidOperationException",
-            generated,
-        )
-        self.assertIn(
-            "Object.DestroyImmediate(rect.gameObject); return;",
-            generated,
-        )
-
     def test_preflight_rejects_component_extractions_with_different_structures(self):
         raw_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
@@ -888,59 +868,6 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         self.assertNotIn("/[Day_", preflight)
         self.assertNotIn("/[Task_", preflight)
 
-    def test_variant_failures_include_actionable_structure_details(self):
-        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
-        extraction = plan["variantComponentExtractions"][0]
-        plan["componentFamilyDecisions"] = [
-            {
-                "parent": extraction["template"].rsplit("/", 1)[0],
-                "sources": [instance["source"] for instance in extraction["instances"]],
-                "mode": "variant",
-                "extractionId": extraction["id"],
-                "reason": "The visible rows share one component with observed variants.",
-            }
-        ]
-
-        generated = render(normalize_plan(plan, "apply"), "apply")
-
-        self.assertIn("Variant extraction structure mismatch", generated)
-        self.assertIn("extractionId=", generated)
-        self.assertIn("instance=", generated)
-        self.assertIn("state=", generated)
-        self.assertIn("source=", generated)
-        self.assertIn("expectedRectTransforms=", generated)
-        self.assertIn("actualRectTransforms=", generated)
-
-    def test_apply_wraps_all_component_prefab_writes_in_one_transaction(self):
-        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
-        extraction = plan["variantComponentExtractions"][0]
-        plan["componentFamilyDecisions"] = [
-            {
-                "parent": extraction["template"].rsplit("/", 1)[0],
-                "sources": [instance["source"] for instance in extraction["instances"]],
-                "mode": "variant",
-                "extractionId": extraction["id"],
-                "reason": "The visible rows share one component with observed variants.",
-            }
-        ]
-
-        generated = render(normalize_plan(plan, "apply"), "apply")
-
-        begin_call = "var componentAssetTransaction = BeginComponentAssetTransaction("
-        commit_call = "CommitComponentAssetTransaction(componentAssetTransaction);"
-        rollback_call = "RollbackComponentAssetTransaction(componentAssetTransaction);"
-        self.assertIn(begin_call, generated)
-        self.assertIn(commit_call, generated)
-        self.assertIn(rollback_call, generated)
-
-        begin = generated.index(begin_call)
-        create = generated.index("CreateVariantComponentPrefab(", begin)
-        prefab_save = generated.index("PrefabUtility.SaveAsPrefabAsset(root, outputPath)")
-        commit = generated.index(commit_call, prefab_save)
-        self.assertLess(begin, create)
-        self.assertLess(create, prefab_save)
-        self.assertLess(prefab_save, commit)
-
     def test_verify_ignores_preexisting_missing_sprites_inside_nested_prefabs(self):
         raw_plan = json.loads(
             (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
@@ -996,7 +923,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
             }
         ]
 
-        normalized = normalize_plan(plan, "apply")
+        normalized = normalize_plan(plan, "preflight")
 
         self.assertEqual(len(normalized["variant_component_extractions"]), 1)
         self.assertEqual(len(normalized["stateful_component_extractions"]), 1)
@@ -1031,9 +958,7 @@ class RenderPrefabCleanupTests(unittest.TestCase):
             [instance["state"] for instance in normalized["variant_component_extractions"][0]["instances"]],
             ["in_progress", "locked", "locked"],
         )
-        generated = render(normalized, "apply")
-        self.assertIn("CopyVariantStateOverrides(source, activeState);", generated)
-        self.assertIn("void CopyVariantStateOverrides(Transform source, Transform destination)", generated)
+        # 只读校验仍覆盖复用状态的实例映射；抽取代码生成已退役（ADR 0001/0002）。
         preflight = render(normalize_plan(plan, "preflight"), "preflight")
         self.assertNotIn("Variant component Prefab target already exists", preflight)
 
@@ -1075,7 +1000,22 @@ class RenderPrefabCleanupTests(unittest.TestCase):
         plan["variantComponentExtractions"][0]["assetPath"] = "Assets/UI/Other/TaskItem.prefab"
 
         with self.assertRaisesRegex(ValueError, "directly under .*Prefab/Common"):
-            normalize_plan(plan, "apply")
+            normalize_plan(plan, "preflight")
+
+    def test_apply_and_reapply_modes_are_retired_for_the_unity_core(self):
+        raw_plan = json.loads(
+            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
+        )
+
+        for mode in ("apply", "reapply"):
+            with self.assertRaisesRegex(ValueError, "retired"):
+                normalize_plan(raw_plan, mode)
+            with self.assertRaisesRegex(ValueError, "retired"):
+                render(raw_plan, mode)
+
+        # 只读模式仍然可用：正式写入已交给 Unity v2 核心。
+        preflight_plan = normalize_plan(raw_plan, "preflight")
+        self.assertTrue(render(preflight_plan, "preflight"))
 
     def test_stateful_component_allows_an_explicit_all_common_state(self):
         plan = self.load_plan("seven-day-task-view-day-reward-items.in-place.plan.json")
@@ -1095,162 +1035,13 @@ class RenderPrefabCleanupTests(unittest.TestCase):
             }
         ]
 
-        normalized = normalize_plan(plan, "apply")
-        generated = render(normalized, "apply")
+        # 抽取只由 Unity v2 核心执行；本脚本只负责校验 reviewed 计划。
+        normalized = normalize_plan(plan, "preflight")
 
         self.assertEqual(
             normalized["stateful_component_extractions"][0]["states"][1]["members"],
             [],
         )
-        self.assertIn("new string[0]", generated)
-        self.assertNotIn("new[] {  }", generated)
-
-    def test_reapply_mode_reuses_existing_component_assets_without_recreating_them(self):
-        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
-        extraction = plan["variantComponentExtractions"][0]
-        plan["componentFamilyDecisions"] = [{
-            "parent": extraction["template"].rsplit("/", 1)[0],
-            "sources": [instance["source"] for instance in extraction["instances"]],
-            "mode": "variant",
-            "extractionId": extraction["id"],
-            "reason": "replay test",
-        }]
-
-        normalized = normalize_plan(plan, "reapply")
-        generated = render(normalized, "reapply")
-
-        self.assertIn("LoadExistingComponentPrefab", generated)
-        self.assertIn("?? CreateVariantComponentPrefab(", generated)
-        self.assertNotIn("Variant component Prefab target already exists", generated)
-        self.assertIn("Candidate source paths", generated)
-        self.assertIn(
-            'AssertPlanPath(root, "variantComponentExtractions[0].template"',
-            generated,
-        )
-        self.assertIn("ReplaceVariantSourceWithComponent", generated)
-
-    def test_reapply_rolls_back_component_assets_created_during_failed_replay(self):
-        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
-        extraction = plan["variantComponentExtractions"][0]
-        plan["componentFamilyDecisions"] = [{
-            "parent": extraction["template"].rsplit("/", 1)[0],
-            "sources": [instance["source"] for instance in extraction["instances"]],
-            "mode": "variant",
-            "extractionId": extraction["id"],
-            "reason": "replay transaction test",
-        }]
-
-        generated = render(normalize_plan(plan, "reapply"), "reapply")
-
-        filter_missing = ".Where(assetPath => AssetDatabase.LoadMainAssetAtPath(assetPath) == null).ToArray()"
-        begin_call = "BeginComponentAssetTransaction(componentAssetTransactionPaths)"
-        rollback_call = "RollbackComponentAssetTransaction(componentAssetTransaction);"
-        self.assertIn(filter_missing, generated)
-        self.assertIn(begin_call, generated)
-        self.assertIn(rollback_call, generated)
-        begin = generated.index(begin_call)
-        self.assertLess(begin, generated.index("?? CreateVariantComponentPrefab(", begin))
-        self.assertLess(generated.index("AssetDatabase.SaveAssets();", begin), generated.rindex(rollback_call))
-
-    def test_reapply_mode_accepts_existing_stateful_asset(self):
-        plan = self.load_plan("seven-day-task-view-day-reward-items.in-place.plan.json")
-        extraction = plan["statefulComponentExtractions"][0]
-        plan["componentFamilyDecisions"] = [{
-            "parent": extraction["template"].rsplit("/", 1)[0],
-            "sources": [instance["source"] for instance in extraction["instances"]],
-            "mode": "stateful",
-            "extractionId": extraction["id"],
-            "reason": "replay test",
-        }]
-
-        normalized = normalize_plan(plan, "reapply")
-        generated = render(normalized, "reapply")
-
-        self.assertIn("LoadExistingComponentPrefab", generated)
-        self.assertIn("?? CreateStatefulComponentPrefab(", generated)
-        self.assertNotIn("Stateful component Prefab target already exists", generated)
-        self.assertIn("ReplaceStatefulSourceWithComponent", generated)
-
-    def test_reapply_temp_target_keeps_component_ownership_bound_to_original_prefab(self):
-        plan = self.load_plan("seven-day-task-view-task-item-variants.in-place.plan.json")
-        extraction = plan["variantComponentExtractions"][0]
-        plan["componentFamilyDecisions"] = [{
-            "parent": extraction["template"].rsplit("/", 1)[0],
-            "sources": [instance["source"] for instance in extraction["instances"]],
-            "mode": "variant",
-            "extractionId": extraction["id"],
-            "reason": "replay ownership test",
-        }]
-        original_target = plan["prefabAssetPath"]
-        temporary_target = "Assets/PSDLayoutTool2Settings/HierarchyReplayTemp/candidate.prefab"
-        plan["replaySourcePrefabAssetPath"] = original_target
-        plan["prefabAssetPath"] = temporary_target
-        plan["output"]["assetPath"] = temporary_target
-
-        normalized = normalize_plan(plan, "reapply")
-
-        self.assertEqual(normalized["prefab_path"], temporary_target)
-        self.assertEqual(
-            normalized["variant_component_extractions"][0]["assetPath"],
-            extraction["assetPath"],
-        )
-
-    def test_reapply_asset_rename_preserves_formal_guid_and_remaps_candidate_references(self):
-        raw_plan = json.loads(
-            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
-        )
-        raw_plan["textureRenames"] = [
-            {
-                "from": "Assets/UI/Prefab/Texture/raw_icon.png",
-                "toName": "RewardPanelView_Icon",
-                "expectedGuid": "0123456789abcdef0123456789abcdef",
-            }
-        ]
-        raw_plan["spriteAtlasRenames"] = []
-
-        generated = render(normalize_plan(raw_plan, "reapply"), "reapply")
-
-        self.assertIn(
-            'AssertGuid("Assets/UI/Prefab/Texture/RewardPanelView_Icon.png", '
-            '"0123456789abcdef0123456789abcdef");',
-            generated,
-        )
-        self.assertNotIn("Rename target already exists", generated)
-        self.assertIn("RefreshRenamedAsset", generated)
-        self.assertIn("RemapAssetReferences(root", generated)
-        self.assertIn("EditorUtility.CopySerialized(sourceImporter, targetImporter)", generated)
-        self.assertIn("targetImporter.SaveAndReimport()", generated)
-        self.assertIn(
-            'AssetDatabase.DeleteAsset("Assets/UI/Prefab/Texture/raw_icon.png")',
-            generated,
-        )
-        self.assertIn("if (replayAssetAlreadyRenamed0)", generated)
-        self.assertIn("var replayRenameError0 = AssetDatabase.RenameAsset", generated)
-
-    def test_guid_invariant_failure_reports_expected_and_actual_identity(self):
-        raw_plan = json.loads(
-            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
-        )
-
-        generated = render(normalize_plan(raw_plan, "apply"), "apply")
-
-        self.assertIn("GUID invariant failed: path=", generated)
-        self.assertIn(";expectedGuid=", generated)
-        self.assertIn(";actualGuid=", generated)
-
-    def test_apply_saves_prefab_only_after_transactional_asset_renames(self):
-        raw_plan = json.loads(
-            (SKILL_DIRECTORY / "examples" / "sample-plan.json").read_text(encoding="utf-8")
-        )
-
-        generated = render(normalize_plan(raw_plan, "apply"), "apply")
-
-        first_rename = generated.index("var renameError0 = AssetDatabase.RenameAsset")
-        prefab_save = generated.index("PrefabUtility.SaveAsPrefabAsset(root, outputPath)")
-        self.assertLess(first_rename, prefab_save)
-        self.assertIn("completedAssetRenames.Add", generated)
-        self.assertIn("for (var rollbackIndex = completedAssetRenames.Count - 1", generated)
-        self.assertIn("Asset rename rollback failed", generated)
 
     def test_flat_sibling_finding_without_a_resolution_is_rejected(self):
         raw_plan = self.make_flat_sibling_plan(resolutions=[])

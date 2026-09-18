@@ -138,6 +138,12 @@ def main():
         parser.error('timeout must be positive; heartbeat must be >0 and <=30 seconds')
     if args.mode == 'apply' and not args.apply_confirmed:
         parser.error('Apply requires the already-reviewed plan and --apply-confirmed')
+    if args.mode == 'apply':
+        # ADR 0001/0002：正式写入统一由 Unity 共享核心执行，Python 只保留只读快照/诊断。
+        parser.error(
+            'apply is retired (ADR 0001/0002): the Python renderer no longer writes. '
+            'Write a version 2 node:<id> plan and let Unity apply it after the human-approved .apply sentinel.'
+        )
     if args.mode == 'snapshot':
         target = args.prefab_path
         plan_bytes = None

@@ -2,12 +2,10 @@ namespace PsdLayoutTool2
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Globalization;
     using System.IO;
-    using System.Diagnostics;
-using System.Text;
-    using System.Linq;
-    using System.Threading.Tasks;
+    using System.Text;
     using UnityEditor;
     using UnityEngine;
 
@@ -17,38 +15,100 @@ using System.Text;
     public static class PsdHierarchyOrganizerEntry
     {
         public const string AiButtonLabel = "AI整理";
-        public const string ApplyPlanButtonLabel = "应用AI计划";
         public const string CopyPromptButtonLabel = "AI提示词复制";
 
-        public static async void ApplyLatestPlan(string sourcePsdAssetPath)
+        /// <summary>
+        /// 写入 *.session.json，供 Apply 哨兵监听还原 PSD/Prefab 上下文。
+        /// </summary>
+        internal static void WriteTerminalSession(
+            string sessionId,
+            string sourcePsdAssetPath,
+            string targetPrefabPath,
+            string planFullPath,
+            string reviewFullPath)
         {
-            if (!TryResolvePrefabAvailability(sourcePsdAssetPath,
-                    PsdImporter.OutputMode, PsdImporter.OutputFolderName, PsdImporter.PrefabMode,
-                    path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
-                    out string targetPrefabPath, out string error))
+            string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
+            if (string.IsNullOrEmpty(projectRoot))
             {
-                EditorUtility.DisplayDialog("PSDLayoutTool2", error, "确定"); return;
+                throw new InvalidOperationException("无法解析 Unity 工程根目录。");
             }
-            if (!PsdHierarchyChatContextBuilder.TryCreate(sourcePsdAssetPath, targetPrefabPath,
-                    out PsdHierarchyChatContext context, out error))
+
+            string directory = Path.Combine(projectRoot, "Library", "PsdHierarchyTerminal");
+            Directory.CreateDirectory(directory);
+            var record = new PsdHierarchyTerminalApplyWatcher.SessionRecord
             {
-                EditorUtility.DisplayDialog("PSDLayoutTool2", error, "确定"); return;
-            }
-            string directory = Path.Combine(context.projectRoot, "Library", "PsdHierarchyTerminal");
-            string planPath = Directory.Exists(directory)
-                ? Directory.GetFiles(directory, "*.plan.json").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
-                : null;
-            if (string.IsNullOrEmpty(planPath) || !File.Exists(planPath))
+                version = PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion,
+                sessionId = sessionId,
+                sourcePsdAssetPath = sourcePsdAssetPath,
+                targetPrefabPath = targetPrefabPath,
+                planPath = planFullPath,
+                reviewPath = reviewFullPath,
+            };
+            File.WriteAllText(
+                Path.Combine(directory, sessionId + ".session.json"),
+                Newtonsoft.Json.JsonConvert.SerializeObject(record, Newtonsoft.Json.Formatting.Indented),
+                new UTF8Encoding(false));
+        }
+
+        /// <summary>Apply 哨兵绝对路径：AI 在人工审核通过后写入此文件触发 Unity 自动应用。</summary>
+        internal static string BuildApplySentinelPath(string planFullPath)
+        {
+            if (string.IsNullOrWhiteSpace(planFullPath))
             {
-                EditorUtility.DisplayDialog("PSDLayoutTool2", "没有找到终端生成的计划文件，请先完成一次 AI 整理。", "确定"); return;
+                throw new ArgumentException("计划路径不能为空。", nameof(planFullPath));
             }
-            string planJson = File.ReadAllText(planPath, Encoding.UTF8);
-            if (!EditorUtility.DisplayDialog("确认应用 AI 计划",
-                    "计划文件：" + Path.GetFileName(planPath) + "\n\nUnity 将重新校验快照、节点引用和执行安全性，然后原地更新 Prefab。是否继续？",
-                    "确认应用", "取消")) return;
-            PsdHierarchyChatCleanupExecutionResult result =
-                await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(context, planJson);
-            EditorUtility.DisplayDialog("PSDLayoutTool2", result.success ? "AI 计划已应用并完成 Unity 执行链。" : result.message, "确定");
+
+            if (planFullPath.EndsWith(".plan.json", StringComparison.OrdinalIgnoreCase))
+            {
+                return planFullPath.Substring(0, planFullPath.Length - ".plan.json".Length) + ".apply";
+            }
+
+            return planFullPath + ".apply";
+        }
+
+        /// <summary>
+        /// 终端会话契约：审核、提交、回执与失败状态处理。独立成方法便于回归断言，
+        /// 不改变 TryOpenChat 实际写入的提示词正文。
+        /// </summary>
+        internal static string BuildTerminalSessionContract(
+            string planPath,
+            string reviewPath,
+            string applyPath,
+            string applyResultPath)
+        {
+            return
+                "\n\n===== TERMINAL SESSION CONTRACT =====\n" +
+                "This is an analysis and plan session. Do not claim that Unity assets were changed.\n" +
+                "Write the complete executable JSON plan (and no partial patch) to: " + planPath.Replace('\\', '/') + "\n" +
+                "The plan must be version 2 using node:<id> references from the snapshot. Do not write version 1 path plans.\n" +
+                "Do not call any Python renderer or CLI runner: their write modes are retired, and Unity applies the reviewed plan itself after .apply.\n" +
+                "EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents are executable. " +
+                "For componentExtractions use {id, name, assetPath, template: node:<id>, instances: [node:<id>...]}; the template must also appear in instances, every instance must share the template's recursive component structure, and assetPath must be a NEW PascalCase .prefab under Assets/. " +
+                "Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's sources must fully cover the candidate. When a mandatory candidate only becomes extractable after the grouping you just planned, Unity revalidates the refreshed candidate before performing that extraction in the second stage. " +
+                "For stateComponentExtractions use {id, template: node:<id>, assetPath, defaultState, states: [{id, source: node:<id>, name}]} only for mutually exclusive direct-sibling roots in one visual slot; template must be one of states[].source, and those sources must not be referenced from outside the extracted states. " +
+                "For variantComponentExtractions use {id, template: node:<id>, assetPath, commonName, statesName, defaultState, states: [{id, source: node:<id>, name}], instances: [{source: node:<id>, name, state}]} for rows visible at different list positions; every state representative must also appear once in instances, and each instance's structure must match its selected state source. " +
+                "For statefulComponentExtractions use {id, template: node:<id>, assetPath, common: {source, members: [{sourceName, name}]}, states: [{id, source, name, members: [...]}], defaultState, instances: [{source, name, state, commonSourceNames, stateSourceNames}]} when repeated items share real content plus a few states; every direct child of an instance source must be mapped exactly once by commonSourceNames + stateSourceNames. " +
+                "For textureRenames / spriteAtlasRenames use {from, toName, expectedGuid}: toName has no extension, every Texture toName must start with \"<prefabName>_\", every SpriteAtlas toName must equal prefabName, each from must be a private asset of the target Prefab, and the target must not exist yet. " +
+                "containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions MUST stay empty arrays: Unity refuses a non-empty unsupported array before any write. " +
+                "postGroupingExtractionIntents IS executable as an automatic second stage: each entry is {id, mode: component|state|variant|stateful, assetPath, templatePath, commonMembers, states, defaultState, instances: [{path, state, commonSourceNames, stateSourceNames}]}, where templatePath and every instances[].path are POST-grouping hierarchy paths (not node:<id>) resolved against a refreshed snapshot after Unity saves the grouping. mode=component uses empty states and an empty defaultState; every other mode declares states (id/name/sourcePath/members) plus a defaultState id. A mandatory candidate deferred to this stage must reference exactly one same-mode intent, and the rebuilt extraction sources must fully cover the refreshed candidate sources. " +
+                "Report containment or flat-sibling suggestions in the review text only; never encode them in the executable JSON.\n" +
+                "Every wrappers[].parent, moves[].source, moves[].destination, renames[].target, tightBounds[].target and emptyContainerRemovals[].source must copy an exact " +
+                "node:<id> from the snapshot, or reference an earlier wrapper as @wrapperId. Never invent an id and never write a hierarchy path.\n" +
+                "Write the human-readable Chinese review to: " + reviewPath.Replace('\\', '/') + "\n" +
+                "After every revision, replace both files atomically or rewrite them completely.\n" +
+                "Only a later Unity validation triggered by the APPLY sentinel can modify the Prefab. Unity renames .apply to .applying while it works; never write .apply twice for one request.\n" +
+                "After the human reviewer explicitly approves in this conversation, write an empty file at: " +
+                applyPath.Replace('\\', '/') + "\n" +
+                "That .apply file is the only signal Unity needs. Do not write it before human approval.\n" +
+                "After writing .apply, poll this result file (about every 2s, up to ~3 minutes): " +
+                applyResultPath.Replace('\\', '/') + "\n" +
+                "The result JSON has success, status, stage and message; status is one of applied, rejected, partial, uncertain.\n" +
+                "- applied: Unity saved the Prefab and verified it. Report that to the human.\n" +
+                "- rejected: the plan was refused BEFORE any write, so nothing changed. Do NOT rewrite the approved plan or write another .apply for this request. " +
+                "Quote the FULL message to the human and stop. Any corrected plan is a new request that requires a complete new review and explicit human approval before its own .apply is written.\n" +
+                "- partial or uncertain: Unity may already have written to the Prefab. Do NOT write another .apply and do NOT claim success. " +
+                "Quote the full message, tell the human the on-disk Prefab must be verified, and ask for a new review before any further apply.\n" +
+                "Do not claim Unity assets changed until the result file has success=true and status applied.\n";
         }
 
         public static bool TryResolvePrefabAvailability(
@@ -161,16 +221,14 @@ using System.Text;
                 string promptPath = Path.Combine(promptDirectory, sessionId + ".md");
                 string planPath = Path.Combine(promptDirectory, sessionId + ".plan.json");
                 string reviewPath = Path.Combine(promptDirectory, sessionId + ".review.md");
+                string applyPath = BuildApplySentinelPath(planPath);
+                string applyResultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
+                WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planPath, reviewPath);
                 string taskPrompt = PsdHierarchyChatClient.BuildPortablePrompt(context) +
-                    "\n\n===== TERMINAL SESSION CONTRACT =====\n" +
-                    "This is an analysis and plan session. Do not claim that Unity assets were changed.\n" +
-                    "Write the complete executable JSON plan (and no partial patch) to: " + planPath.Replace('\\', '/') + "\n" +
-                    "Write the human-readable Chinese review to: " + reviewPath.Replace('\\', '/') + "\n" +
-                    "After every revision, replace both files atomically or rewrite them completely.\n" +
-                    "Only a later Unity validation and explicit APPLY_PLAN action can modify the Prefab.\n";
+                    BuildTerminalSessionContract(planPath, reviewPath, applyPath, applyResultPath);
                 File.WriteAllText(promptPath, taskPrompt, new UTF8Encoding(false));
                 string initialPrompt = "Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
-                    ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file, and remain interactive for follow-up revisions.";
+                    ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file. After I explicitly approve, write .apply and poll .apply-result.json. If Unity rejects the plan before writing, show me the full error reason and stop; any correction must be presented as a new review request and explicitly approved before another apply. If the result is partial or uncertain, stop and tell me to verify the Prefab instead.";
                 string cliPath = cli.executablePath.Replace("'", "''");
                 // 模型与思考程度都留空时不生成任何参数，直接使用 CLI 自身的配置。
                 string optionArguments = PsdHierarchyChatClient.BuildModelAndEffortArguments(
@@ -255,7 +313,7 @@ using System.Text;
                     return false;
                 }
 
-                // 与内置「AI整理」终端共用同一个目录，「应用AI计划」按写入时间取最新的一份计划。
+                // 与内置「AI整理」终端共用同一个目录；Apply 哨兵监听会读 session.json 并自动应用。
                 string outputDirectory = Path.Combine(context.projectRoot, "Library", "PsdHierarchyTerminal");
                 Directory.CreateDirectory(outputDirectory);
                 string sessionId = "external-" +
@@ -264,11 +322,14 @@ using System.Text;
                 string promptFullPath = Path.Combine(outputDirectory, sessionId + ".prompt.md");
                 string planFullPath = Path.Combine(outputDirectory, sessionId + ".plan.json");
                 string reviewFullPath = Path.Combine(outputDirectory, sessionId + ".review.md");
+                string applyFullPath = BuildApplySentinelPath(planFullPath);
+                WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planFullPath, reviewFullPath);
 
                 string prompt = PsdHierarchyChatClient.BuildExternalSessionPrompt(
                     context,
                     planFullPath,
-                    reviewFullPath);
+                    reviewFullPath,
+                    applyFullPath);
                 // 长提示词同时落盘：剪贴板粘贴失败或需要留档时，可以直接把文件路径交给 CLI。
                 File.WriteAllText(promptFullPath, prompt, new UTF8Encoding(false));
                 EditorGUIUtility.systemCopyBuffer = prompt;
@@ -276,7 +337,8 @@ using System.Text;
                     prompt,
                     promptFullPath,
                     planFullPath,
-                    reviewFullPath);
+                    reviewFullPath,
+                    applyFullPath);
                 error = string.Empty;
                 return true;
             }
@@ -385,12 +447,14 @@ using System.Text;
             string text,
             string promptFullPath,
             string planFullPath,
-            string reviewFullPath)
+            string reviewFullPath,
+            string applyFullPath)
         {
             this.text = text ?? string.Empty;
             this.promptFullPath = promptFullPath ?? string.Empty;
             this.planFullPath = planFullPath ?? string.Empty;
             this.reviewFullPath = reviewFullPath ?? string.Empty;
+            this.applyFullPath = applyFullPath ?? string.Empty;
         }
 
         /// <summary>
@@ -404,7 +468,7 @@ using System.Text;
         public readonly string promptFullPath;
 
         /// <summary>
-        /// 外部工具必须写入的 v2 计划绝对路径，「应用AI计划」会读取它。
+        /// 外部工具必须写入的 v2 计划绝对路径。
         /// </summary>
         public readonly string planFullPath;
 
@@ -412,5 +476,10 @@ using System.Text;
         /// 外部工具必须写入的中文复核绝对路径。
         /// </summary>
         public readonly string reviewFullPath;
+
+        /// <summary>
+        /// 人工审核通过后 AI 必须写入的 Apply 哨兵路径；Unity 会自动应用，无需再点按钮。
+        /// </summary>
+        public readonly string applyFullPath;
     }
 }

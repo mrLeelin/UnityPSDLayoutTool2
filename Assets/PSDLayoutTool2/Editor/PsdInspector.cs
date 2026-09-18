@@ -1,4 +1,4 @@
-﻿namespace PsdLayoutTool2
+namespace PsdLayoutTool2
 {
     using System;
     using UnityEditor;
@@ -341,23 +341,14 @@
                         ActionPairResult hierarchyActions = DrawActionPair(
                             new GUIContent(
                                 PsdHierarchyOrganizerEntry.AiButtonLabel,
-                                "在 Unity 编辑器中打开 AI 对话窗口，并把整理技能与当前目标 Prefab 发送给 AI。"),
+                                "打开 AI 终端进行层级审核；审核通过后 AI 写入 .apply，Unity 会自动应用计划。"),
                             true,
                             new GUIContent(
-                                PsdHierarchyOrganizerEntry.ApplyPlanButtonLabel,
-                                Localize(
-                                    "读取终端生成的最新计划，重新校验后应用到当前 Prefab。",
-                                    "Validate and apply the latest terminal plan to the current Prefab.")),
-                            true);
-                        if (DrawFullWidthAction(new GUIContent(
                                 PsdHierarchyOrganizerEntry.CopyPromptButtonLabel,
                                 Localize(
-                                    "复制一份自带绝对路径的 AI 提示词，可粘贴到任意 CLI 或桌面 AI 里执行；不要求本机先配置好 AI 模型。",
-                                    "Copies a self-contained AI prompt that references absolute paths only, so any external CLI or desktop AI can run it without a configured local AI model."))))
-                        {
-                            CopyExternalAiPrompt(assetPath);
-                        }
-
+                                    "复制一份自带绝对路径的 AI 提示词，可粘贴到任意 CLI 或桌面 AI 里执行；审核通过后 AI 写入 .apply 即自动应用。",
+                                    "Copies a self-contained AI prompt for any external CLI/desktop AI; writing the .apply sentinel after human approval lets Unity apply automatically.")),
+                            true);
                         if (hierarchyActions.firstClicked)
                         {
                             string chatError;
@@ -369,7 +360,7 @@
 
                         if (hierarchyActions.secondClicked)
                         {
-                            PsdHierarchyOrganizerEntry.ApplyLatestPlan(assetPath);
+                            CopyExternalAiPrompt(assetPath);
                         }
                     }
 
@@ -561,12 +552,16 @@
                     "AI 提示词已复制到剪贴板（" + externalPrompt.text.Length + " 字符）。\n\n" +
                     "可直接粘贴到任意 CLI 或桌面 AI 里执行。提示词里的路径全部是绝对路径，工具不必在 Unity 项目目录下运行。\n\n" +
                     "让 AI 把计划写到：\n" + externalPrompt.planFullPath + "\n\n" +
-                    "执行完回到 Unity 点「应用AI计划」应用结果。\n\n" +
+                    "你在终端里审核通过后，让 AI 写入：\n" + externalPrompt.applyFullPath + "\n" +
+                    "Unity 会自动校验并应用；结果回执在：\n" +
+                    PsdHierarchyTerminalApplyWatcher.BuildResultPath(externalPrompt.applyFullPath) + "\n" +
+                    "AI 应轮询该文件，在失败时按 message 自行修订计划。\n\n" +
                     "提示词副本：\n" + externalPrompt.promptFullPath,
                     "AI prompt copied to the clipboard (" + externalPrompt.text.Length + " characters).\n\n" +
                     "Paste it into any external CLI or desktop AI. Every path inside is absolute, so the tool does not need to run from the Unity project folder.\n\n" +
                     "Ask the AI to write the plan to:\n" + externalPrompt.planFullPath + "\n\n" +
-                    "Then return to Unity and click Apply AI Plan.\n\n" +
+                    "After you approve in that terminal, have the AI write:\n" + externalPrompt.applyFullPath + "\n" +
+                    "Unity will validate and apply automatically.\n\n" +
                     "Prompt copy:\n" + externalPrompt.promptFullPath),
                 Localize("确定", "OK"));
         }

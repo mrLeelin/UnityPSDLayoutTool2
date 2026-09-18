@@ -26,6 +26,7 @@ namespace PsdLayoutTool2
             public string sourcePsdGuid = string.Empty;
             public string temporaryPath = string.Empty;
             public List<string> replayPlanJsonStages = new List<string>();
+            public List<string> replayBindingJsonStages = new List<string>();
             public int nextStageIndex;
             public int inFlightStageIndex = -1;
             public string checkpointPath = string.Empty;
@@ -33,16 +34,21 @@ namespace PsdLayoutTool2
             public int transientRetryStageIndex = -1;
             public int transientRetryAttempts;
             public long retryNotBeforeUtcTicks;
+            public bool terminal;
+            public int terminalStageIndex = -1;
+            public string terminalState = string.Empty;
+            public string terminalStage = string.Empty;
+            public string terminalMessage = string.Empty;
             public bool rebindProfileAfterCommit;
-            // Schema-1 pending records used one plan. Retain the field so a
-            // domain reload during an upgrade can still resume safely.
+            // Kept only so legacy records deserialize deterministically before
+            // validation rejects them and requests a fresh v2 analysis.
             public string replayPlanJson = string.Empty;
         }
 
         [InitializeOnLoadMethod]
         private static void InstallReplayPumpAfterDomainReload()
         {
-            ReleaseDeferredRetriesAfterDomainReload();
+            FinalizeLegacyDeferredRetriesAfterDomainReload();
             EnsureReplayPump();
         }
 
@@ -121,20 +127,24 @@ namespace PsdLayoutTool2
                 GameObject staged = PrefabUtility.SaveAsPrefabAsset(generatedCandidate, temporaryPath);
                 if (staged == null)
                     throw new InvalidOperationException("Generated Prefab candidate could not be staged for cleanup replay.");
-                bool builtReplayPlans = rebindProfileAfterCommit
-                    ? profile.TryBuildFreshGenerationReplayPlans(
+                if (!profile.TryGetReplayStageSources(
                         sourceGuid,
                         targetPath,
-                        temporaryPath,
+                        requireCurrentTargetGuid: !rebindProfileAfterCommit,
                         out IReadOnlyList<string> replayPlanJsonStages,
-                        out string replayError)
-                    : profile.TryBuildReplayPlans(
-                        sourceGuid,
+                        out IReadOnlyList<string> replayBindingJsonStages,
+                        out string replayError))
+                    throw new InvalidOperationException(replayError);
+
+                // Fail before queueing when the first stage cannot bind. Later stages are intentionally
+                // not built here because their evidence may refer to nodes created by an earlier stage.
+                if (!PsdHierarchyCleanupReplayProfile.TryBuildReplayStage(
+                        replayPlanJsonStages[0],
+                        replayBindingJsonStages[0],
                         targetPath,
                         temporaryPath,
-                        out replayPlanJsonStages,
-                        out replayError);
-                if (!builtReplayPlans)
+                        out _,
+                        out replayError))
                     throw new InvalidOperationException(replayError);
 
                 string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
@@ -148,6 +158,7 @@ namespace PsdLayoutTool2
                     sourceGuid,
                     temporaryPath,
                     replayPlanJsonStages,
+                    replayBindingJsonStages,
                     rebindProfileAfterCommit);
                 PendingTargets.Remove(targetPath);
                 EnsureReplayPump();
@@ -158,6 +169,16 @@ namespace PsdLayoutTool2
                 PendingTargets.Remove(targetPath);
                 DeleteTemporaryAsset(temporaryPath);
                 error = exception.Message;
+                if (IsPermanentReplayFailure(exception.Message))
+                {
+                    // 永久失败（v1 路径计划、绑定证据缺失或对应关系无法证明）时标记 Profile
+                    // 需要重新分析，让下一次导入直接给出明确原因，而不是重复暂存后再失败。
+                    PsdHierarchyCleanupReplayProfile.TryMarkRequiresRebindByGuid(
+                        sourceGuid,
+                        targetPath,
+                        exception.Message);
+                }
+
                 return false;
             }
         }
@@ -169,7 +190,7 @@ namespace PsdLayoutTool2
             PendingReplayRecord record,
             string pendingRecordPath)
         {
-            bool retainForRetry = false;
+            bool retainPendingRecord = false;
             try
             {
                 AssertTargetGuid(record);
@@ -180,10 +201,36 @@ namespace PsdLayoutTool2
                 {
                     AssertTargetGuid(record);
                     CreateStageCheckpoint(record, stageIndex, pendingRecordPath);
+                    if (!PsdHierarchyCleanupReplayProfile.TryBuildReplayStage(
+                            record.replayPlanJsonStages[stageIndex],
+                            record.replayBindingJsonStages[stageIndex],
+                            targetPath,
+                            temporaryPath,
+                            out string preparedStageJson,
+                            out string prepareError))
+                    {
+                        PsdHierarchyCleanupReplayProfile.TryMarkRequiresRebindByGuid(
+                            record.sourcePsdGuid,
+                            targetPath,
+                            prepareError);
+                        Debug.LogError(
+                            "PSD Prefab cleanup replay stage " + (stageIndex + 1) + "/" +
+                            record.replayPlanJsonStages.Count +
+                            " could not bind to the Prefab saved by the previous stage. " + prepareError);
+                        MarkTerminalFailure(
+                            record,
+                            stageIndex,
+                            PsdHierarchyCleanupExecutionState.Rejected,
+                            "rebind",
+                            prepareError);
+                        WritePendingReplayRecord(pendingRecordPath, record);
+                        retainPendingRecord = true;
+                        return;
+                    }
                     PsdHierarchyChatCleanupExecutionResult replay =
                         await PsdHierarchyChatCleanupExecution.ReapplyPersistedPlanAsync(
                             projectRoot,
-                            record.replayPlanJsonStages[stageIndex]);
+                            preparedStageJson);
                     if (!replay.success)
                     {
                         if (IsPermanentReplayFailure(replay.message))
@@ -196,21 +243,41 @@ namespace PsdLayoutTool2
                                 "PSD Prefab cleanup replay stage " + (stageIndex + 1) + "/" +
                                 record.replayPlanJsonStages.Count +
                                 " is incompatible with the current generated Prefab. " +
-                                "The existing organized Prefab was kept unchanged and the replay Profile now requires a fresh confirmed plan. " +
+                                "The target replacement was not committed and the replay Profile now requires a fresh confirmed plan. " +
+                                replay.message);
+                        }
+
+                        if (ShouldRetryAutomatically(replay.state, replay.message) &&
+                            ScheduleTransientStartupRetry(record, stageIndex))
+                        {
+                            WritePendingReplayRecord(pendingRecordPath, record);
+                            retainPendingRecord = true;
+                            Debug.LogError(
+                                "PSD Prefab cleanup replay stage " + (stageIndex + 1) + "/" +
+                                record.replayPlanJsonStages.Count +
+                                " was rejected because Unity is still starting. " +
+                                "The staged candidate and checkpoint will retry automatically after startup completes. " +
                                 replay.message);
                             return;
                         }
 
-                        bool retryAutomatically = ScheduleTransientStartupRetry(record, stageIndex, replay.message);
+                        MarkTerminalFailure(
+                            record,
+                            stageIndex,
+                            replay.state,
+                            replay.stage,
+                            replay.message);
                         WritePendingReplayRecord(pendingRecordPath, record);
-                        retainForRetry = true;
+                        retainPendingRecord = true;
                         Debug.LogError(
                             "PSD Prefab cleanup replay stage " + (stageIndex + 1) + "/" +
                             record.replayPlanJsonStages.Count +
-                            " failed; the existing organized Prefab was kept unchanged. " +
-                            (retryAutomatically
-                                ? "The staged candidate and checkpoint will retry automatically after Unity finishes starting. "
-                                : "The staged candidate and checkpoint were retained for one retry after the next domain reload. ") +
+                            " stopped with state " + replay.state + ". " +
+                            "The target replacement was not committed. The staged candidate, checkpoint, and terminal evidence were retained and will not run automatically again. " +
+                            (replay.state == PsdHierarchyCleanupExecutionState.Partial ||
+                             replay.state == PsdHierarchyCleanupExecutionState.Uncertain
+                                ? "Other assets may already have changed; inspect the retained evidence before any manual recovery. "
+                                : string.Empty) +
                             replay.message);
                         return;
                     }
@@ -262,11 +329,28 @@ namespace PsdLayoutTool2
             }
             catch (Exception exception)
             {
+                MarkTerminalFailure(
+                    record,
+                    record.inFlightStageIndex >= 0
+                        ? record.inFlightStageIndex
+                        : record.nextStageIndex,
+                    PsdHierarchyCleanupExecutionState.Uncertain,
+                    "exception",
+                    exception.Message);
+                try
+                {
+                    WritePendingReplayRecord(pendingRecordPath, record);
+                    retainPendingRecord = true;
+                }
+                catch (Exception recordException)
+                {
+                    Debug.LogException(recordException);
+                }
                 Debug.LogException(exception);
             }
             finally
             {
-                if (!retainForRetry)
+                if (!retainPendingRecord)
                 {
                     DeleteTemporaryAsset(temporaryPath);
                     DeletePendingReplayRecord(pendingRecordPath);
@@ -304,8 +388,9 @@ namespace PsdLayoutTool2
                 {
                     record = JsonUtility.FromJson<PendingReplayRecord>(
                         File.ReadAllText(pendingRecordPath));
-                    if (ValidatePendingReplayRecord(projectRoot, record))
-                        WritePendingReplayRecord(pendingRecordPath, record);
+                    if (record != null && record.terminal)
+                        continue;
+                    ValidatePendingReplayRecord(projectRoot, record);
                 }
                 catch (Exception exception)
                 {
@@ -317,7 +402,12 @@ namespace PsdLayoutTool2
                     continue;
                 }
 
-                if (record.retryAfterDomainReload || IsRetryDelayActive(record)) continue;
+                if (!IsPendingReplayRunnable(
+                        record.terminal,
+                        record.retryAfterDomainReload,
+                        record.retryNotBeforeUtcTicks,
+                        DateTime.UtcNow.Ticks))
+                    continue;
                 if (!PendingTargets.Add(record.targetPath)) continue;
                 ReplayAndCommitAsync(
                     record.projectRoot,
@@ -351,6 +441,7 @@ namespace PsdLayoutTool2
             string sourcePsdGuid,
             string temporaryPath,
             IReadOnlyList<string> replayPlanJsonStages,
+            IReadOnlyList<string> replayBindingJsonStages,
             bool rebindProfileAfterCommit)
         {
             string pendingDirectory = Path.Combine(projectRoot, PendingReplayDirectory);
@@ -360,13 +451,14 @@ namespace PsdLayoutTool2
                 Guid.NewGuid().ToString("N") + ".json");
             var record = new PendingReplayRecord
             {
-                schemaVersion = 2,
+                schemaVersion = 3,
                 projectRoot = projectRoot,
                 targetPath = targetPath,
                 expectedTargetGuid = expectedTargetGuid,
                 sourcePsdGuid = sourcePsdGuid,
                 temporaryPath = temporaryPath,
                 replayPlanJsonStages = new List<string>(replayPlanJsonStages),
+                replayBindingJsonStages = new List<string>(replayBindingJsonStages),
                 nextStageIndex = 0,
                 inFlightStageIndex = -1,
                 rebindProfileAfterCommit = rebindProfileAfterCommit,
@@ -390,7 +482,7 @@ namespace PsdLayoutTool2
                 File.Move(temporaryRecordPath, pendingRecordPath);
         }
 
-        private static bool ValidatePendingReplayRecord(
+        private static void ValidatePendingReplayRecord(
             string currentProjectRoot,
             PendingReplayRecord record)
         {
@@ -407,30 +499,11 @@ namespace PsdLayoutTool2
             if (!record.targetPath.StartsWith("Assets/", StringComparison.Ordinal) ||
                 !record.targetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Replay target Prefab path is invalid.");
-            bool migratedLegacyRecord = false;
-            if (record.schemaVersion == 0)
+            if (record.schemaVersion != 3)
             {
-                if (string.IsNullOrWhiteSpace(record.replayPlanJson) ||
-                    !PsdHierarchyCleanupReplayProfile.TryGetVerifiedTargetGuid(
-                        record.targetPath,
-                        out string verifiedTargetGuid))
-                    throw new InvalidDataException(
-                        "Legacy replay record cannot migrate without a GUID-bound cleanup replay Profile.");
-                record.schemaVersion = 2;
-                record.expectedTargetGuid = verifiedTargetGuid;
-                record.replayPlanJsonStages = new List<string> { record.replayPlanJson };
-                record.nextStageIndex = 0;
-                record.inFlightStageIndex = -1;
-                record.checkpointPath = string.Empty;
-                record.retryAfterDomainReload = false;
-                record.transientRetryStageIndex = -1;
-                record.transientRetryAttempts = 0;
-                record.retryNotBeforeUtcTicks = 0;
-                migratedLegacyRecord = true;
-            }
-            else if (record.schemaVersion != 2)
-            {
-                throw new InvalidDataException("Replay record schema is unsupported.");
+                throw new InvalidDataException(
+                    PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
+                    " 旧重放记录缺少逐阶段绑定证据，不会迁移进执行队列。");
             }
             if (string.IsNullOrEmpty(record.expectedTargetGuid) ||
                 !TargetGuidMatches(
@@ -442,11 +515,13 @@ namespace PsdLayoutTool2
                 throw new InvalidDataException("Replay temporary Prefab path is invalid.");
             if (AssetDatabase.LoadAssetAtPath<GameObject>(record.temporaryPath) == null)
                 throw new InvalidDataException("Replay temporary Prefab no longer exists.");
-            if ((record.replayPlanJsonStages == null || record.replayPlanJsonStages.Count == 0) &&
-                !string.IsNullOrWhiteSpace(record.replayPlanJson))
-                record.replayPlanJsonStages = new List<string> { record.replayPlanJson };
             if (record.replayPlanJsonStages == null || record.replayPlanJsonStages.Count == 0)
                 throw new InvalidDataException("Replay stage list is empty.");
+            if (record.replayBindingJsonStages == null ||
+                record.replayBindingJsonStages.Count != record.replayPlanJsonStages.Count)
+                throw new InvalidDataException(
+                    PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
+                    " 重放记录的阶段与绑定证据数量不一致。");
             ResolveRestartStage(
                 record.nextStageIndex,
                 record.inFlightStageIndex,
@@ -456,6 +531,12 @@ namespace PsdLayoutTool2
                 record.transientRetryAttempts < 0 ||
                 record.retryNotBeforeUtcTicks < 0)
                 throw new InvalidDataException("Replay transient retry state is invalid.");
+            if (record.terminal &&
+                (record.terminalStageIndex < 0 ||
+                 record.terminalStageIndex >= record.replayPlanJsonStages.Count ||
+                 string.IsNullOrWhiteSpace(record.terminalState) ||
+                 string.IsNullOrWhiteSpace(record.terminalMessage)))
+                throw new InvalidDataException("Replay terminal failure evidence is invalid.");
             record.checkpointPath = NormalizeAssetPath(record.checkpointPath);
             if (record.inFlightStageIndex >= 0)
             {
@@ -466,10 +547,15 @@ namespace PsdLayoutTool2
                     AssetDatabase.LoadAssetAtPath<GameObject>(record.checkpointPath) == null)
                     throw new InvalidDataException("Replay stage checkpoint is invalid or missing.");
             }
-            foreach (string stage in record.replayPlanJsonStages)
-                if (string.IsNullOrWhiteSpace(stage))
+            for (int index = 0; index < record.replayPlanJsonStages.Count; index++)
+            {
+                if (string.IsNullOrWhiteSpace(record.replayPlanJsonStages[index]))
                     throw new InvalidDataException("Replay stage is empty.");
-            return migratedLegacyRecord;
+                if (string.IsNullOrWhiteSpace(record.replayBindingJsonStages[index]))
+                    throw new InvalidDataException(
+                        PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
+                        " 重放阶段缺少节点绑定证据。");
+            }
         }
 
         internal static bool TargetGuidMatches(string expectedGuid, string currentGuid)
@@ -518,16 +604,8 @@ namespace PsdLayoutTool2
 
         private static bool ScheduleTransientStartupRetry(
             PendingReplayRecord record,
-            int stageIndex,
-            string message)
+            int stageIndex)
         {
-            if (!IsTransientEditorStartupFailure(message))
-            {
-                record.retryAfterDomainReload = true;
-                record.retryNotBeforeUtcTicks = 0;
-                return false;
-            }
-
             if (record.transientRetryStageIndex != stageIndex)
             {
                 record.transientRetryStageIndex = stageIndex;
@@ -537,7 +615,6 @@ namespace PsdLayoutTool2
             record.transientRetryAttempts++;
             if (record.transientRetryAttempts > MaxTransientStartupRetriesPerStage)
             {
-                record.retryAfterDomainReload = true;
                 record.retryNotBeforeUtcTicks = 0;
                 return false;
             }
@@ -546,6 +623,34 @@ namespace PsdLayoutTool2
             record.retryNotBeforeUtcTicks = DateTime.UtcNow.AddSeconds(
                 GetTransientRetryDelaySeconds(record.transientRetryAttempts)).Ticks;
             return true;
+        }
+
+        internal static bool ShouldRetryAutomatically(
+            PsdHierarchyCleanupExecutionState state,
+            string message)
+        {
+            return state == PsdHierarchyCleanupExecutionState.Rejected &&
+                   IsTransientEditorStartupFailure(message);
+        }
+
+        private static void MarkTerminalFailure(
+            PendingReplayRecord record,
+            int stageIndex,
+            PsdHierarchyCleanupExecutionState state,
+            string stage,
+            string message)
+        {
+            record.terminal = true;
+            record.terminalStageIndex = Math.Max(
+                0,
+                Math.Min(stageIndex, record.replayPlanJsonStages.Count - 1));
+            record.terminalState = state.ToString();
+            record.terminalStage = stage ?? string.Empty;
+            record.terminalMessage = string.IsNullOrWhiteSpace(message)
+                ? "Replay stopped without a diagnostic message."
+                : message;
+            record.retryAfterDomainReload = false;
+            record.retryNotBeforeUtcTicks = 0;
         }
 
         internal static bool IsTransientEditorStartupFailure(string message)
@@ -561,7 +666,12 @@ namespace PsdLayoutTool2
             return message.IndexOf("Direct child was not found:", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    message.IndexOf("asset did not load:", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    message.IndexOf("has no Unity GUID:", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   message.IndexOf("is not referenced by the current target Prefab:", StringComparison.OrdinalIgnoreCase) >= 0;
+                   message.IndexOf("is not referenced by the current target Prefab:", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   // 重放能力尚未迁移到 v2：这是永久失败，必须标记需要重新分析，
+                   // 不能作为瞬时启动失败在每个域重载后反复重试。
+                   message.IndexOf(
+                       PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage,
+                       StringComparison.Ordinal) >= 0;
         }
 
         internal static int GetTransientRetryDelaySeconds(int retryAttempt)
@@ -569,9 +679,15 @@ namespace PsdLayoutTool2
             return retryAttempt <= 1 ? 2 : retryAttempt == 2 ? 4 : 8;
         }
 
-        private static bool IsRetryDelayActive(PendingReplayRecord record)
+        internal static bool IsPendingReplayRunnable(
+            bool terminal,
+            bool retryAfterDomainReload,
+            long retryNotBeforeUtcTicks,
+            long utcNowTicks)
         {
-            return record.retryNotBeforeUtcTicks > DateTime.UtcNow.Ticks;
+            return !terminal &&
+                   !retryAfterDomainReload &&
+                   retryNotBeforeUtcTicks <= utcNowTicks;
         }
 
         private static void RestoreInterruptedStage(
@@ -619,7 +735,7 @@ namespace PsdLayoutTool2
                 AssetDatabase.DeleteAsset(normalized);
         }
 
-        private static void ReleaseDeferredRetriesAfterDomainReload()
+        private static void FinalizeLegacyDeferredRetriesAfterDomainReload()
         {
             string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
             if (string.IsNullOrEmpty(projectRoot)) return;
@@ -632,15 +748,22 @@ namespace PsdLayoutTool2
                 {
                     PendingReplayRecord record = JsonUtility.FromJson<PendingReplayRecord>(
                         File.ReadAllText(path));
-                    if (record == null || record.schemaVersion != 2 || !record.retryAfterDomainReload)
+                    if (record == null || record.schemaVersion != 3 || record.terminal || !record.retryAfterDomainReload)
                         continue;
-                    record.retryAfterDomainReload = false;
+                    MarkTerminalFailure(
+                        record,
+                        record.inFlightStageIndex >= 0
+                            ? record.inFlightStageIndex
+                            : record.nextStageIndex,
+                        PsdHierarchyCleanupExecutionState.Rejected,
+                        "legacy-deferred-retry",
+                        "Replay was deferred by the previous retry policy. Automatic execution was stopped after reload; inspect the retained staged candidate and checkpoint before manual recovery.");
                     WritePendingReplayRecord(path, record);
                 }
                 catch (Exception exception)
                 {
                     Debug.LogWarning(
-                        "Could not release a deferred PSD Prefab cleanup replay: " + exception.Message);
+                        "Could not finalize a deferred PSD Prefab cleanup replay: " + exception.Message);
                 }
             }
         }
@@ -653,7 +776,9 @@ namespace PsdLayoutTool2
                 {
                     PendingReplayRecord record = JsonUtility.FromJson<PendingReplayRecord>(
                         File.ReadAllText(path));
-                    if (record == null || !record.retryAfterDomainReload) return true;
+                    // A scheduled retry keeps the pump alive until its deadline; terminal evidence never does.
+                    if (record == null || (!record.terminal && !record.retryAfterDomainReload))
+                        return true;
                 }
                 catch
                 {

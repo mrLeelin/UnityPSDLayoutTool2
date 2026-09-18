@@ -2,6 +2,33 @@
 
 Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed execution contract.
 
+> **Current Unity executor capability (authoritative over the rest of this file).**
+> Executable now: `wrappers`, `moves`, `renames`, `tightBounds`, `emptyContainerRemovals`,
+> `componentExtractions` with matching `componentFamilyDecisions` mode `component` (template must also
+> appear in `instances`; every instance must share the template's recursive component structure;
+> `assetPath` must be a new PascalCase `.prefab` under `Assets/`), `stateComponentExtractions`
+> (mutually exclusive direct-sibling roots in one visual slot; `template` must be one of
+> `states[].source`; those sources must not be referenced from outside), and
+> `variantComponentExtractions` (rows visible at different list positions; every state
+> representative must also appear once in `instances`; each instance's structure must match its
+> selected state source), `statefulComponentExtractions` (repeated items with real shared content
+> plus a few states; `[States]` is created before `[Common]`; every direct child of an instance
+> source must be mapped exactly once by `commonSourceNames` + `stateSourceNames`), and
+> `textureRenames` / `spriteAtlasRenames` (`toName` without extension; every Texture `toName` must
+> start with `<prefabName>_`; every SpriteAtlas `toName` must equal `prefabName`; each `from` must
+> be a private asset of the target Prefab; the target path must not exist yet).
+> `postGroupingExtractionIntents` is also executable, but only as an automatic **second stage**:
+> after the hierarchy stage is saved and re-verified, Unity refreshes the authoritative snapshot
+> and applies the reviewed intents itself. Its `templatePath` and every `instances[].path` are
+> post-grouping hierarchy paths (not `node:<id>`), and every `requiresExtraction` candidate of the
+> refreshed snapshot must be covered by exactly one same-mode `component`, `state`, `variant`, or
+> `stateful` intent.
+> Everything else — `containmentResolutions`, `flatSiblingResolutions`,
+> `selectedPrefabExtractions`, `crossParentPrefabExtractions` —
+> **must be empty arrays**: Unity refuses a non-empty unsupported array before any write. Unity no
+> longer normalizes, repairs, force-extracts or converts the reviewed plan, so nothing here is
+> derived on your behalf.
+
 ## Unity AI Chat Plan (Version 2)
 
 The Unity AI hierarchy chat window accepts only version 2 plans. The window supplies an authoritative node snapshot generated through Unity Editor APIs. Copy its `fingerprint` into `snapshotFingerprint`, and reference every existing Prefab node as `node:<id>` using an ID present in that snapshot.
@@ -57,7 +84,9 @@ Every plan-owned ID, including `wrappers[].id`, extraction `id`, and state `id`,
 
 For `output.mode: "in_place"`, the Prefab root is asset identity, not a semantic naming target. A chat plan must not rename the snapshot root to a name different from `Path.GetFileNameWithoutExtension(prefabAssetPath)`, and every post-apply verification path must begin with that same asset-compatible root name. `prefabName` does not override this rule.
 
-Before validation or apply, the Unity window verifies the snapshot fingerprint, resolves every node ID to the exact original path, rejects unknown IDs and raw paths, writes the forced snapshot candidates into `requiredComponentFamilies`, the measured geometry into `containmentFindings`, and measured flat visual clusters into `flatSiblingFindings`, then writes a temporary internal version 1 runner plan. The AI must never emit those internal finding arrays itself. It does emit `containmentResolutions` and `flatSiblingResolutions`.
+Before validation or preflight, the Unity window verifies the snapshot fingerprint, requires every existing-node reference to be an exact `node:<id>` from that snapshot, and rejects unknown IDs, raw paths and unsupported non-empty operation arrays. It does **not** rewrite the reviewed plan: there is no conversion into an internal version 1 runner plan, no `requiredComponentFamilies` / `containmentFindings` / `flatSiblingFindings` derivation, and no `expectedGuid` injection. The reviewed JSON text itself is fingerprinted, preflighted in memory and applied.
+
+Approval binds the complete reviewed JSON. If Unity returns `rejected`, nothing was written, but the approved request is finished: do not edit its plan or write another `.apply`. Any correction is a complete new plan and review under a new request and requires fresh explicit human approval. A `partial` or `uncertain` result also requires verification of the on-disk Prefab before a new review.
 
 ### Post-Grouping Extraction Intent
 
@@ -129,17 +158,34 @@ family. If it creates a candidate that requires extraction, that extraction's
 complete intent must be present here before the user can confirm; it cannot be
 discovered and added after confirmation.
 
-After the first apply, Unity resolves every second-stage `node:<id>` against the
-refreshed authoritative snapshot and reconstructs the same canonical fields. The
-second stage is eligible for automatic apply only when the complete array matches
-exactly and all hierarchy, rename, containment, flat-sibling, and asset-rename
-arrays are empty. Missing, additional, reordered, renamed, or path-changed work is
-blocking. The field is stripped before either version 1 runner plan is written;
-direct version 1 plans never include it.
+A mandatory (`requiresExtraction: true`) candidate that only becomes extractable
+after the grouping must still be published exactly once in `componentFamilyDecisions`.
+Its `parent` and `sources` must exactly match the snapshot candidate. `recommendedMode`
+is advisory only. Its `mode` must be `component`, `state`, `variant`, or `stateful`
+and must match the actual extraction list or `postGroupingExtractionIntents` entry
+named by `extractionId`. Unity accepts that deferral, then verifies that
+the rebuilt extraction sources completely cover the refreshed candidate sources
+before executing the second stage. A missing, duplicate, wrong-mode, wrong-parent,
+wrong-source, or incomplete-coverage decision in the reviewed first-stage contract is refused
+before any write. A mismatch found only against the refreshed second-stage candidate leaves the
+first stage saved and returns `partial`.
+
+After the first apply, Unity resolves every intent path against the
+refreshed authoritative snapshot, rebuilds the second-stage plan (including the
+`componentFamilyDecisions` entries required by the refreshed snapshot) and applies
+it in the same confirmed workflow. A path that no longer exists, an unresolvable
+mode, or a required candidate the reviewed intents do not cover is blocking: the
+first stage stays saved, the result is reported as `partial`, and the user must
+re-analyze the current Prefab.
 
 ## Internal Runner Plan (Version 1)
 
-The bundled PowerShell/Python runner remains compatible with existing version 1 path plans. This section defines its operation shapes and is also the shape reference for version 2 chat plans. Direct script callers use version 1; the Unity AI chat window performs the conversion automatically.
+The bundled PowerShell/Python runner used to execute version 1 path plans. Its `apply` and
+`reapply` modes are **retired** (ADR 0001/0002): the script now refuses them, and no Unity code
+path calls it. Version 1 plans are therefore read-only diagnostics; formal writes happen only
+through a version 2 plan applied by the Unity shared core. This section remains as the operation
+shape reference, but its path-based references do **not** apply to version 2 chat plans, which
+must use `node:<id>`.
 
 ### Required Fields
 
@@ -172,7 +218,7 @@ The bundled PowerShell/Python runner remains compatible with existing version 1 
 
 `output.mode` must be `in_place`, and `output.assetPath` must exactly equal `prefabAssetPath`. This cleanup never creates a `.cleaned.prefab`, duplicate, or replacement for the target Prefab.
 
-All asset paths are project-relative paths beginning with `Assets/`. For a direct version 1 runner plan, `prefabName` must use PascalCase and end with `View` when Texture or SpriteAtlas assets are renamed. In a Unity AI chat version 2 plan, the field remains required for schema stability but is not trusted for private-asset execution; Unity derives the internal value from the reviewed rename targets described below.
+All asset paths are project-relative paths beginning with `Assets/`. For a direct version 1 runner plan, `prefabName` must use PascalCase and end with `View` when Texture or SpriteAtlas assets are renamed. In a version 2 plan the field stays required for schema stability only: the current executor never derives or trusts it for private-asset work.
 
 ### Operations
 
@@ -182,7 +228,7 @@ Every wrapper `id` must be lower snake_case matching `^[a-z][a-z0-9_]*$`; `scree
 
 An `@` reference names only a wrapper root: it must be exactly `@wrapperId`, never `@wrapperId/Child`. Existing nodes must always use their original, full pre-apply Prefab path in `moves.source`, `renames.target`, and `emptyContainerRemovals.source`, even when the operation later moves that node into a wrapper. `tightBounds.target` may use an exact wrapper-root reference or an existing pre-apply path. The renderer resolves existing nodes before it creates wrappers and applies moves, so post-move paths are not valid plan inputs.
 
-For direct internal runner plans, every source-tree path is an identity contract and must be copied exactly from the Unity snapshot, including its original sibling name and duplicate occurrence marker where applicable. Do not infer a GameObject name from a `TextMeshProUGUI.text` value, a Sprite name, or a visual label. The AI chat window never accepts these paths from the model: it resolves validated version 2 node IDs into this internal form and then runs the same source-path preflight.
+For direct internal runner plans, every source-tree path is an identity contract and must be copied exactly from the Unity snapshot, including its original sibling name and duplicate occurrence marker where applicable. Do not infer a GameObject name from a `TextMeshProUGUI.text` value, a Sprite name, or a visual label. A version 2 plan never contains these paths: it uses `node:<id>` references, which the Unity core binds against the authoritative snapshot at apply time.
 
 ```json
 {
@@ -264,7 +310,7 @@ A numbered family whose members do not all share one recursive structure additio
 
 ### Required Component Families
 
-`requiredComponentFamilies` carries the authoritative snapshot candidates that must be extracted, so the shared plan validator enforces the same rule the Unity AI chat path enforces. Unity writes this field automatically when it converts a version 2 node-ID plan into a version 1 runner plan: every chat candidate with `requiresExtraction: true` becomes one entry whose `parent` and `sources` are the resolved hierarchy paths. Do not author it by hand.
+`requiredComponentFamilies` carries the authoritative snapshot candidates that must be extracted, so the shared plan validator enforces the same rule the Unity AI chat path enforces. **Not executable yet.** Unity used to write this field when it converted a version 2 node-ID plan into a version 1 runner plan; that conversion is retired, so nothing derives it now. Keep extraction arrays empty and do not author this field by hand.
 
 ```json
 {
@@ -285,7 +331,7 @@ Each entry needs `candidateId`, `parent`, and at least two unique `sources`. Eve
 
 ### Geometry Containment
 
-`containmentFindings` carries measured geometry, not opinion: Unity compares the world rectangles of two numbered repeated families and records the cases where every member of the inner family sits fully inside a distinct member of the outer family. Unity writes this field when it converts a version 2 node-ID plan into a version 1 runner plan, exactly like `requiredComponentFamilies`. Do not author it by hand.
+`containmentFindings` carries measured geometry, not opinion: Unity compares the world rectangles of two numbered repeated families and records the cases where every member of the inner family sits fully inside a distinct member of the outer family. **Not executable yet.** Unity used to write this field during the retired version 2 → version 1 conversion; nothing derives it now. Do not author it by hand.
 
 ```json
 {
@@ -356,7 +402,7 @@ Every finding needs exactly one `flatSiblingResolutions` entry in the chat plan.
 }
 ```
 
-`mode` must be `"group"`, and `wrapperId` must equal `<findingId>_group`. Before execution Unity removes any AI-authored wrapper, move, or tight-bounds operation that touches the finding, then derives the one wrapper whose `parent` equals the finding `parent`, the observed background `siblingIndex`, one ordered move for every listed member, and one `tightBounds` entry. It cannot use an existing semantic container such as `[BottomBar]` as a shortcut. Missing, duplicate, or unknown finding IDs are rejected.
+`mode` must be `"group"`, and `wrapperId` must equal `<findingId>_group`. **Not executable yet.** Unity no longer removes AI-authored operations or derives a wrapper for a finding, and the current executor rejects any non-empty `flatSiblingResolutions` before writing. Keep the array empty and describe the grouping you would apply in the review text. An existing semantic container such as `[BottomBar]` is still not an acceptable substitute for the derived wrapper.
 
 The derived members are a minimum set, not proof of complete visual membership. Before the plan is confirmable, audit the complete sibling sequence around each finding for same-slot labels, counters, locks, status icons, and status values. Every proven additional member must be included through an explicit move into the same wrapper and in `verify.directChildren`; otherwise the review must report the ambiguity and not claim a complete grouped unit.
 
@@ -507,7 +553,7 @@ Use `statefulComponentExtractions` for repeated items that contain real shared c
 }
 ```
 
-`common.members` specifies the reusable `[Common]` contract. Each state specifies its branch members. A state may use an empty `members` array only for an explicit all-common state: every direct child of each instance using that state must be covered by `commonSourceNames`, and its `stateSourceNames` must be `[]`. An empty branch never permits an unmapped child or an invented placeholder state. Each instance otherwise maps all its direct members using `commonSourceNames` and `stateSourceNames`; the runner rejects an unmapped or duplicated child. During version 2 Unity-chat conversion only, an incomplete, duplicated, or invalid Common/State instance list can be rebuilt from the authoritative snapshot when the opposite list is a complete observed mapping or the instance is the reviewed source of that contract. The missing side is the ordered direct-child complement, and the final counts must exactly equal `common.members` plus the selected state's `members`. This conversion cannot invent a member or bypass a structural mismatch. Direct version 1 runner plans still require both complete explicit lists. Stateful extraction can be combined with other non-overlapping extraction modes and hierarchy operations. It rejects nested Prefabs, external references, or incomplete member mapping, and overwrites the declared output asset path with the current extraction.
+`common.members` specifies the reusable `[Common]` contract. Each state specifies its branch members. A state may use an empty `members` array only for an explicit all-common state: every direct child of each instance using that state must be covered by `commonSourceNames`, and its `stateSourceNames` must be `[]`. An empty branch never permits an unmapped child or an invented placeholder state. Each instance otherwise maps all its direct members using `commonSourceNames` and `stateSourceNames`; the runner rejects an unmapped or duplicated child. **Not executable yet.** The former version 2 chat conversion that could rebuild an incomplete, duplicated, or invalid Common/State instance list from the authoritative snapshot is retired, and the current executor does not execute stateful extraction at all. The missing side is the ordered direct-child complement, and the final counts must exactly equal `common.members` plus the selected state's `members`. This conversion cannot invent a member or bypass a structural mismatch. Direct version 1 runner plans still require both complete explicit lists. Stateful extraction can be combined with other non-overlapping extraction modes and hierarchy operations. It rejects nested Prefabs, external references, or incomplete member mapping, and overwrites the declared output asset path with the current extraction.
 
 ## Private Asset Renames
 
@@ -532,9 +578,9 @@ List only assets proven private to the current Prefab. `toName` has no extension
 }
 ```
 
-For a direct version 1 runner plan, read each `expectedGuid` from Unity before presenting the plan. For a Unity AI chat version 2 plan, use an empty `expectedGuid` string: the chat execution bridge validates each `from` asset and injects its current `AssetDatabase` GUID while converting the reviewed plan. The runner still checks that captured GUID before and after `AssetDatabase.RenameAsset`; it fails if the asset identity changes between validation and apply. This lets `-VerifyOnly` prove the actual saved state after an interrupted apply. Do not add shared assets to this list.
+For a direct version 1 runner plan, read each `expectedGuid` from Unity before presenting the plan. **Executable now (v2):** Unity validates each `from` asset, captures its current `AssetDatabase` GUID when `expectedGuid` is empty, rejects a mismatch, refuses an existing target path, performs the rename (which keeps the asset identity, so Prefab references stay valid) and re-checks the GUID afterwards. Renames run before the hierarchy operations and the final save; a mid-flight failure reports which renames already happened instead of silently redoing or rolling back. Do not add shared assets to this list.
 
-For that same version 2 conversion, Unity derives the internal `prefabName` from the reviewed `toName` values. Each Texture contributes the substring before its first underscore; each SpriteAtlas contributes its full `toName`. All candidates must be identical and match `^[A-Z][A-Za-z0-9]*View$`. The version 2 `prefabName` field is not used to override those reviewed targets. If the candidates conflict, a Texture lacks the required underscore, or the common candidate is invalid, conversion stops before the external runner and reports the submitted `prefabName`, every candidate, and each indexed `toName`. Direct version 1 runner plans remain explicit and are not normalized.
+**Not executable yet.** No version 2 conversion happens any more, so Unity does not derive an internal `prefabName` from reviewed `toName` values. Each Texture contributes the substring before its first underscore; each SpriteAtlas contributes its full `toName`. All candidates must be identical and match `^[A-Z][A-Za-z0-9]*View$`. The version 2 `prefabName` field is not used to override those reviewed targets. If the candidates conflict, a Texture lacks the required underscore, or the common candidate is invalid, conversion stops before the external runner and reports the submitted `prefabName`, every candidate, and each indexed `toName`. Direct version 1 runner plans remain explicit and are not normalized.
 
 When the full private Texture directory belongs to this Prefab, list every Texture in it. Set `verify.privateTextureDirectory`, `verify.requireAllPrivateTextureAssetsPrefixed`, and `verify.texturePathPrefix` so the final verification rejects any residual non-prefixed file.
 

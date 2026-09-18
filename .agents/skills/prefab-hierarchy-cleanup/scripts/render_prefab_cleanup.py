@@ -138,8 +138,15 @@ def validate_extraction_sibling_topology_after_moves(
 def normalize_plan(raw: dict[str, Any], mode: str) -> dict[str, Any]:
     if mode not in {"apply", "preflight", "verify", "reapply"}:
         fail(f"unsupported render mode: {mode}")
+    # ADR 0001/0002：正式 Apply 只在 Unity Native 执行 v2；本脚本仅只读诊断。
+    # 仍接受 version==1 是为了历史只读快照/诊断，绝不能拿来 Apply v2 计划。
+    if mode in {"apply", "reapply"}:
+        fail(
+            "apply/reapply via this Python script is retired (ADR 0001/0002). "
+            "Write a version 2 node-id plan and let Unity apply it after the .apply sentinel."
+        )
     if raw.get("version") != 1:
-        fail("version must be 1")
+        fail("version must be 1 (read-only diagnostics only; formal apply is Unity v2)")
 
     prefab_path = asset_path(raw.get("prefabAssetPath"), "prefabAssetPath")
     output = raw.get("output")
@@ -1439,6 +1446,12 @@ def emit_preflight(plan: dict[str, Any]) -> list[str]:
 
 
 def render(plan: dict[str, Any], mode: str) -> str:
+    # ADR 0001/0002：正式 Apply 只在 Unity Native 执行 v2；本脚本只保留只读渲染。
+    if mode in {"apply", "reapply"}:
+        fail(
+            "apply/reapply rendering is retired (ADR 0001/0002). "
+            "Write a version 2 node-id plan and let Unity apply it after the .apply sentinel."
+        )
     verify = plan["verify"]
     prefix = verify.get("texturePathPrefix", "")
     require_prefix = bool(verify.get("requireAllImageTexturesPrefixed", False))

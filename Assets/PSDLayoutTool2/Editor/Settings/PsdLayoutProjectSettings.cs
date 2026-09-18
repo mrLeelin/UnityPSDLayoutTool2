@@ -670,7 +670,13 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 9;
+        private const int CurrentSettingsVersion = 10;
+
+        /// <summary>
+        /// 个人字段（AI / 预览端口 / 九宫格 markers）已迁到 UserSettings JSON 后，
+        /// 同一次域重载内不再重复检查磁盘。
+        /// </summary>
+        private static bool personalMigrationChecked;
 
         [SerializeField]
         private int settingsVersion;
@@ -751,7 +757,10 @@ namespace PsdLayoutTool2
         internal PsdLayoutProjectNineSliceSnapshot ResolveNineSliceSettings()
         {
             EnsureData();
-            return nineSliceSettings.Resolve();
+            // autoCrop 是团队管线规则（共享 asset）；showImageMarkers 是编辑器可视化（个人 JSON）。
+            bool autoCrop = nineSliceSettings.Resolve().autoCropOnExport;
+            bool markers = PsdLayoutLocalUserSettings.Load().showNineSliceImageMarkers;
+            return new PsdLayoutProjectNineSliceSnapshot(autoCrop, markers);
         }
 
         internal void SetNineSliceAutoCrop(bool autoCropOnExport)
@@ -765,17 +774,35 @@ namespace PsdLayoutTool2
 
         internal void SetNineSliceImageMarkers(bool showImageMarkers)
         {
-            EnsureData();
-            if (nineSliceSettings.SetShowImageMarkers(showImageMarkers))
+            if (!TrySetNineSliceImageMarkers(showImageMarkers, out string error))
             {
-                SaveAsset();
+                throw new InvalidOperationException(error);
             }
+        }
+
+        internal bool TrySetNineSliceImageMarkers(bool showImageMarkers, out string error)
+        {
+            EnsureData();
+            PsdLayoutLocalUserSettings.Data data = PsdLayoutLocalUserSettings.Load();
+            if (data.showNineSliceImageMarkers == showImageMarkers)
+            {
+                error = string.Empty;
+                return true;
+            }
+
+            data.showNineSliceImageMarkers = showImageMarkers;
+            return PsdLayoutLocalUserSettings.Save(data, out error);
         }
 
         internal PsdHierarchyAiSettingsSnapshot ResolveHierarchyAiSettings()
         {
             EnsureData();
-            return hierarchyAiSettings.Resolve();
+            PsdLayoutLocalUserSettings.AiData ai = PsdLayoutLocalUserSettings.Load().ai;
+            return new PsdHierarchyAiSettingsSnapshot(
+                (PsdHierarchyAiProvider)ai.provider,
+                ai.customEndpoint,
+                ai.customModel,
+                ai.reasoningEffort);
         }
 
         internal void SetHierarchyAiSettings(
@@ -785,9 +812,32 @@ namespace PsdLayoutTool2
             string reasoningEffort)
         {
             EnsureData();
-            if (hierarchyAiSettings.Set(provider, customEndpoint, customModel, reasoningEffort))
+            var candidate = new PsdHierarchyAiSettingsSnapshot(
+                provider,
+                (customEndpoint ?? string.Empty).Trim(),
+                (customModel ?? string.Empty).Trim(),
+                (reasoningEffort ?? string.Empty).Trim());
+            if (!candidate.TryValidate(out string error))
             {
-                SaveAsset();
+                throw new ArgumentException(error);
+            }
+
+            PsdLayoutLocalUserSettings.Data data = PsdLayoutLocalUserSettings.Load();
+            if (data.ai.provider == (int)candidate.provider &&
+                string.Equals(data.ai.customEndpoint, candidate.customEndpoint, StringComparison.Ordinal) &&
+                string.Equals(data.ai.customModel, candidate.customModel, StringComparison.Ordinal) &&
+                string.Equals(data.ai.reasoningEffort, candidate.reasoningEffort, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            data.ai.provider = (int)candidate.provider;
+            data.ai.customEndpoint = candidate.customEndpoint;
+            data.ai.customModel = candidate.customModel;
+            data.ai.reasoningEffort = candidate.reasoningEffort;
+            if (!PsdLayoutLocalUserSettings.Save(data, out string saveError))
+            {
+                throw new InvalidOperationException(saveError);
             }
         }
 
@@ -806,7 +856,9 @@ namespace PsdLayoutTool2
             {
                 SetHierarchyAiSettings(provider, customEndpoint, customModel, reasoningEffort);
             }
-            catch (ArgumentException exception)
+            catch (Exception exception) when (
+                exception is ArgumentException ||
+                exception is InvalidOperationException)
             {
                 error = exception.Message;
                 return false;
@@ -819,11 +871,24 @@ namespace PsdLayoutTool2
         /// <summary>关闭 AI 整理，保留已填写的模型与地址。</summary>
         internal void ClearHierarchyAiSettings()
         {
-            EnsureData();
-            if (hierarchyAiSettings.Clear())
+            if (!TryClearHierarchyAiSettings(out string error))
             {
-                SaveAsset();
+                throw new InvalidOperationException(error);
             }
+        }
+
+        internal bool TryClearHierarchyAiSettings(out string error)
+        {
+            EnsureData();
+            PsdLayoutLocalUserSettings.Data data = PsdLayoutLocalUserSettings.Load();
+            if (data.ai.provider == (int)PsdHierarchyAiProvider.None)
+            {
+                error = string.Empty;
+                return true;
+            }
+
+            data.ai.provider = (int)PsdHierarchyAiProvider.None;
+            return PsdLayoutLocalUserSettings.Save(data, out error);
         }
 
         internal PsdHierarchyCleanupExecutionSettingsSnapshot ResolveHierarchyCleanupExecutionSettings()
@@ -841,14 +906,30 @@ namespace PsdLayoutTool2
             }
         }
 
-        internal int ResolvePreviewServerPort() { EnsureData(); return previewServerSettings.ResolvePort(); }
+        internal int ResolvePreviewServerPort()
+        {
+            EnsureData();
+            return PsdLayoutLocalUserSettings.Load().previewServerPort;
+        }
 
         internal bool TrySetPreviewServerPort(int port, out string error)
         {
             EnsureData();
-            bool changed = previewServerSettings.TrySetPort(port, out error);
-            if (changed) SaveAsset();
-            return changed;
+            if (port < 1 || port > 65535)
+            {
+                error = "端口必须在 1 到 65535 之间。";
+                return false;
+            }
+
+            PsdLayoutLocalUserSettings.Data data = PsdLayoutLocalUserSettings.Load();
+            if (data.previewServerPort == port)
+            {
+                error = string.Empty;
+                return false;
+            }
+
+            data.previewServerPort = port;
+            return PsdLayoutLocalUserSettings.Save(data, out error);
         }
 
         internal void SetOutputSettings(
@@ -986,6 +1067,51 @@ namespace PsdLayoutTool2
 
             // 旧版项目配置缺少新增数据块时，只补默认数据并保存一次，不覆盖已有配置。
             if (changed && AssetDatabase.Contains(this))
+            {
+                SaveAsset();
+            }
+
+            MigratePersonalFieldsToLocalUserSettings();
+        }
+
+        /// <summary>
+        /// 首次加载时：若还没有 UserSettings JSON，则把 asset 里的 AI / 预览端口 / markers
+        /// 播种到个人配置，并把 asset 中这三项重置为默认，避免继续被提交进 git。
+        /// </summary>
+        private void MigratePersonalFieldsToLocalUserSettings()
+        {
+            if (personalMigrationChecked)
+            {
+                return;
+            }
+
+            personalMigrationChecked = true;
+            // 文件存在但损坏/空白时也要播种，不能只看 File.Exists。
+            if (PsdLayoutLocalUserSettings.TryLoadExisting(out _))
+            {
+                return;
+            }
+
+            var seeded = new PsdLayoutLocalUserSettings.Data();
+            PsdHierarchyAiSettingsSnapshot assetAi = hierarchyAiSettings.Resolve();
+            seeded.ai.provider = (int)assetAi.provider;
+            seeded.ai.customModel = assetAi.customModel;
+            seeded.ai.reasoningEffort = assetAi.reasoningEffort;
+            seeded.ai.customEndpoint = assetAi.customEndpoint;
+            seeded.previewServerPort = previewServerSettings.ResolvePort();
+            seeded.showNineSliceImageMarkers = nineSliceSettings.Resolve().showImageMarkers;
+            if (!PsdLayoutLocalUserSettings.Save(seeded))
+            {
+                // 个人文件写失败时保留 asset 原值，下次域重载再迁一次。
+                personalMigrationChecked = false;
+                return;
+            }
+
+            // asset 只留团队字段；个人项回默认，减少无意义的 git 噪音。
+            hierarchyAiSettings = new PsdHierarchyAiSettings();
+            previewServerSettings = new PsdCommonAssetPreviewSettings();
+            nineSliceSettings.SetShowImageMarkers(PsdLayoutProjectNineSliceSettings.DefaultShowImageMarkers);
+            if (AssetDatabase.Contains(this))
             {
                 SaveAsset();
             }

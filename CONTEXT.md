@@ -26,3 +26,25 @@ _Avoid_: 仅导出 Prefab、图片复用
 **九宫可观察性**：在不改变 Prefab 名称或运行时行为的前提下，通过编辑器层级标识与 Inspector 诊断，让开发者确认任意 Unity UI 节点是否使用了九宫 Sprite 和对应边距；不以节点是否由 PSD Layout Tool 生成作为过滤条件。
 
 **九宫诊断**：Inspector 顶部的只读信息块。它仅在当前选中对象含有效九宫 Image 时出现，显示 Sprite、Sliced 状态和四边 Border；不替换 Unity 或第三方的 Image Inspector。
+
+## 清理计划协议
+
+**清理计划（v2）**：正式可审的层级清理执行文档。引用既有节点时必须使用快照中的 `node:<id>`，并携带 `snapshotFingerprint`。终端/外部 AI 与 Unity 自动 Apply 只认这一版。
+_Avoid_: plan、计划文件（未标明版本时）、路径计划
+
+**Runner 计划（v1）**：以层级路径引用节点的历史/内部格式。不可直接 Apply；仅允许只读诊断或明确标注的迁移输入。
+_Avoid_: 正式计划、可执行计划
+
+**权威快照**：由 Unity 生成、带指纹的节点清单。v2 计划中所有既有节点引用必须来自该快照，禁止手写路径或臆造 ID。
+
+**Apply 哨兵**：人工在终端审核通过后，由 AI 写入的 `*.apply` 空文件。它是 Unity 自动校验并应用清理计划的唯一信号。
+_Avoid_: 应用按钮、手动 Apply、Inspector 应用入口
+
+**Apply 回执**：Unity 应用结束后写回的 `*.apply-result.json`，含 success / status / message，供终端 AI 读取失败原因并修订计划。
+_Avoid_: 日志、Console 消息（二者不能替代回执文件）
+
+**重放绑定证据**：v2 Replay Profile 与阶段一起保存的节点身份事实（`path` + `name` + `siblingIndex` + `components`）。快照节点 ID 是位置编号，PSD 更新后重放必须先用这些事实在重新生成的快照上证明**唯一**对应关系，否则停止并要求重新分析。
+_Avoid_: 用相同编号或覆盖指纹代替对应关系证明
+
+**分组后抽取意图**：v2 计划中的 `postGroupingExtractionIntents`，用**分组后**的层级路径描述第二阶段子 Prefab 抽取。Unity 保存并复验首阶段后自行刷新快照、重建并执行该阶段。
+_Avoid_: 把分组后路径写成 `node:<id>`、让 AI 再申请第二次确认

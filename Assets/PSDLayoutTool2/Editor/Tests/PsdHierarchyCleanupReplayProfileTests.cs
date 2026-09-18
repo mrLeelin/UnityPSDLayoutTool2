@@ -259,7 +259,7 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void PersistedProfileIsAvailableForIncrementalReplay()
         {
-            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            PsdHierarchyCleanupReplayProfile profile = CreateExecutableVersionTwoProfile();
             string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
             EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
             AssetDatabase.CreateAsset(profile, profilePath);
@@ -272,7 +272,7 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void StoredReplayProfileFindsMovedPrefabByGuidAndMigratesItsPath()
         {
-            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            PsdHierarchyCleanupReplayProfile profile = CreateExecutableVersionTwoProfile();
             string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
             EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
             EnsureFolder(System.IO.Path.GetDirectoryName(MovedTargetPath).Replace('\\', '/'));
@@ -293,7 +293,7 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void IncrementalReplayRequiresAnExactlyBoundProfile()
         {
-            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
+            PsdHierarchyCleanupReplayProfile profile = CreateExecutableVersionTwoProfile();
             string profilePath = PsdHierarchyCleanupReplayProfile.GetProfilePath(TargetPath, SourceGuid);
             EnsureFolder(System.IO.Path.GetDirectoryName(profilePath).Replace('\\', '/'));
             AssetDatabase.CreateAsset(profile, profilePath);
@@ -380,6 +380,76 @@ namespace PsdLayoutTool2.Tests
             Assert.That(PsdHierarchyCleanupReplayCoordinator.GetTransientRetryDelaySeconds(1), Is.EqualTo(2));
             Assert.That(PsdHierarchyCleanupReplayCoordinator.GetTransientRetryDelaySeconds(2), Is.EqualTo(4));
             Assert.That(PsdHierarchyCleanupReplayCoordinator.GetTransientRetryDelaySeconds(3), Is.EqualTo(8));
+        }
+
+        [TestCase(PsdHierarchyCleanupExecutionState.Rejected, "Native payload compilation failed: Unity server is starting.", true)]
+        [TestCase(PsdHierarchyCleanupExecutionState.Rejected, "Native payload compilation failed.", false)]
+        [TestCase(PsdHierarchyCleanupExecutionState.Partial, "Unity server is starting.", false)]
+        [TestCase(PsdHierarchyCleanupExecutionState.Uncertain, "Unity server is starting.", false)]
+        public void AutomaticReplayRetryRequiresAnExplicitTransientRejectedResult(
+            object state,
+            string message,
+            bool expected)
+        {
+            Assert.That(
+                PsdHierarchyCleanupReplayCoordinator.ShouldRetryAutomatically((PsdHierarchyCleanupExecutionState)state, message),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void DelayedRetryKeepsThePumpAliveWhileTerminalEvidenceDoesNot()
+        {
+            string folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "PsdReplayPump-" + System.Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            string recordPath = System.IO.Path.Combine(folder, "record.json");
+            try
+            {
+                var inspect = typeof(PsdHierarchyCleanupReplayCoordinator).GetMethod(
+                    "HasRunnablePendingRecordFiles",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                Assert.That(inspect, Is.Not.Null);
+                System.IO.File.WriteAllText(recordPath, new JObject
+                {
+                    ["terminal"] = false,
+                    ["retryNotBeforeUtcTicks"] = System.DateTime.UtcNow.AddMinutes(1).Ticks,
+                }.ToString());
+                Assert.That(inspect.Invoke(null, new object[] { folder }), Is.True);
+                System.IO.File.WriteAllText(recordPath, "{\"terminal\":true}");
+                Assert.That(inspect.Invoke(null, new object[] { folder }), Is.False);
+            }
+            finally
+            {
+                System.IO.File.Delete(recordPath);
+                System.IO.Directory.Delete(folder);
+            }
+        }
+
+        [Test]
+        public void TerminalReplayEvidenceNeverReturnsToTheAutomaticPump()
+        {
+            const long now = 100;
+            Assert.That(
+                PsdHierarchyCleanupReplayCoordinator.IsPendingReplayRunnable(
+                    terminal: true,
+                    retryAfterDomainReload: false,
+                    retryNotBeforeUtcTicks: 0,
+                    utcNowTicks: now),
+                Is.False);
+            Assert.That(
+                PsdHierarchyCleanupReplayCoordinator.IsPendingReplayRunnable(
+                    terminal: false,
+                    retryAfterDomainReload: false,
+                    retryNotBeforeUtcTicks: 0,
+                    utcNowTicks: now),
+                Is.True);
+            Assert.That(
+                PsdHierarchyCleanupReplayCoordinator.IsPendingReplayRunnable(
+                    terminal: false,
+                    retryAfterDomainReload: true,
+                    retryNotBeforeUtcTicks: 0,
+                    utcNowTicks: now),
+                Is.False,
+                "旧策略留下的域重载重试标记不得重新进入执行队列。");
         }
 
         [TestCase("Direct child was not found: Root/CardBackground", true)]
@@ -605,6 +675,84 @@ namespace PsdLayoutTool2.Tests
                 out _), Is.False);
         }
 
+        [Test]
+        public void VersionTwoStageWithoutBindingEvidenceStillRequiresAFreshAnalysis()
+        {
+            // v2 计划必须能保存进 Profile（否则每次成功 Apply 都会误报“保存失败”）。
+            // 没有保存节点绑定证据的 v2 阶段无法证明对应关系，重放必须永久拒绝并要求重新分析（规格 A10/A11）。
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile(CreateVersionTwoPlan());
+            try
+            {
+                Assert.That(profile.TryBuildReplayPlans(
+                    SourceGuid,
+                    TargetPath,
+                    "Assets/PSDLayoutTool2Settings/HierarchyReplayTemp/candidate.prefab",
+                    out IReadOnlyList<string> stages,
+                    out string error), Is.False);
+                Assert.That(stages, Is.Empty);
+                Assert.That(error, Does.StartWith(
+                    PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage));
+                Assert.That(
+                    PsdHierarchyCleanupReplayCoordinator.IsPermanentReplayFailure(error),
+                    Is.True,
+                    "重放不可用必须归类为永久失败，不能在每次域重载后反复重试。");
+            }
+            finally
+            {
+                Object.DestroyImmediate(profile);
+            }
+        }
+
+        [Test]
+        public void VersionOneProfileCannotEnterTheReplayExecutionQueue()
+        {
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile(CreateRunnerPlan());
+            try
+            {
+                Assert.That(
+                    profile.TryGetReplayStageSources(
+                        SourceGuid,
+                        TargetPath,
+                        requireCurrentTargetGuid: true,
+                        out IReadOnlyList<string> stages,
+                        out IReadOnlyList<string> bindings,
+                        out string error),
+                    Is.False);
+                Assert.That(stages, Is.Empty);
+                Assert.That(bindings, Is.Empty);
+                Assert.That(
+                    error,
+                    Does.StartWith(PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage));
+                Assert.That(error, Does.Contain("v1"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(profile);
+            }
+        }
+
+        private static string CreateVersionTwoPlan()
+        {
+            return new JObject
+            {
+                ["version"] = 2,
+                ["snapshotFingerprint"] = "snapshot-123",
+                ["prefabAssetPath"] = TargetPath,
+                ["output"] = new JObject
+                {
+                    ["mode"] = "in_place",
+                    ["assetPath"] = TargetPath,
+                },
+                ["prefabName"] = "ExampleView",
+                ["wrappers"] = new JArray(),
+                ["moves"] = new JArray(),
+                ["renames"] = new JArray(),
+                ["emptyContainerRemovals"] = new JArray(),
+                ["tightBounds"] = new JArray(),
+                ["verify"] = new JObject(),
+            }.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
         private static PsdHierarchyCleanupReplayProfile CreateProfile()
         {
             return CreateProfile(CreateRunnerPlan());
@@ -614,6 +762,36 @@ namespace PsdLayoutTool2.Tests
         {
             var profile = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
             profile.Initialize(SourceGuid, TargetPath, planJson);
+            return profile;
+        }
+
+        private static PsdHierarchyCleanupReplayProfile CreateExecutableVersionTwoProfile()
+        {
+            Assert.That(
+                PsdHierarchyChatContextBuilder.TryBuildSnapshotForPrefab(
+                    TargetPath,
+                    out string snapshotJson,
+                    out string fingerprint,
+                    out string snapshotError),
+                Is.True,
+                snapshotError);
+            JObject plan = JObject.Parse(CreateVersionTwoPlan());
+            plan["snapshotFingerprint"] = fingerprint;
+            Assert.That(
+                PsdHierarchyReplayBinding.TryBuildForPlan(
+                    plan,
+                    snapshotJson,
+                    out string bindingJson,
+                    out string bindingError),
+                Is.True,
+                bindingError);
+
+            var profile = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
+            profile.Initialize(
+                SourceGuid,
+                TargetPath,
+                plan.ToString(Newtonsoft.Json.Formatting.None),
+                bindingJson);
             return profile;
         }
 

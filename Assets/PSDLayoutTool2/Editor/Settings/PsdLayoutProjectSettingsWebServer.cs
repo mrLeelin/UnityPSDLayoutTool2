@@ -24,6 +24,12 @@ namespace PsdLayoutTool2
         private const int Port = 9528;
         private const string Url = "http://localhost:9528/";
 
+        /// <summary>
+        /// SessionState 跨域重载存活、编辑器退出后清空，正好对应「编译后自动恢复、关掉 Unity 不幽灵拉起」。
+        /// 与 PsdCommonAssetPreviewServer.ResumePortKey 同一策略。
+        /// </summary>
+        private const string ResumeKey = "PsdLayoutTool2.SettingsWebServer.Resume";
+
         /// <summary>页面轮询间隔（秒）。之前每帧刷新会在编辑器里持续产生垃圾。</summary>
         private const double RefreshIntervalSeconds = 0.4d;
 
@@ -45,12 +51,49 @@ namespace PsdLayoutTool2
 
         internal static void Open(PsdLayoutProjectSettings target)
         {
-            if (Current != null) Current.Stop();
+            if (Current != null) Current.StopForReplace();
             var server = new PsdLayoutProjectSettingsWebServer();
             if (server.Start(target))
             {
                 Current = server;
+                SessionState.SetBool(ResumeKey, true);
                 Application.OpenURL(Url);
+            }
+        }
+
+        /// <summary>
+        /// 域重载后若编译前服务是开着的，静默重启（不再弹浏览器）。
+        /// 用 delayCall：AssetDatabase 在 InitializeOnLoad 早期可能还没就绪。
+        /// </summary>
+        [InitializeOnLoadMethod]
+        private static void RegisterResume()
+        {
+            EditorApplication.delayCall -= Resume;
+            EditorApplication.delayCall += Resume;
+        }
+
+        private static void Resume()
+        {
+            if (Current != null) return;
+            if (!SessionState.GetBool(ResumeKey, false)) return;
+            try
+            {
+                PsdLayoutProjectSettings settings = PsdLayoutProjectSettingsAsset.GetOrCreate();
+                var server = new PsdLayoutProjectSettingsWebServer();
+                if (server.Start(settings))
+                {
+                    Current = server;
+                }
+                else
+                {
+                    // 绑不上就别在每次编译后反复刷错；用户可从菜单再开。
+                    SessionState.SetBool(ResumeKey, false);
+                }
+            }
+            catch (Exception e)
+            {
+                SessionState.SetBool(ResumeKey, false);
+                Debug.LogError("[PSDLayoutTool2] 网页设置服务自动恢复失败：" + e.Message);
             }
         }
 
@@ -69,7 +112,7 @@ namespace PsdLayoutTool2
                 Debug.LogError(
                     "[PSDLayoutTool2] 网页设置服务启动失败：" + e.Message +
                     "。如果同时开着另一个 Unity 工程，它可能已经占用了 " + Port + " 端口。");
-                Stop();
+                CloseListenerOnly();
                 return false;
             }
 
@@ -78,14 +121,15 @@ namespace PsdLayoutTool2
             thread.Start();
             EditorApplication.update -= OnEditorUpdate;
             EditorApplication.update += OnEditorUpdate;
-            AssemblyReloadEvents.beforeAssemblyReload -= Shutdown;
-            AssemblyReloadEvents.beforeAssemblyReload += Shutdown;
-            EditorApplication.quitting -= Shutdown;
-            EditorApplication.quitting += Shutdown;
+            AssemblyReloadEvents.beforeAssemblyReload -= ShutdownForReload;
+            AssemblyReloadEvents.beforeAssemblyReload += ShutdownForReload;
+            EditorApplication.quitting -= StopForQuit;
+            EditorApplication.quitting += StopForQuit;
             return true;
         }
 
-        private void Stop()
+        /// <summary>只关 socket / 卸载 update，保留 Resume 标记，供域重载后恢复。</summary>
+        private void CloseListenerOnly()
         {
             running = false;
             EditorApplication.update -= OnEditorUpdate;
@@ -93,7 +137,23 @@ namespace PsdLayoutTool2
             if (Current == this) Current = null;
         }
 
-        private static void Shutdown() { if (Current != null) Current.Stop(); }
+        /// <summary>用户重新 Open 或编辑器退出：清掉 Resume，避免下次编译/启动幽灵拉起。</summary>
+        private void StopForReplace()
+        {
+            SessionState.SetBool(ResumeKey, false);
+            CloseListenerOnly();
+        }
+
+        private static void ShutdownForReload()
+        {
+            if (Current != null) Current.CloseListenerOnly();
+        }
+
+        private static void StopForQuit()
+        {
+            SessionState.SetBool(ResumeKey, false);
+            if (Current != null) Current.CloseListenerOnly();
+        }
 
         private void OnEditorUpdate()
         {
@@ -824,7 +884,10 @@ namespace PsdLayoutTool2
                     int providerValue = ReadInt(data, "aiProvider", (int)ai.provider);
                     if (providerValue == (int)PsdHierarchyAiProvider.None)
                     {
-                        settings.ClearHierarchyAiSettings();
+                        if (!settings.TryClearHierarchyAiSettings(out string clearAiError))
+                        {
+                            messages.Add(clearAiError);
+                        }
                     }
                     else if (!settings.TrySetHierarchyAiSettings(
                                  (PsdHierarchyAiProvider)providerValue,
@@ -856,33 +919,19 @@ namespace PsdLayoutTool2
                     }
                 }
 
-                // ---- Prefab 清理执行后端 ----
+                // ---- Prefab 清理执行后端（已固定 Native Unity，ADR 0001/0002）----
+                // 旧页面可能仍提交 cleanupBackend；一律归一，不接受 CLI。
                 if (HasAny(data, "cleanupBackend"))
                 {
-                    PsdHierarchyCleanupExecutionSettingsSnapshot cleanup =
-                        settings.ResolveHierarchyCleanupExecutionSettings();
-                    var cleanupBackend = (PsdHierarchyCleanupExecutionBackend)ReadInt(
-                        data, "cleanupBackend", (int)cleanup.backend);
-
-                    // 先校验再写：SetHierarchyCleanupExecutionBackend 碰到未定义的枚举值会抛
-                    // ArgumentException，那会被下面的 catch 吞掉，导致同一次请求里其它字段
-                    // 也一起不生效（而且只显示一句看不懂的异常）。
-                    var cleanupCandidate = new PsdHierarchyCleanupExecutionSettingsSnapshot(cleanupBackend);
-                    if (!cleanupCandidate.TryValidate(out string cleanupError))
-                    {
-                        messages.Add(cleanupError);
-                    }
-                    else
-                    {
-                        settings.SetHierarchyCleanupExecutionBackend(cleanupBackend);
-                    }
+                    settings.SetHierarchyCleanupExecutionBackend(
+                        PsdHierarchyCleanupExecutionBackend.NativeUnity);
                 }
 
                 // ---- 共享预览服务端口 ----
                 if (HasAny(data, "previewServerPort"))
                 {
                     // 注意：TrySetPreviewServerPort 在「值没变」时也返回 false，但 error 是空的；
-                    // 只有端口越界才会带 error。所以这里判的是 error，不是返回值。
+                    // 端口越界或个人配置写盘失败才会带 error，所以这里同时判断 error。
                     if (!settings.TrySetPreviewServerPort(
                             ReadInt(data, "previewServerPort", settings.ResolvePreviewServerPort()),
                             out string portError) &&
@@ -900,7 +949,12 @@ namespace PsdLayoutTool2
 
                 if (data["showNineSliceMarkers"] != null)
                 {
-                    settings.SetNineSliceImageMarkers(data.Value<bool>("showNineSliceMarkers"));
+                    if (!settings.TrySetNineSliceImageMarkers(
+                            data.Value<bool>("showNineSliceMarkers"),
+                            out string markerError))
+                    {
+                        messages.Add(markerError);
+                    }
                 }
 
                 lastError = messages.Count == 0 ? string.Empty : string.Join("\n", messages);
@@ -1521,15 +1575,14 @@ border-top:0;padding-top:0;flex:0 0 auto}
       <div class='card-icon violet'>🧹</div>
       <div class='card-title'>
         <h2>Prefab 清理执行</h2>
-        <p>层级整理计划由谁来执行</p>
+        <p>层级整理计划的正式执行入口</p>
       </div>
     </div>
     <div class='form-group'>
-      <label class='form-label' for='cleanupBackend'>执行后端</label>
-      <div class='select-wrap'><select class='form-select' id='cleanupBackend'><option value='0'>Native Unity（默认）</option><option value='1'>Unity CLI Runner（可选）</option></select></div>
-      <span class='form-help'>Native Unity 在当前编辑器里直接执行，不需要外部工具；Unity CLI Runner 是可选的外部执行器。</span>
+      <div class='info-banner' id='cleanupBackendNote'>
+        执行后端已固定为 Native Unity（ADR 0001/0002）。CLI Runner 不再可选；Python 仅作只读诊断。
+      </div>
     </div>
-    <div id='cleanupBanner' class='info-banner'></div>
   </section>
 
   <section class='card' id='sec-share'>
@@ -1790,18 +1843,7 @@ function refreshDetailVisibility(){
   if(comboCtx.aiEffort&&!comboCtx.aiEffort.panel.hidden)comboRender('aiEffort');
 }
 
-/* Prefab 清理执行后端的说明文字。和 Inspector 一样，切换后端时给出对应级别的提示：
-   Native Unity 是常规路径（info），Unity CLI Runner 功能较少（warning）。 */
-function updateCleanupBanner(){
-  var box=byId('cleanupBanner');
-  if(!box)return;
-  var v=parseInt(byId('cleanupBackend').value,10);
-  if(isNaN(v))v=0;
-  box.className='info-banner'+(v===1?' warn':'');
-  box.textContent=v===1
-    ? 'Unity CLI Runner 已启用：支持组件 Prefab 提取与私有资源改名。'
-    : 'Native Unity 已启用：层级清理、组件 Prefab 提取、私有资源改名、校验与失败处理都在当前 Unity 编辑器内执行。';
-}
+/* Prefab 清理执行：后端已固定 Native Unity（ADR 0001/0002），无切换 UI。 */
 
 /* 九宫格：开关状态 + 徽标文案。徽标反映「自动裁剪」是否开启，
    而不是「九宫检测是否可用」—— 检测本身始终在跑。 */
@@ -2097,8 +2139,6 @@ function load(){
     clearPollFailure();
     TEXT_FIELDS.forEach(function(id){applyField(id,cfg[id]);});
     if(!dirty.outputMode)applyField('outputMode',cfg.outputMode);
-    if(!dirty.cleanupBackend)applyField('cleanupBackend',cfg.cleanupBackend);
-    updateCleanupBanner();
     if(!dirty.autoCropNineSlice)applyField('autoCropNineSlice',cfg.autoCropNineSlice);
     updateNineSliceBanner();
     if(!dirty.showNineSliceMarkers)applyField('showNineSliceMarkers',cfg.showNineSliceMarkers);
@@ -2128,7 +2168,6 @@ function payload(){
   var body={};
   TEXT_FIELDS.forEach(function(id){var f=byId(id);if(f)body[id]=f.value;});
   body.outputMode=parseInt(byId('outputMode').value,10);
-  body.cleanupBackend=parseInt(byId('cleanupBackend').value,10);
   body.autoCropNineSlice=!!byId('autoCropNineSlice').checked;
   body.showNineSliceMarkers=!!byId('showNineSliceMarkers').checked;
   var port=parseInt(byId('previewServerPort').value,10);
@@ -2493,9 +2532,6 @@ byId('aiProvider').addEventListener('change',function(){
 comboSetup('aiModel','aiModelPanel');
 comboSetup('aiEffort','aiEffortPanel');
 byId('outputMode').addEventListener('change',function(){dirty.outputMode=true;});
-byId('cleanupBackend').addEventListener('change',function(){
-  dirty.cleanupBackend=true;updateCleanupBanner();
-});
 byId('autoCropNineSlice').addEventListener('change',function(){
   dirty.autoCropNineSlice=true;updateNineSliceBanner();
 });

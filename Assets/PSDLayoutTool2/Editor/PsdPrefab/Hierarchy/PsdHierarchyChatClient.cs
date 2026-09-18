@@ -270,17 +270,7 @@ namespace PsdLayoutTool2
             return rootNodeIds.OrderBy(nodeId => nodeId, StringComparer.Ordinal).ToArray();
         }
 
-        internal bool TryGetDirectChildren(
-            string parentPath,
-            out IReadOnlyList<PsdHierarchySnapshotChild> children)
-        {
-            return directChildrenByPath.TryGetValue(parentPath ?? string.Empty, out children);
-        }
 
-        internal bool IsAssetRenameSourcePathAllowed(string assetPath)
-        {
-            return assetRenameSourcePathSet.Contains((assetPath ?? string.Empty).Replace('\\', '/').Trim());
-        }
 
         internal string BuildInstructions()
         {
@@ -296,25 +286,30 @@ namespace PsdLayoutTool2
             builder.AppendLine("The user will inspect that reply. When the user replies with an explicit confirmation, the Unity chat window validates the JSON and directly runs the approved plan through Unity Editor APIs. Do not ask for an additional confirmation, output-mode choice, or manual script command.");
             builder.AppendLine("The only allowed output mode is in_place: output.assetPath must exactly equal the supplied target Prefab path.");
             builder.AppendLine("Every reference to an existing Prefab node must use node:<id> from the authoritative snapshot. Never write a raw hierarchy path in wrappers, moves, renames, removals, tight bounds, component-family decisions, or extraction contracts.");
-            builder.AppendLine("Asset rename expectedGuid values are owned by Unity. In this version 2 AI plan, use an empty expectedGuid string; the Unity window resolves each existing from path and captures its current AssetDatabase GUID before runner validation.");
-            builder.AppendLine("Private-asset naming is reviewed through textureRenames[].toName and spriteAtlasRenames[].toName. When either array is non-empty, Unity derives the internal prefabName from their one common PascalCase name ending with View. Keep the required prefabName field present for schema stability, but do not guess it independently or change it instead of the reviewed rename targets.");
+            builder.AppendLine("Private-asset renames ARE executable: textureRenames[] and spriteAtlasRenames[] entries are {from, toName, expectedGuid}. toName has no extension; every Texture toName must start with \"<prefabName>_\", every SpriteAtlas toName must equal prefabName, each from must be a private asset of the current target Prefab (a Texture referenced by it, or a SpriteAtlas in the Prefab's own folder), and the rename target must not exist yet. Leave expectedGuid empty so Unity captures the current identity, or paste an exact GUID to pin it.");
             builder.AppendLine(PsdHierarchyChatClient.PlanIdentifierContract);
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
             if (localRepairScope != null)
             {
                 builder.AppendLine("This is a local repair stage. Only operate inside the following locked scope: " + localRepairScope.Describe() + ".");
-                builder.AppendLine("Do not move, rename, remove, or create a wrapper outside the selected repair boundary. Do not perform component extraction, asset renames, or flat-sibling auto-grouping in this stage; return empty arrays for all of those operations.");
+                builder.AppendLine("Do not move, rename, remove, or create a wrapper outside the selected repair boundary. Private-asset renames, containment/flat-sibling resolutions and variant/stateful extraction are not executable in this stage; return empty arrays for them.");
+                builder.AppendLine("For a local component extraction, emit exactly one selectedPrefabExtractions entry: {id, name, assetPath, parent: <the selected nodes' direct parent as node:<id>>, sources: [node:<id>...]} where sources are exactly the locked selection, name is PascalCase, and assetPath is a NEW Assets/**.prefab whose file name equals name. Do not add any other extraction array.");
+                builder.AppendLine("When the locked selection spans several parents, emit exactly one crossParentPrefabExtractions entry instead: {id, name, assetPath, root: <the selection's lowest common ancestor node:<id>>, templateSources: [the locked selection as node:<id>...], instances: [{sequence, sources: [one complete group as node:<id>...]}...], unmatched: [node:<id>...]}. Every group must have the same member count and order as templateSources, the templateSources group must be listed as one of the instances, unmatched nodes must stay outside every group, and assetPath must be a NEW Assets/**.prefab whose file name equals name.");
                 builder.AppendLine("Selected hierarchy paths: " + string.Join("; ", localRepairScope.selectedPaths));
             }
             builder.AppendLine("Do not propose, create, copy, or offer a .cleaned.prefab or any other replacement Prefab. Any later approved cleanup must target the supplied Prefab in place while preserving visual layout, generated assets, bindings, and unrelated components.");
             if (localRepairScope == null)
             {
-                builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract in the one JSON plan. Each componentFamilyDecision for a supplied candidate must copy its candidateId, parent, and complete sources exactly. Candidates marked requiresExtraction:true must use component, state, variant, or stateful mode; skip is forbidden for them. Candidates marked requiresExtraction:false are advisory and may use skip with concrete structural evidence; do not force a variant solely because sibling names repeat. Do not silently omit a repeated component family.");
-                builder.AppendLine("The first confirmable response must use Markdown tables for grouping and naming, child Prefab extraction, preserved or ambiguous content, and verification. The child Prefab table must disclose every output path, mode, ordered instance name, ordered Common member, every state ID/name/member list, and default or per-instance state. Record every extraction that can only become addressable after the planned grouping in postGroupingExtractionIntents. The user's one confirmation authorizes the reviewed hierarchy stage and an automatic resnapshot plus exact manifest-matching extraction stage; never request a second confirmation.");
-                builder.AppendLine("When the snapshot includes flatSiblingFindings, set every finding's flatSiblingResolutions mode to group. Unity deterministically derives the wrapper id as <findingId>_group, the exact finding parent, the observed background siblingIndex, every listed member move in listed order, and tightBounds; do not invent alternate wrapper ids or destinations. These fields are normalized from the authoritative snapshot before execution.");
+                builder.AppendLine("Component extraction IS executable: emit one componentExtractions entry per approved component family ({id, name, assetPath, template: node:<id>, instances: [node:<id>...]}). template must also appear in instances, every instance must share the template's recursive component structure, and assetPath must be a NEW PascalCase .prefab under Assets/.");
+                builder.AppendLine("State extraction IS executable: use stateComponentExtractions ({id, template: node:<id>, assetPath, defaultState, states: [{id, source: node:<id>, name}]}) only when several direct-sibling roots occupy one visual slot as mutually exclusive states. Every states[].source must be a direct sibling of template, template must be one of them, at least two states are required, and those sources must not be referenced from anywhere outside the extracted states.");
+                builder.AppendLine("Variant extraction IS executable: use variantComponentExtractions for rows visible at different list positions that select one of several observed states ({id, template: node:<id>, assetPath, commonName, statesName, defaultState, states: [{id, source: node:<id>, name}], instances: [{source: node:<id>, name, state}]}). states[].source must be direct siblings of template, every state representative must also appear once in instances, and every instance source must be a direct sibling of template whose recursive structure matches its selected state source.");
+                builder.AppendLine("Stateful extraction IS executable: use statefulComponentExtractions when repeated items contain real shared content plus a few visual states ({id, template: node:<id>, assetPath, common: {source: node:<id>, members: [{sourceName, name}]}, states: [{id, source: node:<id>, name, members: [...]}], defaultState, instances: [{source: node:<id>, name, state, commonSourceNames, stateSourceNames}]}). Every direct child of each instance source must be mapped exactly once by commonSourceNames plus stateSourceNames, every mapped member must be declared by the common or the selected state contract, and [States] is created before [Common].");
+                builder.AppendLine("Containment/flat-sibling resolutions and local-selection extraction are still NOT executable in this initial plan: keep containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions as empty arrays and report that work in the review text.");
+                builder.AppendLine("Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's source roots must completely cover the candidate sources.");
+                builder.AppendLine("Post-grouping extraction IS executable, but only as an automatic second stage: postGroupingExtractionIntents[] carries the reviewed child-Prefab work that must run after this grouping is saved. Each entry is {id, mode: component|state|variant|stateful, assetPath, templatePath, commonMembers, states, defaultState, instances: [{path, state, commonSourceNames, stateSourceNames}]}. templatePath and every instances[].path are POST-grouping hierarchy paths (the tree after your wrappers, moves and renames), because Unity resolves them against a refreshed authoritative snapshot; never write a node:<id> there. mode=component requires empty states and an empty defaultState; every other mode declares states: [{id, name, sourcePath, members}] plus a defaultState id, and each instance selects one declared state. A mandatory candidate deferred to this stage must reference exactly one same-mode intent, and Unity must prove that the rebuilt extraction sources completely cover the refreshed candidate sources before executing it. assetPath must be a NEW Assets/**.prefab whose file name matches the reviewed component name. Leave the array empty when this grouping needs no child Prefab.");
+                builder.AppendLine("The first confirmable response must use Markdown tables for grouping and naming, child Prefab extraction, preserved or ambiguous content, and verification. In the review text you may still point out flat sibling clusters and local-selection work as pending follow-up; containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions are not executable in this initial plan and must never appear there.");
             }
-            builder.AppendLine("For a mandatory variant family, create one observed state for every distinct recursive structure and map every source to an exact matching state. Even when every source has a distinct structure, the mandatory family must not be skipped or reduced to hierarchy-only cleanup.");
-            builder.AppendLine("Every extracted assetPath must be a new PascalCase .prefab directly under the target Prefab's sibling Common directory. Multiple non-overlapping component families and hierarchy cleanup operations are intentionally supported in one reviewed plan.");
+            builder.AppendLine("Never put a hierarchy path or an invented node id anywhere in the plan: every existing node reference must be an exact node:<id> taken from the authoritative snapshot.");
             builder.AppendLine("Return an auditable review, not private chain-of-thought. In Simplified Chinese, use Markdown tables for target, grouping and naming, child Prefab extraction, preservation, and verification. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence. Ask for exactly one confirmation of the complete reviewed workflow.");
             builder.AppendLine("Source PSD: " + sourcePsdAssetPath);
             builder.AppendLine("Target Prefab: " + targetPrefabAssetPath);
@@ -680,6 +675,37 @@ namespace PsdLayoutTool2
                 default:
                     return false;
             }
+        }
+
+        /// <summary>
+        /// 只为某个 Prefab 资源路径生成权威节点快照（重放时用于证明节点对应关系）。
+        /// </summary>
+        internal static bool TryBuildSnapshotForPrefab(
+            string prefabAssetPath,
+            out string snapshotJson,
+            out string fingerprint,
+            out string error)
+        {
+            snapshotJson = string.Empty;
+            fingerprint = string.Empty;
+            error = string.Empty;
+            DirectoryInfo projectDirectory = Directory.GetParent(Application.dataPath);
+            if (projectDirectory == null)
+            {
+                error = "无法解析 Unity 项目根目录。";
+                return false;
+            }
+
+            string projectRoot = projectDirectory.FullName;
+            string normalized = NormalizeAssetPath(prefabAssetPath);
+            return TryBuildHierarchySnapshot(
+                normalized,
+                ToFullPath(projectRoot, normalized),
+                projectRoot,
+                out snapshotJson,
+                out fingerprint,
+                out _,
+                out error);
         }
 
         private static bool TryBuildHierarchySnapshot(
@@ -1850,32 +1876,6 @@ namespace PsdLayoutTool2
                    "PSD layer parsing is deferred; the Unity hierarchy snapshot is authoritative.";
         }
 
-        /// <summary>
-        /// 递归追加图层树结构。
-        /// </summary>
-        private static void AppendLayerTree(
-            IReadOnlyList<PhotoshopFile.Layer> layers,
-            StringBuilder builder,
-            int indent)
-        {
-            if (layers == null || layers.Count == 0)
-            {
-                return;
-            }
-
-            string indentStr = new string(' ', indent * 2);
-            foreach (var layer in layers)
-            {
-                string kind = layer.IsGroupStart ? "[组]" : (layer.IsTextLayer ? "[文字]" : "[图层]");
-                string visible = layer.Visible ? "" : " (隐藏)";
-                builder.AppendLine(indentStr + kind + " " + layer.Name + visible);
-
-                if (layer.Children != null && layer.Children.Count > 0)
-                {
-                    AppendLayerTree(layer.Children, builder, indent + 1);
-                }
-            }
-        }
     }
 
     internal sealed class PsdHierarchyChatHttpRequest
@@ -1999,13 +1999,13 @@ namespace PsdLayoutTool2
             "第一次可确认回复必须使用 Markdown 表格，不要只写段落，也不要输出原始内部推理：\n" +
             "1. 目标表：目标 Prefab、原地输出路径、快照 fingerprint。\n" +
             "2. 分组与命名表：Wrapper/名称、父节点 node:<id>、有序成员、Sibling 顺序、观察证据、推断或未知、风险。\n" +
-            "3. 子 Prefab 抽取表：ID、输出路径、模式、有序实例、有序 Common 成员、每个状态的 ID/名称/成员列表、默认或逐实例状态、证据、风险。\n" +
+            "3. 子 Prefab 抽取表：ID、输出路径、模式、有序实例、模板节点、证据、风险。\n" +
             "4. 保留项表：保持不动的节点、嵌套 Prefab/绑定风险和原因。\n" +
             "5. 验证表：布局、组件、引用、激活状态、Sibling 顺序、嵌套边界和生成资源。\n" +
-            "表格后附上一个完整的 ```json 计划代码块，严格遵循随附计划格式，并询问用户是否满意并执行。用户只确认一次；确认后自动完成分组、刷新快照、生成子 Prefab 和验证，不得再次确认。\n" +
-            "CRITICAL: 层级快照中所有 requiresExtraction=true 的 componentFamilyCandidates 都必须在计划中处理。对于每个强制候选，必须在 componentFamilyDecisions 中添加一个决策条目，并在对应的抽取数组（componentExtractions/stateComponentExtractions/variantComponentExtractions/statefulComponentExtractions）中添加完整的抽取合约。如果候选的 recommendedMode 是 stateful，必须仔细分析每个实例的子节点，明确区分哪些是公共部分（Common），哪些是状态变化部分（States），并为每个实例提供完整的 commonSourceNames 和 stateSourceNames 映射。绝不能跳过或忽略 requiresExtraction=true 的候选。\n" +
-            "本次主界面只原地更新当前目标 Prefab，不创建、复制或另存新的屏幕 Prefab；仅当证据充分时，才可在计划中声明经确认的 Prefab/Common 复用组件。\n" +
-            "不要声称已经修改本地文件。用户确认完整表格和计划后，Unity 窗口会自动完成全部已审阅阶段。";
+            "表格后附上一个完整的 ```json 计划代码块，严格遵循随附计划格式，并询问用户是否满意并执行。用户只确认一次；确认后由 Unity 原地完成已审阅的层级整理并核验，不得再次确认。\n" +
+            "CRITICAL: 当前 Unity 执行器执行 wrappers、moves、renames、tightBounds、emptyContainerRemovals、componentExtractions（componentFamilyDecisions 必须用 mode=component）、stateComponentExtractions、variantComponentExtractions、statefulComponentExtractions 以及 textureRenames / spriteAtlasRenames（toName 不带扩展名；每个 Texture 的 toName 必须以 \"<prefabName>_\" 开头，每个 SpriteAtlas 的 toName 必须等于 prefabName；from 必须是当前目标 Prefab 的私有资源；目标不能已存在；expectedGuid 留空由 Unity 捕获当前身份）。containmentResolutions、flatSiblingResolutions、selectedPrefabExtractions、crossParentPrefabExtractions 必须保持空数组；非空会在任何写入前被拒绝，请在评审文字里说明这些待迁移工作。postGroupingExtractionIntents 可以非空：它记录已审阅的分组后子 Prefab 抽取，Unity 在首阶段保存并重新核验后自动刷新权威快照并执行；templatePath 与每个 instances[].path 必须写分组后的层级路径（不是 node:<id>），mode=component 时 states 与 defaultState 必须为空，其他模式必须声明 states（id/name/sourcePath/members）与 defaultState，每个实例必须提供 state、commonSourceNames、stateSourceNames，且刷新后每个 requiresExtraction 候选都必须被恰好一个 mode=component 意图覆盖。\n" +
+            "本次主界面只原地更新当前目标 Prefab，不创建、复制或另存新的屏幕 Prefab；子 Prefab 资产只按 postGroupingExtractionIntents 中已审阅的清单在第二阶段创建。\n" +
+            "不要声称已经修改本地文件。用户确认完整表格和计划后，Unity 窗口只会执行已审阅的原地整理、公共组件抽取、状态抽取、变体抽取、有状态抽取、私有资源改名以及分组后子 Prefab 抽取并核验。";
 
         internal static string BuildJsonOnlyPlanRepairPrompt(string validationError)
         {
@@ -2026,18 +2026,9 @@ namespace PsdLayoutTool2
             builder.AppendLine("Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.");
             builder.AppendLine(PlanIdentifierContract);
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.");
-            builder.AppendLine("CRITICAL: Every componentFamilyDecisions[].candidateId must be an EXACT candidate ID from the authoritative snapshot's componentFamilyCandidates array. Never invent, modify, or guess a candidate ID. If the error says 'candidateId 未出现在当前快照候选中', it means you referenced a candidate ID that does not exist in the snapshot—remove that decision or replace it with an exact observed candidate ID. Re-read the snapshot's componentFamilyCandidates before adding any decision.");
             builder.AppendLine("CRITICAL: Every emptyContainerRemovals entry must reference a container that will be COMPLETELY EMPTY after all moves execute. Before adding a container to emptyContainerRemovals, verify that EVERY child node under that container has a corresponding move operation that relocates it elsewhere. If any child remains unmoved, the container is not empty and must NOT be in emptyContainerRemovals. When the error says 'Container is not empty after planned moves', it means you listed a container for removal that still has children—either move ALL its children first, or remove that container from emptyContainerRemovals.");
-            builder.AppendLine("Do not guess or preserve an asset rename expectedGuid. Use an empty expectedGuid string in the version 2 replacement plan; Unity resolves the current GUID from each existing from path.");
-            builder.AppendLine("Do not repair prefabName by guessing. For private asset renames, Unity derives the internal prefabName from the reviewed toName values: every texture name must share one '<PrefabName>_' prefix and every SpriteAtlas toName must equal that same PascalCase name ending with View. Repair conflicting toName values themselves; prefabName alone cannot repair the plan.");
+            builder.AppendLine("CRITICAL: Keep containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions as EMPTY arrays. The current Unity executor runs wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents, and it refuses any other non-empty array before a write; repeating an unsupported operation in the replacement plan cannot succeed. Report the blocked work in the review text instead. Keep every reviewed postGroupingExtractionIntents entry byte-identical: its post-grouping paths and states are resolved against a refreshed snapshot after the hierarchy stage is saved, so do not rewrite them into node:<id> references.");
             builder.AppendLine("Every verify.directChildren entry must use a non-empty, unique list of direct-child names in post-apply sibling order. List each child name exactly once; never duplicate a name as a placeholder or count.");
-            builder.AppendLine("For every variantComponentExtractions entry, states[].source contains exactly one observed representative row per unique visual state, while instances[].source contains every visible list row. A row may reuse a state through instances[].state, so do not require every instance source to appear in states[].source. Every state representative source must appear exactly once in instances, and every instance source must be a distinct direct sibling of template. A variant requires at least two distinct observed visual states. If every visible instance has one observed state, replace the variant extraction and its matching componentFamilyDecision with componentExtractions; never invent a second state.");
-            builder.AppendLine("A componentExtraction is valid only when its template and every instance have the same recursive structure. If the failure says 'Repeated unit structure differs for component extraction', do not return that component extraction again. Preserve every mandatory candidate source and use the candidate's observed variant or stateful mode with a complete mapping; never solve a structural mismatch by dropping, shrinking, or reordering sources.");
-            builder.AppendLine("For every statefulComponentExtractions instance, commonSourceNames and stateSourceNames together must cover all direct children exactly once. commonSourceNames must contain one observed direct-child name for every common.members entry; stateSourceNames must do the same for the selected states[].members entry. When one side is complete, derive the other as the ordered direct-child complement. Re-read the authoritative snapshot instead of guessing or dropping a member.");
-            builder.AppendLine("Enforce this exact equation for every stateful instance: directChildCount == common.members.Count + selectedState.members.Count. If it fails, rebuild common.members, the affected states[].members, and every corresponding instance mapping; changing only commonSourceNames or stateSourceNames cannot repair a contract-count mismatch. Never place the same observed source child in both Common and the selected state.");
-            builder.AppendLine("For every flatSiblingFindings entry in the authoritative snapshot, include exactly one flatSiblingResolutions entry with mode=group and wrapperId=<findingId>_group. Unity replaces any AI wrapper, move, or tightBounds details with the deterministic values derived from the finding; do not use keep or an unrelated existing container.");
-            AppendRequiredComponentFamilyRepairContract(builder, context);
-            AppendFlatSiblingRepairContract(builder, context);
             return builder.ToString();
         }
 
@@ -2064,112 +2055,8 @@ namespace PsdLayoutTool2
             return builder.ToString();
         }
 
-        private static void AppendRequiredComponentFamilyRepairContract(
-            StringBuilder builder,
-            PsdHierarchyChatContext context)
-        {
-            PsdHierarchyComponentFamilyCandidate[] requiredCandidates = context?.componentFamilyCandidates?
-                .Where(candidate => candidate.requiresExtraction)
-                .ToArray() ?? Array.Empty<PsdHierarchyComponentFamilyCandidate>();
-            if (requiredCandidates.Length == 0)
-            {
-                return;
-            }
 
-            builder.AppendLine("The following are authoritative mandatory component-family records. For EVERY record, include exactly one componentFamilyDecisions entry that copies candidateId, parent, and sources exactly and in the listed order. mode must not be skip. Use the recommendedMode unless the supplied snapshot proves another executable extraction mode. Each decision must name a lower_snake_case extractionId, and exactly one matching entry with that id must appear in componentExtractions, stateComponentExtractions, variantComponentExtractions, or statefulComponentExtractions. Do not omit, merge, shrink, reorder, or replace any source list. Do not echo this list outside your replacement JSON plan.");
-            var records = new JArray(requiredCandidates.Select(candidate => new JObject
-            {
-                ["candidateId"] = candidate.id,
-                ["suggestedAssetName"] = candidate.suggestedAssetName,
-                ["recommendedMode"] = candidate.recommendedMode,
-                ["parent"] = candidate.parent,
-                ["sources"] = new JArray(candidate.sources),
-                ["sourceStructures"] = BuildRequiredCandidateSourceStructures(context, candidate),
-            }));
-            builder.AppendLine("===== BEGIN REQUIRED COMPONENT FAMILIES =====");
-            builder.AppendLine(records.ToString(Formatting.None));
-            builder.AppendLine("===== END REQUIRED COMPONENT FAMILIES =====");
-        }
 
-        private static void AppendFlatSiblingRepairContract(
-            StringBuilder builder,
-            PsdHierarchyChatContext context)
-        {
-            JArray findings = context?.flatSiblingFindings;
-            if (findings == null || findings.Count == 0)
-            {
-                return;
-            }
-
-            var records = new JArray();
-            foreach (JObject finding in findings.OfType<JObject>())
-            {
-                string id = finding.Value<string>("id");
-                string parent = finding.Value<string>("parent");
-                string background = finding.Value<string>("background");
-                JArray members = finding["members"] as JArray;
-                if (string.IsNullOrWhiteSpace(id) ||
-                    string.IsNullOrWhiteSpace(parent) ||
-                    string.IsNullOrWhiteSpace(background) ||
-                    members == null ||
-                    members.Count < 3)
-                {
-                    throw new InvalidDataException(
-                        "Cannot build authoritative repair context for flat sibling finding " +
-                        (id ?? "<missing>") + ".");
-                }
-
-                records.Add(new JObject
-                {
-                    ["id"] = id,
-                    ["parent"] = parent,
-                    ["background"] = background,
-                    ["members"] = members.DeepClone(),
-                });
-            }
-
-            if (records.Count == 0)
-            {
-                throw new InvalidDataException(
-                    "Cannot build authoritative repair context because flatSiblingFindings contains no records.");
-            }
-
-            builder.AppendLine("The following are authoritative flat sibling finding records. For EVERY record, include exactly one flatSiblingResolutions entry with findingId copied exactly, mode=group, and wrapperId=<findingId>_group. Unity deterministically derives parent, siblingIndex, member moves, and tightBounds from this list; do not echo this list outside your replacement JSON plan.");
-            builder.AppendLine("===== BEGIN FLAT SIBLING FINDINGS =====");
-            builder.AppendLine(records.ToString(Formatting.None));
-            builder.AppendLine("===== END FLAT SIBLING FINDINGS =====");
-        }
-
-        private static JArray BuildRequiredCandidateSourceStructures(
-            PsdHierarchyChatContext context,
-            PsdHierarchyComponentFamilyCandidate candidate)
-        {
-            var structures = new JArray();
-            foreach (string source in candidate.sources)
-            {
-                string nodeId = source != null && source.StartsWith("node:", StringComparison.Ordinal)
-                    ? source.Substring("node:".Length)
-                    : string.Empty;
-                if (string.IsNullOrEmpty(nodeId) ||
-                    !context.TryGetNodePath(nodeId, out string sourcePath) ||
-                    !context.TryGetDirectChildren(
-                        sourcePath,
-                        out IReadOnlyList<PsdHierarchySnapshotChild> directChildren))
-                {
-                    throw new InvalidDataException(
-                        "Cannot build authoritative repair context for mandatory component family " +
-                        candidate.id + ": source " + source + " has no direct-child evidence in the snapshot.");
-                }
-
-                structures.Add(new JObject
-                {
-                    ["source"] = source,
-                    ["directChildren"] = new JArray(directChildren.Select(child => child.name)),
-                });
-            }
-
-            return structures;
-        }
 
         internal static string BuildClaudeDirectPrompt(
             PsdHierarchyChatContext context,
@@ -2208,16 +2095,10 @@ namespace PsdLayoutTool2
             builder.AppendLine("Use version 2 and copy snapshotFingerprint exactly from the authoritative snapshot.");
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every reference to an existing node must use node:<id> from the authoritative snapshot. Never emit a raw hierarchy path or invent a node ID.");
             builder.AppendLine(PlanIdentifierContract);
-            builder.AppendLine("For textureRenames and spriteAtlasRenames in this version 2 AI plan, set expectedGuid to an empty string. Unity validates the from asset and injects its current AssetDatabase GUID before execution.");
-            builder.AppendLine("Private-asset naming is reviewed through textureRenames[].toName and spriteAtlasRenames[].toName. When either array is non-empty, Unity derives the internal prefabName from their one common PascalCase name ending with View. Keep prefabName present, but do not guess it independently or use it to hide conflicting toName values.");
-            builder.AppendLine("If evidence supports a reusable component, state, variant, or stateful extraction, include the complete reviewed extraction contract. Use componentFamilyDecisions for every candidate. A candidate marked requiresExtraction:false is advisory and may be skipped with concrete recursive-structure evidence; repeated names alone do not justify a variant extraction.");
-            builder.AppendLine("When the snapshot includes flatSiblingFindings, set every finding's flatSiblingResolutions mode to group and wrapperId to <findingId>_group. Unity deterministically derives parent, siblingIndex, member moves, and tightBounds from the authoritative finding; never use keep or an unrelated existing container.");
-            builder.AppendLine("For a mandatory variant family, create one observed state for every distinct recursive structure and map every source to an exact matching state. Even when every source has a distinct structure, the mandatory family must not be skipped or reduced to hierarchy-only cleanup.");
-            builder.AppendLine("For variantComponentExtractions, choose one observed representative row in states[].source for each unique visual state. Put every visible repeated row in instances[] exactly once, and set its state to the selected representative state ID; multiple instance rows may use the same state ID. Every states[].source must also appear in instances[].source, but extra instances must not be added as duplicate states. Use a variant only when at least two distinct observed visual states exist. When all visible rows have one state, use componentExtractions and a matching componentFamilyDecisions mode instead; never invent a second state.");
-            builder.AppendLine("Every variant instance must have the same recursive component/child signature and RectTransform count as its selected states[].source. If no observed state representative matches exactly, skip the advisory family instead of generating an unsafe extraction.");
-            builder.AppendLine("For every stateful instance, commonSourceNames plus stateSourceNames must cover every direct child exactly once. Map commonSourceNames in common.members order and stateSourceNames in the selected states[].members order. If one side is complete, derive the other from the authoritative ordered direct-child complement; do not omit repeated members.");
-            builder.AppendLine("The executable plan-format file is authoritative. Follow its field names and object shapes exactly.");
-            builder.AppendLine("Ask for exactly one confirmation of the complete tables and plan. After that confirmation, the Unity window automatically applies hierarchy cleanup, refreshes the snapshot, applies the exact postGroupingExtractionIntents component stage, and verifies; never ask for a second confirmation.");
+            builder.AppendLine("EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions (with componentFamilyDecisions mode=component), stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents (executed automatically as a second stage after the grouping is saved and the snapshot is refreshed) are executable. Everything else must stay empty: containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions, crossParentPrefabExtractions. Unity refuses a non-empty unsupported array before any write.");
+            builder.AppendLine("Keep prefabName present for schema stability; this version never derives it, and it must not be used to hide conflicting toName values. Every postGroupingExtractionIntents entry uses post-grouping hierarchy paths in templatePath and instances[].path, never node:<id>.");
+            builder.AppendLine("The executable plan-format file is authoritative for field names and object shapes; where it still describes an operation as unsupported, this instruction wins.");
+            builder.AppendLine("Ask for exactly one confirmation of the complete tables and plan. After that confirmation the Unity window applies the reviewed hierarchy cleanup in place, re-verifies it, refreshes the authoritative snapshot, executes the reviewed post-grouping extraction, and verifies again; never ask for a second confirmation.");
             builder.AppendLine("Do not claim that a local asset was changed.");
             builder.AppendLine("User request:");
             builder.Append(userPrompt);
@@ -2870,7 +2751,8 @@ namespace PsdLayoutTool2
         internal static string BuildExternalSessionPrompt(
             PsdHierarchyChatContext context,
             string planFullPath,
-            string reviewFullPath)
+            string reviewFullPath,
+            string applyFullPath)
         {
             if (context == null) throw new ArgumentNullException(nameof(context));
             if (string.IsNullOrWhiteSpace(planFullPath))
@@ -2883,6 +2765,12 @@ namespace PsdLayoutTool2
                 throw new ArgumentException("外部会话的复核输出路径不能为空。", nameof(reviewFullPath));
             }
 
+            if (string.IsNullOrWhiteSpace(applyFullPath))
+            {
+                throw new ArgumentException("外部会话的 Apply 哨兵路径不能为空。", nameof(applyFullPath));
+            }
+
+            string applyResultFullPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyFullPath);
             string projectRoot = ToPortableFullPath(context.projectRoot.TrimEnd('/', '\\'));
             string sourcePsdFullPath = string.IsNullOrWhiteSpace(context.sourcePsdAssetPath)
                 ? string.Empty
@@ -2902,9 +2790,24 @@ namespace PsdLayoutTool2
             builder.AppendLine("If a listed file cannot be read, stop and report that exact absolute path instead of guessing its contents.");
             builder.AppendLine("This is an analysis and plan session started outside Unity. Do not modify Unity assets and do not claim that any asset was changed.");
             builder.AppendLine("Write the complete executable version 2 JSON plan (and no partial patch) to: " + ToPortableFullPath(planFullPath));
+            builder.AppendLine("Do not write a version 1 path plan. Do not call any Python renderer or CLI runner: their write modes are retired and Unity applies the reviewed plan itself after the .apply sentinel.");
+            builder.AppendLine("EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents are executable; every other operation array must stay empty because Unity refuses a non-empty unsupported array before any write.");
+            builder.AppendLine("Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's source roots must completely cover the candidate sources. A deferred candidate is checked again against the refreshed snapshot before second-stage execution.");
+            builder.AppendLine("containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions MUST stay empty arrays: Unity refuses a non-empty one before any write.");
+            builder.AppendLine("postGroupingExtractionIntents records the reviewed child-Prefab work that Unity executes automatically after it saves the grouping and refreshes the authoritative snapshot. Its templatePath and every instances[].path are POST-grouping hierarchy paths (not node:<id>); mode=component uses empty states and an empty defaultState, every other mode declares states (id/name/sourcePath/members) and a defaultState id, and each instance carries state, commonSourceNames and stateSourceNames. Every requiresExtraction:true candidate of the refreshed snapshot must be covered by exactly one same-mode intent whose rebuilt extraction sources completely cover the candidate sources.");
+            builder.AppendLine("Report any containment or flat-sibling follow-up in the Chinese review text only; never encode it in the executable JSON.");
+            builder.AppendLine("Every wrappers[].parent, moves[].source, moves[].destination, renames[].target, tightBounds[].target and emptyContainerRemovals[].source must copy an exact node:<id> from the snapshot, or reference an earlier wrapper as @wrapperId. Never invent an id and never write a hierarchy path.");
             builder.AppendLine("Write the human-readable Chinese review to: " + ToPortableFullPath(reviewFullPath));
             builder.AppendLine("After every revision, replace both files atomically or rewrite them completely.");
-            builder.AppendLine("Only the later Unity-side apply action may modify the target Prefab.");
+            builder.AppendLine("Only Unity applying an APPROVED plan may modify the target Prefab. Unity renames .apply to .applying while it works; never write .apply twice for one request.");
+            builder.AppendLine("After the human reviewer explicitly approves in this conversation, write an empty file at: " + ToPortableFullPath(applyFullPath));
+            builder.AppendLine("That .apply file is the only signal Unity needs to validate and apply the plan automatically. Do not write it before human approval.");
+            builder.AppendLine("After writing .apply, poll this result file (about every 2s, up to ~3 minutes): " + ToPortableFullPath(applyResultFullPath));
+            builder.AppendLine("The result JSON has success, status, stage and message; status is one of applied, rejected, partial, uncertain.");
+            builder.AppendLine("- applied: Unity saved the Prefab and verified it. Report that to the human.");
+            builder.AppendLine("- rejected: the plan was refused BEFORE any write, so nothing changed. Do NOT rewrite the approved plan or write another .apply for this request. Quote the FULL message and stop. Any corrected plan is a new request that requires a complete new review and explicit human approval before its own .apply is written.");
+            builder.AppendLine("- partial or uncertain: Unity may already have written to the Prefab. Do NOT write another .apply and do NOT claim success. Quote the full message, tell the human the on-disk Prefab must be verified, and ask for a new review before any further apply.");
+            builder.AppendLine("Do not claim Unity assets changed until the result file has success=true and status applied.");
             return builder.ToString();
         }
 
@@ -3706,16 +3609,6 @@ namespace PsdLayoutTool2
                 return DefaultUserPrompt;
             }
 
-            private static string TrimPrompt(string prompt)
-            {
-                string value = prompt ?? string.Empty;
-                if (value.Length <= MaxClaudePromptCharacters)
-                {
-                    return value;
-                }
-
-                return value.Substring(0, MaxClaudePromptCharacters) + "\n[后续追问已截断]";
-            }
 
             private static string FirstNonEmptyLine(string first, string second, string fallback)
             {
