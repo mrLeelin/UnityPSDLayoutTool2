@@ -2,6 +2,35 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.2.0] - 2026-09-18
+
+### Added
+
+- Added the terminal apply sentinel flow. After a human approves a version 2 plan in the terminal, the AI writes `<session>.apply`; Unity claims it by renaming it to `.applying`, applies it through the shared native core, and writes `<session>.apply-result.json` with `success`, `status`, and `message`, so the terminal AI can read validation errors and revise the plan itself. The receipt distinguishes `applied`, `rejected`, `partial`, and `uncertain`, and the plan content is hashed at claim time, so a domain reload, crash, or failed rename can never re-run an already accepted request.
+- Added version 2 replay binding evidence. Every saved replay stage now records the referenced nodes' observable facts (`path`, `name`, `siblingIndex`, `components`), and a replay must prove a unique correspondence on the regenerated snapshot before it executes. A matching positional `node:<id>` number or fingerprint no longer counts as proof, and a version 1 plan or an evidence-free stage permanently requires re-analysis.
+- Added `postGroupingExtractionIntents`. An approved first stage can carry second-stage sub-Prefab extraction intents described by **post-grouping** paths; Unity saves and re-verifies the hierarchy stage, refreshes the authoritative snapshot, rebuilds the extraction plan from those intents, and applies it without asking the AI for a second confirmation.
+- Added texture and SpriteAtlas renames (`textureRenames`, `spriteAtlasRenames`) to the native executor. Renames check asset identity, ownership, target conflicts, and the naming convention, and keep the asset GUID so Prefab references stay valid.
+- Added per-developer local settings at `UserSettings/PsdLayoutTool2/user-settings.json` (AI CLI configuration, preview port, nine-slice marker visibility), so the shared `PsdLayoutProjectSettings.asset` no longer mixes team pipeline configuration with personal preferences. First use seeds the file and clears those fields from the shared asset.
+- Added settings web server auto-resume. The `localhost:9528` page survives a script domain reload through `SessionState` and comes back silently after compilation, without reopening the browser.
+- Added the `PsdLayoutTool2.TestSupport` assembly with extraction reference and value probes, plus version 2 EditMode coverage for basic cleanup, component/state/variant/stateful/selected/cross-parent/post-grouping extraction, replay, asset renames, terminal apply end-to-end and its watcher, local user settings, and replay-profile persistence failures.
+
+### Changed
+
+- Made the version 2 `node:<id>` plan the only formal write path (ADR 0001/0002). Cleanup execution is fixed to Native Unity, and historical `cleanupBackend` values are normalized instead of rejected so older settings pages keep saving.
+- Moved the extraction and execution implementation out of `PsdHierarchyChatCleanupExecution` into dedicated native modules, so terminal sessions and the in-editor workflow share one core.
+- Retired `render_prefab_cleanup.py --mode apply|reapply` and the PowerShell `-ApplyConfirmed` write path; the skill scripts are now read-only verification and diagnostics, and a version 1 path plan is diagnostics only.
+- Updated the `prefab-hierarchy-cleanup` skill to state the sentinel flow as the authoritative capability, to enumerate the operations the executor actually supports, and to require every other operation array to be empty.
+- Replaced the Inspector "应用AI计划" button with `AI整理` and `AI提示词复制`; the copied prompt and the terminal contract now document the `.apply` sentinel and the `apply-result.json` receipt the AI must poll.
+- Made second-stage extraction Unity-owned: the executor re-checks candidate coverage against the refreshed snapshot and only adds the `componentFamilyDecisions` entries that snapshot requires.
+- Hardened settings writes so clearing AI settings, toggling nine-slice markers, and changing the preview port report validation or personal-file write errors instead of silently rewriting the shared asset.
+- Asset renames now report the renames already completed when a later one fails, instead of rolling back or retrying.
+
+### Removed
+
+- Removed `PsdHierarchyNativePayloadExecutor` and its `Process.Start("python", render_prefab_cleanup.py)` payload path.
+- Removed the legacy runner entry points (`RequiresUnityCliRunner`, `TryValidatePlanCapabilities`, `BuildReapplyPreflightPlan`, and the context-free `Validate`/`Apply`); `PsdHierarchyLegacyRemovalTests` locks them out.
+- Removed containment and flat-sibling auto-repair. `containmentResolutions`, `flatSiblingResolutions`, `selectedPrefabExtractions`, and `crossParentPrefabExtractions` must now be empty, and a non-empty array is refused before any write.
+
 ## [0.1.9] - 2026-09-16
 
 ### Fixed
