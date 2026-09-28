@@ -133,7 +133,8 @@
 
             foreach (AdjustmentLayerInfo adjustmentLayerInfo in AdjustmentInfo)
             {
-                if (adjustmentLayerInfo.Key == "lfx2" || adjustmentLayerInfo.Key == "lrFX")
+                if (adjustmentLayerInfo.Key == "lfx2" || adjustmentLayerInfo.Key == "lmfx" ||
+                    adjustmentLayerInfo.Key == "lfxs" || adjustmentLayerInfo.Key == "lrFX")
                 {
                     ReadLayerEffects(adjustmentLayerInfo.RawData);
                 }
@@ -528,7 +529,26 @@
             bool enabled;
             double value;
             int effectStart;
-            if (TryReadEffectEnabled(data, "FrFX", out enabled, out effectStart))
+            int master = FindAscii(data, "masterFXSwitch");
+            if (master >= 0 && master + 18 < data.Length && data[master + 18] == 0)
+            {
+                return;
+            }
+            // Color Overlay controls the visible fill independently of the type style.
+            if (IsTextLayer && TryReadEffectEnabled(data, "SoFi", out enabled, out effectStart) && enabled)
+            {
+                Color overlay;
+                if (TryReadColor(data, "Clr ", effectStart, out overlay))
+                {
+                    float opacity = TryReadUnitValue(data, "Opct", effectStart, out value)
+                        ? Mathf.Clamp01((float)value / 100f) : 1f;
+                    float alpha = FillColor.a;
+                    FillColor = Color.Lerp(FillColor, overlay, opacity);
+                    FillColor = new Color(FillColor.r, FillColor.g, FillColor.b, alpha);
+                }
+            }
+
+            if (TryReadEffectEnabled(data, "FrFX", out enabled, out effectStart, true))
             {
                 TextStyle.StrokeEnabled = enabled;
                 if (TryReadUnitValue(data, "Sz  ", effectStart, out value))
@@ -588,7 +608,8 @@
             return TryReadEffectEnabled(data, key, out value, out ignoredStart);
         }
 
-        private static bool TryReadEffectEnabled(byte[] data, string key, out bool value, out int effectStart)
+        private static bool TryReadEffectEnabled(byte[] data, string key, out bool value, out int effectStart,
+            bool requireEnabled = false)
         {
             value = false;
             effectStart = -1;
@@ -605,6 +626,11 @@
                 if (boolIndex >= 0 && boolIndex + 4 < data.Length)
                 {
                     value = data[boolIndex + 4] != 0;
+                    if (requireEnabled && !value)
+                    {
+                        searchStart = boolIndex + 5;
+                        continue;
+                    }
                     effectStart = keyIndex;
                     return true;
                 }

@@ -2,6 +2,22 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.2.1] - 2026-09-28
+
+### Fixed
+
+- Fixed PSD text-layer effect parsing for newer adjustment records (`lmfx` and `lfxs`) in addition to the existing formats.
+- Fixed text color overlay handling so enabled `SoFi` effects contribute the visible fill color while preserving the source alpha.
+- Fixed stroke parsing to skip disabled `FrFX` records and correctly read enabled stroke settings, including width and color.
+
+### Added
+
+- Added regression coverage for visible text overlay colors and enabled stroke settings in the main-screen PSD fixture.
+
+### Removed
+
+- Removed obsolete hierarchy cleanup reports, one-off analysis scripts, and generated workspace artifacts from the package root.
+
 ## [0.2.0] - 2026-09-18
 
 ### Added

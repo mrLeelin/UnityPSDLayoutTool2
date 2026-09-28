@@ -13,6 +13,30 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdFileImportTests
     {
         [Test]
+        public void MainScreenTextUsesVisibleOverlayColorsAndEnabledStrokes()
+        {
+            string path = Path.Combine(Application.dataPath, "PSDLayoutTool2", "TestData", "主界面.psd");
+            if (!File.Exists(path)) Assert.Ignore("Main screen PSD fixture is unavailable.");
+            var layers = new Dictionary<string, Layer>();
+            System.Action<Layer> visit = null;
+            visit = layer =>
+            {
+                if (layer.IsTextLayer) layers[layer.Name] = layer;
+                foreach (var child in layer.Children) visit(child);
+            };
+            foreach (var layer in new PsdFile(path).Layers) visit(layer);
+            Assert.That(ColorUtility.ToHtmlStringRGB(layers["ALBUM"].FillColor), Is.EqualTo("712D2B"));
+            Assert.That(ColorUtility.ToHtmlStringRGB(layers["FRIEND"].FillColor), Is.EqualTo("712D2B"));
+            Assert.That(ColorUtility.ToHtmlStringRGB(layers["1"].FillColor), Is.EqualTo("FFFFFF"));
+            Assert.That(ColorUtility.ToHtmlStringRGB(layers["HOLD FOR  AUTO"].FillColor), Is.EqualTo("6F0001"));
+            Assert.That(ColorUtility.ToHtmlStringRGB(layers["DRAW"].FillColor), Is.EqualTo("FEEED4"));
+            Assert.That(layers["DRAW"].TextStyle.StrokeEnabled, Is.True);
+            Assert.That(layers["HOLD FOR  AUTO"].TextStyle.StrokeEnabled, Is.True);
+            Assert.That(layers["HOLD FOR  AUTO"].TextStyle.StrokeWidth, Is.EqualTo(1f));
+            Assert.That(ColorUtility.ToHtmlStringRGB(layers["HOLD FOR  AUTO"].TextStyle.StrokeColor), Is.EqualTo("E70908"));
+        }
+
+        [Test]
         public void TrySeekLeavesReaderAfterSearchKey()
         {
             using (MemoryStream stream = new MemoryStream(Encoding.ASCII.GetBytes("/FontSize 75.0\n")))
