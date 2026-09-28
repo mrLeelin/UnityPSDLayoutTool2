@@ -437,6 +437,11 @@
         public static Material TextMeshProBaseMaterial { get; set; }
 
         private static bool tmpFontFallbackWarningEmitted;
+
+        /// <summary>本次导入中导出外观与 Photoshop 不一致的图层说明（导入结束时汇总为一条警告）。</summary>
+        private static List<string> currentStyleExportIssues = new List<string>();
+        private static HashSet<Layer> currentStyleExportIssueLayers = new HashSet<Layer>();
+        private const int MaxStyleExportIssuesInSummary = 30;
         private static bool tmpBaseMaterialFallbackWarningEmitted;
         private static Dictionary<string, TMP_FontAsset> currentTmpFontFallbacksByPsdName;
         private static Dictionary<string, string> currentPngPathByContentHash;
@@ -930,6 +935,8 @@
                 useEmbeddedNineSliceMetadata = false;
                 tmpFontFallbackWarningEmitted = false;
                 tmpBaseMaterialFallbackWarningEmitted = false;
+                currentStyleExportIssues = new List<string>();
+                currentStyleExportIssueLayers = new HashSet<Layer>();
                 PsdLayoutProjectFontSnapshot projectFontSettings =
                     PsdLayoutProjectSettings.instance.ResolveFontSettings();
                 ApplyProjectFontSettings(projectFontSettings);
@@ -1421,6 +1428,7 @@
                 ClearCurrentImportSelection();
                 currentLayerInfos = null;
                 EndGeneratedUiNodeRegistry();
+                EmitStyleExportIssueSummary();
                 PsdLogger.EndImportSession(sessionResult);
             }
         }
@@ -4389,6 +4397,56 @@
         }
 
         /// <summary>
+        /// 记录该图层导出外观与 Photoshop 不一致的原因（导出为空、未渲染的样式）。每个图层只记一次。
+        /// </summary>
+        internal static void RecordStyleExportIssues(Layer layer, Texture2D texture)
+        {
+            if (layer == null || texture == null || currentStyleExportIssueLayers == null ||
+                !currentStyleExportIssueLayers.Add(layer))
+            {
+                return;
+            }
+
+            List<string> issues = PsdLayerStyleRenderer.DescribeExportIssues(layer, texture.GetPixels32());
+            if (issues.Count == 0)
+            {
+                return;
+            }
+
+            string entry = "\"" + layer.Name + "\" (id " + layer.Id + ")：" + string.Join("；", issues);
+            currentStyleExportIssues.Add(entry);
+            PsdLogger.Info("Layer style export issue: " + entry);
+        }
+
+        private static void EmitStyleExportIssueSummary()
+        {
+            if (currentStyleExportIssues == null || currentStyleExportIssues.Count == 0)
+            {
+                return;
+            }
+
+            var builder = new StringBuilder();
+            builder.Append(currentStyleExportIssues.Count)
+                .Append(" 个图层导出后与 Photoshop 外观不一致。请在 Photoshop 中对这些图层执行「栅格化图层样式」")
+                .Append("（形状图层还需「栅格化图层」）后重新导入：");
+            foreach (string issue in currentStyleExportIssues.Take(MaxStyleExportIssuesInSummary))
+            {
+                builder.AppendLine().Append("- ").Append(issue);
+            }
+
+            if (currentStyleExportIssues.Count > MaxStyleExportIssuesInSummary)
+            {
+                builder.AppendLine().Append("- ……其余 ")
+                    .Append(currentStyleExportIssues.Count - MaxStyleExportIssuesInSummary)
+                    .Append(" 个见导入日志");
+            }
+
+            PsdLogger.Warning(builder.ToString());
+            currentStyleExportIssues = new List<string>();
+            currentStyleExportIssueLayers = new HashSet<Layer>();
+        }
+
+        /// <summary>
         /// Saves the given <see cref="Layer"/> as a PNG on the hard drive.
         /// </summary>
         /// <param name="layer">The <see cref="Layer"/> to save as a PNG.</param>
@@ -4417,6 +4475,8 @@
                                       DescribeLayerForLog(layer));
                     return string.Empty;
                 }
+
+                RecordStyleExportIssues(layer, texture);
 
                 try
                 {

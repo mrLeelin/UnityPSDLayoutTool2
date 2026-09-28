@@ -47,6 +47,15 @@ Organize existing Unity Prefabs by transferring the *discipline* of Figma hierar
 > `.apply` is written. `partial`/`uncertain` additionally require verification of the on-disk Prefab
 > before any new plan.
 
+## Efficiency rules that preserve accuracy
+
+These rules reduce repeated work without weakening evidence requirements:
+
+- The authoritative hierarchy snapshot is always read in full. Image files are risk-ranked, never skipped solely because of a name or size. A semantic name, narrow geometry, or screen-sized background may suppress an isolated image read only when snapshot data, components, sibling geometry, TMP alignment, and asset path agree. Any conflict, overlapping candidate, state branch, transparency/content-background question, or incomplete visual-unit closure escalates to image or render evidence. Record the skip reason and keep the final before/after visual audit mandatory.
+- After `validate_plan_locally.py` and `simulate_and_verify_plan.py` both pass against the same snapshot, publish a draft by byte-for-byte file copy and verify its SHA-256. Never regenerate equivalent JSON or Markdown from parsed content after validation. Unity preflight remains authoritative.
+- Run offline checks with short-circuit ordering: lint first, simulation second. The repository helper `scripts/publish_validated_plan.py` performs both checks in one Python process and copies only unchanged validated bytes.
+- Read the complete skill and plan-format rules by default. Caching may avoid repeated disk reads, but a summary is allowed only after strict classification as a simple hierarchy-only task with no extraction, state, variant, asset-rename, nested-Prefab, binding, or unresolved-evidence branch. If classification is unavailable or changes, fall back to the complete files.
+
 ## AI Chat Single-Confirmation Contract
 
 When this skill is supplied to the Unity AI hierarchy chat window, use exactly this interaction:

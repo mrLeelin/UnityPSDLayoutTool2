@@ -30,6 +30,10 @@ Usage
 -----
   python validate_plan_locally.py --plan plan.json [--snapshot snapshot.json] [--quiet]
 Exit code 0 = no errors (warnings may still be printed), 2 = errors.
+
+For a validated draft that must be published to a separate contract path, use
+`publish_validated_plan.py`. It runs this linter and the simulator in order, then
+copies the unchanged bytes and verifies their SHA-256 hashes.
 """
 from __future__ import annotations
 

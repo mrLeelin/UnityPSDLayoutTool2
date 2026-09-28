@@ -43,6 +43,9 @@ namespace PsdLayoutTool2
         private HttpListener listener;
         private volatile bool running;
         private volatile string cachedJson;
+        // /models 在监听线程执行；这些回退值由主线程 RefreshCache 更新，避免后台线程访问 EditorPrefs/Unity API。
+        private volatile string cachedModelsEndpoint;
+        private volatile string cachedModelsApiKey;
         private string pendingJson;
         /// <summary>页面按钮触发的动作名。由监听线程排队、主线程 OnEditorUpdate 执行。</summary>
         private string pendingAction;
@@ -290,6 +293,14 @@ namespace PsdLayoutTool2
             try
             {
                 cachedJson = BuildConfigJson().ToString(Formatting.None);
+                PsdHierarchyAiSettingsSnapshot ai = settings.ResolveHierarchyAiSettings();
+                cachedModelsEndpoint = ai.ResolveEndpoint();
+                cachedModelsApiKey = string.Empty;
+                if (ai.provider != PsdHierarchyAiProvider.None)
+                {
+                    new PsdHierarchyAiSecretStore().TryReadApiKey(ProjectRoot(), ai.provider, out string storedKey);
+                    cachedModelsApiKey = storedKey ?? string.Empty;
+                }
             }
             catch (Exception e)
             {
@@ -399,6 +410,25 @@ namespace PsdLayoutTool2
                 return;
             }
 
+            if (path == "/models" && context.Request.HttpMethod == "POST")
+            {
+                string body;
+                using (var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
+                try
+                {
+                    JObject request = JObject.Parse(body ?? string.Empty);
+                    Write(response, FetchModelsJson(request.Value<string>("endpoint"), request.Value<string>("apiKey")),
+                        "application/json; charset=utf-8");
+                }
+                catch (Exception e)
+                {
+                    response.StatusCode = 400;
+                    Write(response, new JObject { ["ok"] = false, ["error"] = e.Message }.ToString(Formatting.None),
+                        "application/json; charset=utf-8");
+                }
+                return;
+            }
+
             if (path.StartsWith("/action/", StringComparison.Ordinal) &&
                 context.Request.HttpMethod == "POST")
             {
@@ -412,6 +442,48 @@ namespace PsdLayoutTool2
 
             response.StatusCode = 404;
             response.Close();
+        }
+
+        private string FetchModelsJson(string endpoint, string apiKey)
+        {
+            if (string.IsNullOrWhiteSpace(endpoint)) endpoint = cachedModelsEndpoint;
+            if (string.IsNullOrWhiteSpace(apiKey)) apiKey = cachedModelsApiKey;
+            if (string.IsNullOrWhiteSpace(apiKey))
+                throw new ArgumentException("请先填写 API 地址和 API Key，或先保存自定义 API 配置。");
+            if (string.IsNullOrWhiteSpace(endpoint)) throw new ArgumentException("请先填写 API 地址。");
+            if (!Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out Uri parsed) ||
+                (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
+                throw new ArgumentException("API 地址必须是 http 或 https 的完整地址。");
+            string path = parsed.AbsolutePath.TrimEnd('/');
+            if (!path.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
+            {
+                if (path.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+                    path = path.Substring(0, path.Length - "/chat/completions".Length);
+                parsed = new UriBuilder(parsed) { Path = path.TrimEnd('/') + "/models" }.Uri;
+            }
+            var request = (HttpWebRequest)WebRequest.Create(parsed);
+            request.Method = "GET";
+            request.Timeout = 12000;
+            request.ReadWriteTimeout = 12000;
+            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + apiKey.Trim();
+            request.Headers["x-api-key"] = apiKey.Trim();
+            request.Accept = "application/json";
+            using (var webResponse = (HttpWebResponse)request.GetResponse())
+            using (var stream = webResponse.GetResponseStream())
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            {
+                JObject payload = JObject.Parse(reader.ReadToEnd());
+                var models = new JArray();
+                JToken data = payload["data"] ?? payload["models"];
+                if (data is JArray array)
+                    foreach (JToken item in array)
+                    {
+                        string id = item.Type == JTokenType.String ? item.Value<string>() : item.Value<string>("id");
+                        if (!string.IsNullOrWhiteSpace(id)) models.Add(id.Trim());
+                    }
+                if (models.Count == 0) throw new InvalidOperationException("接口返回中没有找到模型列表（需要 data[].id 或 models[]）。");
+                return new JObject { ["ok"] = true, ["models"] = models }.ToString(Formatting.None);
+            }
         }
 
         /// <summary>
@@ -1645,6 +1717,10 @@ border-top:0;padding-top:0;flex:0 0 auto}
         </div>
       </div>
       <div class='form-group'>
+        <button class='btn btn-secondary' id='fetchModels' type='button'>↻ 根据 API 地址和 Key 获取模型</button>
+        <span class='form-help' id='modelsHint'>支持 OpenAI 兼容接口的 /models 返回。</span>
+      </div>
+      <div class='form-group'>
         <button class='btn btn-secondary' id='clearKey'>清除本机保存的 Key</button>
       </div>
     </div>
@@ -2341,6 +2417,22 @@ function postAction(name,toastText,button,pending){
 
 byId('catalogRefresh').addEventListener('click',function(){
   postAction('catalog-refresh','正在扫描公共资源，稍后自动刷新结果',byId('catalogRefresh'));
+});
+byId('fetchModels').addEventListener('click',function(){
+  var button=byId('fetchModels'), endpoint=byId('aiEndpoint').value.trim(), key=byId('aiApiKey').value;
+  button.disabled=true;button.textContent='获取中…';
+  fetchWithTimeout('/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:endpoint,apiKey:key})},15000)
+    .then(function(r){return r.json().then(function(x){if(!r.ok||!x.ok)throw new Error(x.error||('HTTP '+r.status));return x;});})
+    .then(function(x){
+      var info=currentCli();
+      if(info){info.modelSuggestions=x.models||[];info.modelHint=(x.models||[]).join('、');}
+      comboRender('aiModel');
+      comboOpen('aiModel');
+      byId('modelsHint').textContent='已获取 '+(x.models||[]).length+' 个模型，可点选或继续手填。';
+      setStatusHold('模型列表获取成功','ok',5000);
+    })
+    .catch(function(e){byId('modelsHint').textContent='获取失败：'+e.message;setStatusHold('获取模型失败','err',8000);})
+    .then(function(){button.disabled=false;button.textContent='↻ 根据 API 地址和 Key 获取模型';});
 });
 byId('previewStart').addEventListener('click',function(){
   postAction('preview-start','正在启动预览服务',byId('previewStart'),{

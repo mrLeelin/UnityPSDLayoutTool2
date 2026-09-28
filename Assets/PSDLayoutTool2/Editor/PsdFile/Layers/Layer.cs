@@ -165,6 +165,7 @@
                 }
             }
 
+            ShapeStyle = PsdLayerShapeStyle.Read(AdjustmentInfo);
             reader.BaseStream.Position = num4;
         }
 
@@ -223,6 +224,9 @@
 
         /// <summary>Gets normalized Photoshop text effects.</summary>
         public PsdTextStyle TextStyle { get; private set; }
+
+        /// <summary>矢量形状、形状填充与图层样式的解析结果；普通位图层也会有（可能为空内容）。</summary>
+        internal PsdLayerShapeStyle ShapeStyle { get; private set; }
 
         #endregion
 
@@ -608,7 +612,7 @@
             return TryReadEffectEnabled(data, key, out value, out ignoredStart);
         }
 
-        private static bool TryReadEffectEnabled(byte[] data, string key, out bool value, out int effectStart,
+        internal static bool TryReadEffectEnabled(byte[] data, string key, out bool value, out int effectStart,
             bool requireEnabled = false)
         {
             value = false;
@@ -646,7 +650,7 @@
             return TryReadUnitValue(data, key, 0, out value);
         }
 
-        private static bool TryReadUnitValue(byte[] data, string key, int start, out double value)
+        internal static bool TryReadUnitValue(byte[] data, string key, int start, out double value)
         {
             value = 0d;
             int keyIndex = FindAscii(data, key, start, Math.Min(data.Length, start + 768));
@@ -676,7 +680,7 @@
             return TryReadColor(data, key, 0, out color);
         }
 
-        private static bool TryReadColor(byte[] data, string key, int start, out Color color)
+        internal static bool TryReadColor(byte[] data, string key, int start, out Color color)
         {
             color = Color.black;
             int keyIndex = FindAscii(data, key, start, Math.Min(data.Length, start + 768));
@@ -733,7 +737,7 @@
             return FindAscii(data, value, 0, data != null ? data.Length : 0);
         }
 
-        private static int FindAscii(byte[] data, string value, int start, int end)
+        internal static int FindAscii(byte[] data, string value, int start, int end)
         {
             if (data == null || string.IsNullOrEmpty(value))
             {

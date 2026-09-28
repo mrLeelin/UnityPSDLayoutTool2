@@ -103,10 +103,19 @@
 
                 for (int x = 0; x < layer.Rect.width; ++x)
                 {
-                    int layerPosition = layerRow + x;
-                    int texturePosition = textureRow + x;
+                    colors[textureRow + x] = GetColor(layer, layerRow + x);
+                }
+            }
 
-                    colors[texturePosition] = GetColor(layer, layerPosition);
+            PsdLayerStyleRenderer.Apply(layer, colors);
+
+            for (int y = 0; y < layer.Rect.height; ++y)
+            {
+                int textureRow = ((int)layer.Rect.height - 1 - y) * (int)layer.Rect.width;
+
+                for (int x = 0; x < layer.Rect.width; ++x)
+                {
+                    int texturePosition = textureRow + x;
 
                     // set the alpha
                     if (layer.SortedChannels.ContainsKey(-2))

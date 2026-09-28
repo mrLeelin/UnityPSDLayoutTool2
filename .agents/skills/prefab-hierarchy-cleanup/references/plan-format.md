@@ -2,6 +2,12 @@
 
 Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed execution contract.
 
+## Accuracy-preserving efficiency
+
+- Keep the complete authoritative snapshot and final Unity preflight. Image evidence is selected by risk: names and geometry can reduce redundant reads only when all serialized, neighboring, TMP, and asset-path evidence agrees. Conflicts, state/overlap questions, transparency questions, and incomplete visual-unit closure require image or render evidence.
+- Run the local linter before the simulator against the same plan and snapshot. After both pass, publish the exact draft bytes by file copy and hash verification; do not regenerate the plan from parsed data.
+- The complete plan format remains the default reference. A cached or summarized reading is valid only for a strictly simple hierarchy-only task and must fall back to this full file when extraction, states, variants, asset renames, nested Prefabs, bindings, or ambiguity appear.
+
 > **Current Unity executor capability (authoritative over the rest of this file).**
 > Executable now: `wrappers`, `moves`, `renames`, `tightBounds`, `emptyContainerRemovals`,
 > `componentExtractions` with matching `componentFamilyDecisions` mode `component` (template must also
