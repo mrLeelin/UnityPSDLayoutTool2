@@ -489,51 +489,6 @@ namespace PsdLayoutTool2
 
         internal static bool TryExtractApprovedPlan(
             string assistantReply,
-            string targetPrefabAssetPath,
-            out string planJson,
-            out string error)
-        {
-            planJson = ExtractJsonCodeBlock(assistantReply);
-            if (string.IsNullOrWhiteSpace(planJson))
-            {
-                error = "AI 未返回可执行的 JSON 计划代码块。";
-                return false;
-            }
-
-            try
-            {
-                var plan = JObject.Parse(planJson);
-                ValidateRootPlanShape(plan);
-                string target = NormalizeAssetPath(targetPrefabAssetPath);
-                string planTarget = NormalizeAssetPath(ReadRequiredString(plan, "prefabAssetPath"));
-                JObject output = plan["output"] as JObject;
-                if (output == null)
-                {
-                    throw new InvalidDataException("计划缺少 output 对象。");
-                }
-
-                string mode = ReadRequiredString(output, "mode");
-                string outputTarget = NormalizeAssetPath(ReadRequiredString(output, "assetPath"));
-                if (!string.Equals(planTarget, target, StringComparison.Ordinal) ||
-                    !string.Equals(outputTarget, target, StringComparison.Ordinal) ||
-                    !string.Equals(mode, "in_place", StringComparison.Ordinal))
-                {
-                    throw new InvalidDataException("计划没有严格指向当前目标 Prefab 的原地更新。");
-                }
-
-                error = string.Empty;
-                return true;
-            }
-            catch (Exception exception) when (exception is Newtonsoft.Json.JsonException || exception is InvalidDataException)
-            {
-                planJson = string.Empty;
-                error = "AI 返回的计划不能安全执行：" + exception.Message;
-                return false;
-            }
-        }
-
-        internal static bool TryExtractApprovedPlan(
-            string assistantReply,
             PsdHierarchyChatContext context,
             out string planJson,
             out string error)
@@ -601,6 +556,8 @@ namespace PsdLayoutTool2
                 CollectValidationError(errors, () => PsdHierarchyPostGroupingExtraction.ValidateIntents(plan));
                 CollectValidationError(errors, () => ValidateAllExistingNodeReferences(plan, context));
                 CollectValidationError(errors, () => ValidatePrefabRootNotRenamed(plan, context));
+                CollectValidationError(errors, () => ValidatePrivateAssetNamePrefix(plan));
+                CollectValidationError(errors, () => ValidateVerifyFields(plan));
                 CollectValidationError(errors, () =>
                 {
                     if (context.localRepairScope != null)
@@ -704,7 +661,7 @@ namespace PsdLayoutTool2
             string projectRoot,
             string planJson)
         {
-            // ADR 0002：不再走 Python CLI。v2 重放需要新的权威快照，无法仅凭落盘计划自动执行。
+            // 重放需要基于新生成结果的权威快照证明节点对应关系，无法仅凭落盘计划自动执行。
             await Task.Yield();
             return await PsdHierarchyNativeCleanupExecutor.ReapplyAsync(projectRoot, planJson);
         }
@@ -712,10 +669,10 @@ namespace PsdLayoutTool2
         /// <summary>
         /// 重放无法证明节点对应关系时的稳定失败标识：既用于执行结果，也用于让重放协调器把
         /// 这次失败判定为永久失败（标记需要重新分析），而不是反复重试。
-        /// 触发条件：v1 路径计划、缺少节点绑定证据、或重新生成结果上找不到唯一对应节点。
+        /// 触发条件：计划 version 不是 2、缺少节点绑定证据、或重新生成结果上找不到唯一对应节点。
         /// </summary>
         internal const string ReplayRequiresFreshAnalysisMessage =
-            "整理重放需要基于当前生成结果的权威快照重新分析并确认新计划：该记录缺少可证明的节点对应关系（v1 路径计划或绑定证据不足），无法自动重放。" +
+            "整理重放需要基于当前生成结果的权威快照重新分析并确认新计划：该记录缺少可证明的节点对应关系（计划版本不受支持或绑定证据不足），无法自动重放。" +
             "原有业务 Prefab 未被覆盖。";
 
         internal static bool TryDiscardFailedReplayStage(
@@ -724,19 +681,19 @@ namespace PsdLayoutTool2
             out string error)
         {
             error = string.Empty;
-            if (context == null || !TryPrepareRunnerPlan(context, planJson, out string runnerPlanJson, out error))
+            if (context == null || !TryPrepareExecutionPlan(context, planJson, out string executionPlanJson, out error))
                 return false;
 
             return PsdHierarchyCleanupReplayProfile.TryDiscardMatchingLastStage(
                 context.sourcePsdAssetPath,
                 context.targetPrefabAssetPath,
-                runnerPlanJson,
+                executionPlanJson,
                 out error);
         }
 
         private static PsdHierarchyChatCleanupExecutionResult PersistCompletedReplayStage(
             PsdHierarchyChatContext context,
-            string runnerPlanJson,
+            string planJson,
             PsdHierarchyChatCleanupExecutionResult result,
             bool replaceReplayProfile)
         {
@@ -746,7 +703,7 @@ namespace PsdLayoutTool2
                 // 只有证据才能让 PSD 更新后的重放证明对应关系（见 PsdHierarchyReplayBinding）。
                 string bindingJson = string.Empty;
                 if (!PsdHierarchyReplayBinding.TryBuildForPlan(
-                        JObject.Parse(runnerPlanJson),
+                        JObject.Parse(planJson),
                         context.hierarchySnapshotJson,
                         out bindingJson,
                         out string bindingError))
@@ -762,7 +719,7 @@ namespace PsdLayoutTool2
                     PsdHierarchyCleanupReplayProfile.ReplaceWithFirstStage(
                         context.sourcePsdAssetPath,
                         context.targetPrefabAssetPath,
-                        runnerPlanJson,
+                        planJson,
                         bindingJson);
                 }
                 else
@@ -770,7 +727,7 @@ namespace PsdLayoutTool2
                     PsdHierarchyCleanupReplayProfile.Persist(
                         context.sourcePsdAssetPath,
                         context.targetPrefabAssetPath,
-                        runnerPlanJson,
+                        planJson,
                         bindingJson);
                 }
                 return result;
@@ -785,57 +742,6 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static PsdHierarchyCleanupExecutionBackend ResolveExecutionBackend()
-        {
-            // ADR 0001/0002：正式清理只在 Unity 共享核心执行；CLI Runner 已退役。
-            return PsdHierarchyCleanupExecutionBackend.NativeUnity;
-        }
-
-        private static PsdHierarchyCleanupExecutionBackend ResolveExecutionBackendForPlan(string runnerPlanJson)
-        {
-            return ResolveExecutionBackendForPlan(ResolveExecutionBackend(), runnerPlanJson);
-        }
-
-        internal static PsdHierarchyCleanupExecutionBackend ResolveExecutionBackendForPlan(
-            PsdHierarchyCleanupExecutionBackend selectedBackend,
-            string runnerPlanJson)
-        {
-            if (HasLocalPrefabExtractions(runnerPlanJson))
-            {
-                return PsdHierarchyCleanupExecutionBackend.NativeUnity;
-            }
-
-            // v2（node:<id>）执行计划只由 NativeUnity 消费。
-            // CLI 的 render_prefab_cleanup.py 仍要求 version=1（路径版 runner 计划），
-            // 把 v2 直接丢给 Python 会报 "version must be 1"。
-            if (IsVersionTwoPlan(runnerPlanJson))
-            {
-                return PsdHierarchyCleanupExecutionBackend.NativeUnity;
-            }
-
-            return selectedBackend;
-        }
-
-        private static bool IsVersionTwoPlan(string planJson)
-        {
-            if (string.IsNullOrWhiteSpace(planJson))
-            {
-                return false;
-            }
-
-            try
-            {
-                var plan = JObject.Parse(planJson);
-                JToken version = plan["version"];
-                return version != null && version.Type == JTokenType.Integer && version.Value<int>() == 2;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-
         private static bool HasSelectedPrefabExtractions(JObject plan)
         {
             return plan?["selectedPrefabExtractions"] is JArray extractions && extractions.Count > 0;
@@ -849,30 +755,6 @@ namespace PsdLayoutTool2
         private static bool HasLocalPrefabExtractions(JObject plan)
         {
             return HasSelectedPrefabExtractions(plan) || HasCrossParentPrefabExtractions(plan);
-        }
-
-        private static bool HasSelectedPrefabExtractions(string planJson)
-        {
-            try
-            {
-                return HasSelectedPrefabExtractions(JObject.Parse(planJson ?? string.Empty));
-            }
-            catch (Newtonsoft.Json.JsonException)
-            {
-                return false;
-            }
-        }
-
-        private static bool HasLocalPrefabExtractions(string planJson)
-        {
-            try
-            {
-                return HasLocalPrefabExtractions(JObject.Parse(planJson ?? string.Empty));
-            }
-            catch (Newtonsoft.Json.JsonException)
-            {
-                return false;
-            }
         }
 
         internal static string ExtractReviewText(string assistantReply)
@@ -928,11 +810,6 @@ namespace PsdLayoutTool2
             }
 
             return value.Value<string>();
-        }
-
-        private static void ValidateRootPlanShape(JObject plan)
-        {
-            ValidateRootPlanShape(plan, 1L, false);
         }
 
         private static void ValidateRootPlanShape(
@@ -1126,7 +1003,7 @@ namespace PsdLayoutTool2
             }
         }
 
-        // 与 Python 运行器 IsNonSemanticObjectName / audit_prefab_preservation.py 保持同一套规则。
+        // 与 audit_prefab_preservation.py 的 NONSEMANTIC_NAME / ASCII_NAME 保持同一套规则。
         private static readonly Regex SemanticAsciiNameRegex = new Regex(
             @"^[A-Za-z0-9_\[\]]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
         private static readonly Regex NonSemanticTokenNameRegex = new Regex(
@@ -1377,6 +1254,91 @@ namespace PsdLayoutTool2
             return duplicateMarker > 0 ? segment.Substring(0, duplicateMarker) : segment;
         }
 
+        /// <summary>v2 执行器支持的 verify 字段；其余字段会在写入前被拒绝。</summary>
+        internal static readonly string[] SupportedVerifyFields =
+        {
+            "nodes", "hierarchy", "absentPaths", "directChildren", "tightBounds",
+        };
+
+        private static void ValidateVerifyFields(JObject plan)
+        {
+            if (!(plan["verify"] is JObject verify))
+            {
+                return;
+            }
+
+            string[] unsupported = verify.Properties()
+                .Select(property => property.Name)
+                .Where(name => !SupportedVerifyFields.Contains(name, StringComparer.Ordinal))
+                .ToArray();
+            if (unsupported.Length > 0)
+            {
+                throw new InvalidDataException(
+                    "verify 只支持 " + string.Join(", ", SupportedVerifyFields) + "；请删除不支持的字段：" +
+                    string.Join(", ", unsupported.Select(name => "verify." + name).ToArray()) + "。");
+            }
+        }
+
+        /// <summary>
+        /// prefabName 就是私有资源改名前缀：每个 Texture toName 必须以 prefabName + "_" 开头，
+        /// 每个 SpriteAtlas toName 必须等于 prefabName。不一致时一次列出全部条目并给出建议值。
+        /// </summary>
+        private static void ValidatePrivateAssetNamePrefix(JObject plan)
+        {
+            JObject[] textures = ReadObjects(plan, "textureRenames").ToArray();
+            JObject[] atlases = ReadObjects(plan, "spriteAtlasRenames").ToArray();
+            if (textures.Length == 0 && atlases.Length == 0)
+            {
+                return;
+            }
+
+            string prefabName = (plan.Value<string>("prefabName") ?? string.Empty).Trim();
+            var mismatches = new List<string>();
+            var candidates = new List<string>();
+            for (int index = 0; index < textures.Length; index++)
+            {
+                string toName = textures[index].Value<string>("toName") ?? string.Empty;
+                int separator = toName.IndexOf('_');
+                if (separator > 0)
+                {
+                    candidates.Add(toName.Substring(0, separator));
+                }
+
+                if (prefabName.Length == 0 || !toName.StartsWith(prefabName + "_", StringComparison.Ordinal))
+                {
+                    mismatches.Add("textureRenames[" + index + "].toName \"" + toName + "\"");
+                }
+            }
+
+            for (int index = 0; index < atlases.Length; index++)
+            {
+                string toName = atlases[index].Value<string>("toName") ?? string.Empty;
+                if (toName.Length > 0)
+                {
+                    candidates.Add(toName);
+                }
+
+                if (!string.Equals(toName, prefabName, StringComparison.Ordinal))
+                {
+                    mismatches.Add("spriteAtlasRenames[" + index + "].toName \"" + toName + "\"");
+                }
+            }
+
+            if (mismatches.Count == 0)
+            {
+                return;
+            }
+
+            string[] distinct = candidates.Distinct(StringComparer.Ordinal).ToArray();
+            string suggestion = distinct.Length == 1
+                ? "请把 prefabName 设为 \"" + distinct[0] + "\"（它就是私有资源前缀，与主根名/文件名无关）。"
+                : "各 toName 的前缀不一致（" + string.Join(", ", distinct.Select(value => "\"" + value + "\"").ToArray()) +
+                  "），请统一成同一个英文 prefabName。";
+            throw new InvalidDataException(
+                "私有资源命名与 prefabName \"" + prefabName + "\" 不一致：每个 Texture 的 toName 必须以 prefabName + \"_\" 开头，" +
+                "每个 SpriteAtlas 的 toName 必须等于 prefabName。不符合的条目：" + string.Join("; ", mismatches) + "。" + suggestion);
+        }
+
         /// <summary>
         /// 拒绝把 Prefab 主根改成与资产文件名不同的名字。
         /// Unity 保存时主根名始终对齐资产文件名，放行会导致应用后校验路径失配、保存阶段才报错。
@@ -1422,17 +1384,6 @@ namespace PsdLayoutTool2
 
 
 
-        // Transitional source compatibility for editor tests and callers. This
-        // method no longer creates a v1 runner document; it returns the v2
-        // execution plan unchanged after validation.
-        internal static bool TryPrepareRunnerPlan(
-            PsdHierarchyChatContext context,
-            string planJson,
-            out string executionPlanJson,
-            out string error)
-        {
-            return TryPrepareExecutionPlan(context, planJson, out executionPlanJson, out error);
-        }
 
         // 分组后抽取意图形状的唯一权威校验点是 PsdHierarchyPostGroupingExtraction.ValidateIntents：
         // 预检层与共享执行核心调用同一个方法，避免两份规则漂移。

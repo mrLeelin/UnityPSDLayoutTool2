@@ -54,7 +54,7 @@ namespace PsdLayoutTool2
 
             if (plan.Value<int?>("version") != 2)
             {
-                // v1 路径计划没有节点身份证据，无法在重新生成的结果上证明对应关系。
+                // 只有 version 2 计划携带节点身份证据，才能在重新生成的结果上证明对应关系。
                 return Task.FromResult(Result(PsdHierarchyCleanupExecutionState.Rejected, "replay",
                     PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage));
             }

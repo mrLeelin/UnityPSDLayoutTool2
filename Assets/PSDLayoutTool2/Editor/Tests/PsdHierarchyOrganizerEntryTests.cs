@@ -130,8 +130,6 @@ namespace PsdLayoutTool2.Tests
             Assert.That(contract, Does.Not.Contain("componentFamilyDecisions must use mode=component"));
             Assert.That(contract, Does.Contain("textureRenames"));
             // 旧写入脚本不得再被提示词要求执行。
-            Assert.That(contract, Does.Not.Contain("render_prefab_cleanup.py --mode apply"));
-            Assert.That(contract, Does.Not.Contain("run_prefab_hierarchy_cleanup.ps1"));
         }
 
         [Test]

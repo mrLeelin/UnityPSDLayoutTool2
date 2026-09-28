@@ -70,16 +70,16 @@ namespace PsdLayoutTool2.Tests
                 out JObject safePlan,
                 out string partitionError), Is.True, partitionError);
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 context,
                 safePlan.ToString(),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string preparationError);
 
             Assert.That(prepared, Is.True, preparationError);
-            JObject runnerPlan = JObject.Parse(runnerPlanJson);
+            JObject executionPlan = JObject.Parse(executionPlanJson);
             Assert.That(
-                runnerPlan["componentFamilyDecisions"].Values<JObject>()
+                executionPlan["componentFamilyDecisions"].Values<JObject>()
                     .Select(decision => decision.Value<string>("candidateId")),
                 Is.EqualTo(new[] { "family_good" }));
         }

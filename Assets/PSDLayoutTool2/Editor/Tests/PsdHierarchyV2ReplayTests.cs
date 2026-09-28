@@ -262,7 +262,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public async Task VersionOneStageIsRefusedByTheSharedCoreReplayPath()
+        public async Task UnsupportedPlanVersionStageIsRefusedByTheSharedCoreReplayPath()
         {
             var legacy = new JObject
             {

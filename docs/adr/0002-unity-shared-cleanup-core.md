@@ -21,3 +21,4 @@ Unity 是 Prefab 和序列化引用的权威运行环境。保留 Python 或 CLI
 
 ## 结果
 Python 工具保留只读快照与诊断用途；正式执行必须经过 Unity 共享核心，并输出可审计的阶段结果。
+- 2026-09-28：已删除 v1 Python/PowerShell 工具（`render_prefab_cleanup.py`、`run_native_cleanup.py`、`run_prefab_hierarchy_cleanup.ps1`、`snapshot_prefab_hierarchy.ps1`）；保留的脚本只接受 Unity JSON 快照与 v2 `node:<id>` 计划，且仅做只读诊断。

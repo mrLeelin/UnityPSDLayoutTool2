@@ -26,7 +26,7 @@ namespace PsdLayoutTool2.Tests
 
             bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 reply,
-                target,
+                CreateNodeSnapshotContext(),
                 out string plan,
                 out string error);
 
@@ -45,7 +45,7 @@ namespace PsdLayoutTool2.Tests
 
             bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 reply,
-                "Assets/UI/Prefab/ExampleView.prefab",
+                CreateNodeSnapshotContext(),
                 out string plan,
                 out string error);
 
@@ -61,13 +61,13 @@ namespace PsdLayoutTool2.Tests
 
             bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 reply,
-                "Assets/UI/Prefab/ExampleView.prefab",
+                CreateNodeSnapshotContext(),
                 out string plan,
                 out string error);
 
             Assert.That(extracted, Is.False);
             Assert.That(plan, Is.Empty);
-            Assert.That(error, Does.Contain("version 必须为 1"));
+            Assert.That(error, Does.Contain("version 必须为 2"));
         }
 
         [Test]
@@ -100,7 +100,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(combined, Does.StartWith(review));
             Assert.That(PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 combined,
-                target,
+                CreateNodeSnapshotContext(),
                 out string plan,
                 out string error), Is.True, error);
             Assert.That(plan, Does.Contain("ExampleView.prefab"));
@@ -125,7 +125,7 @@ namespace PsdLayoutTool2.Tests
             const string target = "Assets/UI/Prefab/ExampleView.prefab";
             bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 CreatePlan(target, true),
-                target,
+                CreateNodeSnapshotContext(),
                 out string plan,
                 out string error);
 
@@ -140,7 +140,7 @@ namespace PsdLayoutTool2.Tests
             string reply = "\uFEFF``` JSON\r\n" + CreatePlan(target, true) + "\r\n```";
             bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 reply,
-                target,
+                CreateNodeSnapshotContext(),
                 out string plan,
                 out string error);
 
@@ -149,7 +149,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void RunnerPlanPreservesReviewedAssetRenameGuid()
+        public void ExecutionPlanPreservesReviewedAssetRenameGuid()
         {
             const string assetPath =
                 "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
@@ -290,20 +290,20 @@ namespace PsdLayoutTool2.Tests
                 ["defaultState"] = string.Empty,
             });
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 context,
                 plan.ToString(),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.True, error);
             Assert.That(
-                JObject.Parse(runnerPlanJson)["postGroupingExtractionIntents"],
+                JObject.Parse(executionPlanJson)["postGroupingExtractionIntents"],
                 Is.EqualTo(plan["postGroupingExtractionIntents"]));
         }
 
         [Test]
-        public void RunnerPlanRejectsIncompletePostGroupingExtractionIntentBeforeFirstStageExecution()
+        public void ExecutionPlanRejectsIncompletePostGroupingExtractionIntentBeforeFirstStageExecution()
         {
             PsdHierarchyChatContext context = CreateNodeSnapshotContext();
             var plan = JObject.Parse(CreateNodeReferencePlan(
@@ -334,7 +334,7 @@ namespace PsdLayoutTool2.Tests
                 ["defaultState"] = "available",
             });
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 context,
                 plan.ToString(),
                 out _,
@@ -345,7 +345,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void RunnerPlanRejectsPostGroupingInstanceStateThatIsNotDeclared()
+        public void ExecutionPlanRejectsPostGroupingInstanceStateThatIsNotDeclared()
         {
             PsdHierarchyChatContext context = CreateNodeSnapshotContext();
             var plan = JObject.Parse(CreateNodeReferencePlan(
@@ -355,7 +355,7 @@ namespace PsdLayoutTool2.Tests
             plan["moves"] = new JArray();
             plan["postGroupingExtractionIntents"] = CreateStatefulIntent("missing_state");
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 context,
                 plan.ToString(),
                 out _,
@@ -366,7 +366,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void RunnerPlanRejectsComponentIntentWithInstanceState()
+        public void ExecutionPlanRejectsComponentIntentWithInstanceState()
         {
             PsdHierarchyChatContext context = CreateNodeSnapshotContext();
             var plan = JObject.Parse(CreateNodeReferencePlan(
@@ -390,7 +390,7 @@ namespace PsdLayoutTool2.Tests
                 ["defaultState"] = string.Empty,
             });
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 context,
                 plan.ToString(),
                 out _,
@@ -428,7 +428,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void RunnerPlanPreservesMissingAssetRenameSourceForApplyPreflight()
+        public void ExecutionPlanPreservesMissingAssetRenameSourceForApplyPreflight()
         {
             const string missingAssetPath =
                 "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/missing_texture.png";
@@ -452,7 +452,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void RunnerPlanPreservesAssetRenameSourceOutsideCurrentDependenciesForApplyPreflight()
+        public void ExecutionPlanPreservesAssetRenameSourceOutsideCurrentDependenciesForApplyPreflight()
         {
             const string allowedAssetPath =
                 "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
@@ -478,7 +478,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void RunnerPlanPreservesAssetRenamesWhenCurrentDependenciesAreEmpty()
+        public void ExecutionPlanPreservesAssetRenamesWhenCurrentDependenciesAreEmpty()
         {
             const string assetPath =
                 "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
@@ -502,47 +502,74 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void RunnerPlanPreservesReviewedPrefabNameBesideAssetRenameTargets()
+        public void PrefabNameThatDoesNotPrefixTextureTargetsIsRejectedWithSuggestion()
         {
-            const string assetPath =
-                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
-            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
-            var plan = JObject.Parse(CreateNodeReferencePlan(
-                "node:n000001",
-                "node:n000002",
-                "snapshot-123"));
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
             plan["moves"] = new JArray();
-            plan["prefabName"] = "7日任务拆分";
+            plan["prefabName"] = "7日任务拆分View";
             plan["textureRenames"] = new JArray
             {
                 new JObject
                 {
-                    ["from"] = assetPath,
+                    ["from"] = "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png",
                     ["toName"] = "SevenDayTaskView_OuterBackgroundFrame",
                     ["expectedGuid"] = string.Empty,
                 },
             };
 
-            AssertPreparedPlanIsUnchanged(context, plan);
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
+                CreateNodeSnapshotContext(), plan.ToString(), out _, out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("textureRenames[0]"));
+            Assert.That(error, Does.Contain("请把 prefabName 设为 \"SevenDayTaskView\""));
         }
 
         [Test]
-        public void VersionTwoPlanDoesNotDeriveMissingPrefabNameFromAssetRenameTargets()
+        public void EnglishPrefabNameMatchingEveryTextureTargetIsAccepted()
         {
-            const string assetPath =
-                "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
-            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
-            var plan = JObject.Parse(CreateNodeReferencePlan(
-                "node:n000001",
-                "node:n000002",
-                "snapshot-123"));
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["prefabName"] = "SevenDayTaskView";
+            plan["textureRenames"] = new JArray
+            {
+                new JObject
+                {
+                    ["from"] = "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png",
+                    ["toName"] = "SevenDayTaskView_OuterBackgroundFrame",
+                    ["expectedGuid"] = string.Empty,
+                },
+            };
+
+            AssertPreparedPlanIsUnchanged(CreateNodeSnapshotContext(), plan);
+        }
+
+        [Test]
+        public void VerifyFieldOutsideTheSupportedSetIsRejectedBeforeTheExecutor()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["verify"] = new JObject { ["nodes"] = 2, ["components"] = 5, ["requireEnglishNames"] = true };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
+                CreateNodeSnapshotContext(), plan.ToString(), out _, out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("verify.components").And.Contain("verify.requireEnglishNames"));
+            Assert.That(error, Does.Not.Contain("verify.nodes"));
+        }
+
+        [Test]
+        public void MissingPrefabNameWithTextureRenamesIsRejectedWithSuggestion()
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
             plan["moves"] = new JArray();
             plan.Remove("prefabName");
             plan["textureRenames"] = new JArray
             {
                 new JObject
                 {
-                    ["from"] = assetPath,
+                    ["from"] = "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png",
                     ["toName"] = "SevenDayTaskView_OuterBackgroundFrame",
                     ["expectedGuid"] = string.Empty,
                 },
@@ -550,12 +577,12 @@ namespace PsdLayoutTool2.Tests
 
             bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 "```json\n" + plan.ToString() + "\n```",
-                context,
-                out string approvedPlanJson,
+                CreateNodeSnapshotContext(),
+                out _,
                 out string error);
 
-            Assert.That(extracted, Is.True, error);
-            Assert.That(JToken.DeepEquals(JObject.Parse(approvedPlanJson), plan), Is.True);
+            Assert.That(extracted, Is.False);
+            Assert.That(error, Does.Contain("请把 prefabName 设为 \"SevenDayTaskView\""));
         }
 
         [Test]
@@ -581,50 +608,25 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void NativeBackendDoesNotAutomaticallySwitchToUnityCliForComponentExtraction()
-        {
-            var plan = JObject.Parse(CreatePlan(
-                "Assets/UI/Prefab/ExampleView.prefab",
-                true));
-            plan["componentExtractions"] = new JArray(new JObject());
-
-            PsdHierarchyCleanupExecutionBackend backend =
-                PsdHierarchyChatCleanupExecution.ResolveExecutionBackendForPlan(
-                    PsdHierarchyCleanupExecutionBackend.NativeUnity,
-                    plan.ToString());
-
-            Assert.That(backend, Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity));
-        }
-
-        [Test]
-        public void RunnerPlanPreservesConflictingAssetRenamePrefixesForApplyPreflight()
+        public void ConflictingAssetRenamePrefixesAreRejectedTogether()
         {
             const string assetPath =
                 "Assets/PSDLayoutTool2/TestData/7日任务拆分/Texture/daily_bgbig1_932.png";
-            PsdHierarchyChatContext context = CreateNodeSnapshotContext();
-            var plan = JObject.Parse(CreateNodeReferencePlan(
-                "node:n000001",
-                "node:n000002",
-                "snapshot-123"));
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
             plan["moves"] = new JArray();
-            plan["prefabName"] = "7日任务拆分";
+            plan["prefabName"] = "SevenDayTaskView";
             plan["textureRenames"] = new JArray
             {
-                new JObject
-                {
-                    ["from"] = assetPath,
-                    ["toName"] = "SevenDayTaskView_OuterBackgroundFrame",
-                    ["expectedGuid"] = string.Empty,
-                },
-                new JObject
-                {
-                    ["from"] = assetPath,
-                    ["toName"] = "OtherView_OuterBackgroundFrame",
-                    ["expectedGuid"] = string.Empty,
-                },
+                new JObject { ["from"] = assetPath, ["toName"] = "SevenDayTaskView_OuterBackgroundFrame", ["expectedGuid"] = string.Empty },
+                new JObject { ["from"] = assetPath, ["toName"] = "OtherView_OuterBackgroundFrame", ["expectedGuid"] = string.Empty },
             };
 
-            AssertPreparedPlanIsUnchanged(context, plan);
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
+                CreateNodeSnapshotContext(), plan.ToString(), out _, out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("textureRenames[1]").And.Not.Contain("textureRenames[0]"));
+            Assert.That(error, Does.Contain("\"OtherView\"").And.Contain("统一"));
         }
 
         [Test]
@@ -646,18 +648,18 @@ namespace PsdLayoutTool2.Tests
         {
             PsdHierarchyChatContext context = CreateNodeSnapshotContext();
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 context,
                 CreateNodeReferencePlan("node:n000002", "node:n000001", "snapshot-123"),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.True, error);
-            var runnerPlan = JObject.Parse(runnerPlanJson);
-            Assert.That(runnerPlan["version"].Value<int>(), Is.EqualTo(2));
-            Assert.That(runnerPlan["snapshotFingerprint"].Value<string>(), Is.EqualTo("snapshot-123"));
-            Assert.That(runnerPlan["moves"][0]["source"].Value<string>(), Is.EqualTo("node:n000002"));
-            Assert.That(runnerPlan["moves"][0]["destination"].Value<string>(), Is.EqualTo("node:n000001"));
+            var executionPlan = JObject.Parse(executionPlanJson);
+            Assert.That(executionPlan["version"].Value<int>(), Is.EqualTo(2));
+            Assert.That(executionPlan["snapshotFingerprint"].Value<string>(), Is.EqualTo("snapshot-123"));
+            Assert.That(executionPlan["moves"][0]["source"].Value<string>(), Is.EqualTo("node:n000002"));
+            Assert.That(executionPlan["moves"][0]["destination"].Value<string>(), Is.EqualTo("node:n000001"));
         }
 
         [Test]
@@ -688,42 +690,42 @@ namespace PsdLayoutTool2.Tests
         [Test]
         public void VersionTwoPlanRejectsAnUnknownNodeReference()
         {
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 CreateNodeSnapshotContext(),
                 CreateNodeReferencePlan("node:n999999", "node:n000001", "snapshot-123"),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.False);
-            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(executionPlanJson, Is.Empty);
             Assert.That(error, Does.Contain("n999999").And.Contain("不存在"));
         }
 
         [Test]
         public void VersionTwoPlanRejectsRawSourcePaths()
         {
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 CreateNodeSnapshotContext(),
                 CreateNodeReferencePlan("Root/Imagined/15K", "node:n000001", "snapshot-123"),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.False);
-            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(executionPlanJson, Is.Empty);
             Assert.That(error, Does.Contain("moves[0].source").And.Contain("node:"));
         }
 
         [Test]
         public void VersionTwoPlanRejectsAStaleSnapshotFingerprint()
         {
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 CreateNodeSnapshotContext(),
                 CreateNodeReferencePlan("node:n000002", "node:n000001", "stale-snapshot"),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.False);
-            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(executionPlanJson, Is.Empty);
             Assert.That(error, Does.Contain("快照").And.Contain("失效"));
         }
 
@@ -739,14 +741,14 @@ namespace PsdLayoutTool2.Tests
                 ["siblingIndex"] = 1,
             });
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 CreateNodeSnapshotContext(),
                 plan.ToString(),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.False);
-            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(executionPlanJson, Is.Empty);
             Assert.That(error, Does.Contain("n999998").And.Contain("n999999"));
         }
 
@@ -907,19 +909,19 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void VersionTwoPlanCarriesAResolvedFlatSiblingFindingIntoTheRunnerPlan()
+        public void VersionTwoPlanCarriesAResolvedFlatSiblingFindingIntoTheExecutionPlan()
         {
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 CreateFlatSiblingContext(),
                 CreateFlatSiblingGroupPlan("node:n000001"),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.True, error);
-            var runnerPlan = JObject.Parse(runnerPlanJson);
-            Assert.That(runnerPlan["flatSiblingResolutions"], Has.Count.EqualTo(1));
+            var executionPlan = JObject.Parse(executionPlanJson);
+            Assert.That(executionPlan["flatSiblingResolutions"], Has.Count.EqualTo(1));
             Assert.That(
-                runnerPlan["flatSiblingResolutions"][0].Value<string>("findingId"),
+                executionPlan["flatSiblingResolutions"][0].Value<string>("findingId"),
                 Is.EqualTo("flat_sibling_001"));
         }
 
@@ -1242,19 +1244,19 @@ namespace PsdLayoutTool2.Tests
                 },
             };
 
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 CreateRequiredCandidateContext(),
                 plan.ToString(),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.True, error);
-            var runnerPlan = JObject.Parse(runnerPlanJson);
+            var executionPlan = JObject.Parse(executionPlanJson);
             Assert.That(
-                runnerPlan["componentFamilyDecisions"][0]["candidateId"].Value<string>(),
+                executionPlan["componentFamilyDecisions"][0]["candidateId"].Value<string>(),
                 Is.EqualTo("family_001"));
             Assert.That(
-                runnerPlan["componentExtractions"][0]["template"].Value<string>(),
+                executionPlan["componentExtractions"][0]["template"].Value<string>(),
                 Is.EqualTo("node:n000003"));
         }
 
@@ -1506,14 +1508,14 @@ namespace PsdLayoutTool2.Tests
             ((JObject)plan["statefulComponentExtractions"][0]).Remove("assetPath");
 
             JObject reviewedPlan = (JObject)plan.DeepClone();
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 CreateStatefulSnapshotContext(),
                 plan.ToString(),
-                out string runnerPlanJson,
+                out string executionPlanJson,
                 out string error);
 
             Assert.That(prepared, Is.False);
-            Assert.That(runnerPlanJson, Is.Empty);
+            Assert.That(executionPlanJson, Is.Empty);
             Assert.That(
                 error,
                 Does.Contain("节点引用校验失败")
@@ -1704,23 +1706,23 @@ namespace PsdLayoutTool2.Tests
                 plan["prefabName"] = "ExampleView";
                 plan["moves"][0]["siblingIndex"] = source.Value<int>("siblingIndex");
 
-                bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+                bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                     context,
                     plan.ToString(),
-                    out string runnerPlanJson,
+                    out string executionPlanJson,
                     out string error);
 
                 Assert.That(prepared, Is.True, error);
-                var runnerPlan = JObject.Parse(runnerPlanJson);
-                Assert.That(runnerPlan.Value<long>("version"), Is.EqualTo(2));
+                var executionPlan = JObject.Parse(executionPlanJson);
+                Assert.That(executionPlan.Value<long>("version"), Is.EqualTo(2));
                 Assert.That(
-                    runnerPlan.Value<string>("snapshotFingerprint"),
+                    executionPlan.Value<string>("snapshotFingerprint"),
                     Is.EqualTo(context.hierarchySnapshotFingerprint));
                 Assert.That(
-                    runnerPlan["moves"][0]["source"].Value<string>(),
+                    executionPlan["moves"][0]["source"].Value<string>(),
                     Is.EqualTo("node:" + source.Value<string>("id")));
                 Assert.That(
-                    runnerPlan["moves"][0]["destination"].Value<string>(),
+                    executionPlan["moves"][0]["destination"].Value<string>(),
                     Is.EqualTo("node:" + parent.Value<string>("id")));
             }
             finally
@@ -1742,7 +1744,7 @@ namespace PsdLayoutTool2.Tests
 
             bool extracted = PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                 "```json\n" + plan + "\n```",
-                target,
+                CreateNodeSnapshotContext(),
                 out _,
                 out string error);
 
@@ -2116,7 +2118,7 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(PrefabUtility.SaveAsPrefabAsset(root, targetPath), Is.Not.Null);
                 string plan = CreateSelectedPrefabExtractionPlan(targetPath, componentPath);
 
-                // 无上下文的 v1 路径计划不能通过任何保留入口写入：重放入口在写入前永久拒绝。
+                // 版本不受支持、没有权威上下文的路径计划不能通过任何保留入口写入：重放入口在写入前永久拒绝。
                 PsdHierarchyChatCleanupExecutionResult result =
                     await PsdHierarchyChatCleanupExecution.ReapplyPersistedPlanAsync(
                         System.IO.Directory.GetParent(Application.dataPath).FullName,
@@ -2174,7 +2176,7 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(PrefabUtility.SaveAsPrefabAsset(root, targetPath), Is.Not.Null);
                 string plan = CreateCrossParentPrefabExtractionPlan(targetPath, componentPath);
 
-                // 无上下文的 v1 路径计划不能通过任何保留入口写入：重放入口在写入前永久拒绝。
+                // 版本不受支持、没有权威上下文的路径计划不能通过任何保留入口写入：重放入口在写入前永久拒绝。
                 PsdHierarchyChatCleanupExecutionResult result =
                     await PsdHierarchyChatCleanupExecution.ReapplyPersistedPlanAsync(
                         System.IO.Directory.GetParent(Application.dataPath).FullName,
@@ -2278,8 +2280,9 @@ namespace PsdLayoutTool2.Tests
 
         private static string CreatePlan(string target, bool includeVersion)
         {
-            string version = includeVersion ? "\"version\": 1," : string.Empty;
+            string version = includeVersion ? "\"version\": 2," : string.Empty;
             return "{" + version +
+                   "\"snapshotFingerprint\":\"snapshot-123\"," +
                    "\"prefabAssetPath\":\"" + target + "\"," +
                    "\"output\":{\"mode\":\"in_place\",\"assetPath\":\"" + target + "\"}," +
                    "\"prefabName\":\"ExampleView\"," +
@@ -2293,7 +2296,7 @@ namespace PsdLayoutTool2.Tests
 
         private static void AssertPreparedPlanIsUnchanged(PsdHierarchyChatContext context, JObject reviewedPlan)
         {
-            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareRunnerPlan(
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                 context,
                 reviewedPlan.ToString(),
                 out string executionPlanJson,

@@ -9,6 +9,7 @@ namespace PsdLayoutTool2
     using Newtonsoft.Json.Linq;
     using UnityEditor;
     using UnityEngine;
+    using UnityEngine.Serialization;
 
     public sealed class PsdHierarchyCleanupReplayProfile : ScriptableObject
     {
@@ -22,22 +23,21 @@ namespace PsdLayoutTool2
         [SerializeField] private string targetPrefabPath = string.Empty;
         [SerializeField] private bool requiresRebind;
         [SerializeField, TextArea(2, 4)] private string rebindReason = string.Empty;
-        // Kept for schema-1 assets. It is migrated into runnerPlanStages on the
-        // next successful append/save.
-        [SerializeField, TextArea(4, 20)] private string runnerPlanJson = string.Empty;
-        [SerializeField] private List<string> runnerPlanStages = new List<string>();
-        // 与 runnerPlanStages 一一对应的节点绑定证据（v2 阶段必需；v1 阶段为空字符串）。
-        [SerializeField] private List<string> runnerPlanBindings = new List<string>();
+        // 仅用于读取 schema-1 旧资产；其中的计划不会被执行，读取端会要求重新分析。
+        [SerializeField, TextArea(4, 20), FormerlySerializedAs("runnerPlanJson")] private string legacyPlanJson = string.Empty;
+        [SerializeField, FormerlySerializedAs("runnerPlanStages")] private List<string> planStages = new List<string>();
+        // 与 planStages 一一对应的节点绑定证据（重放必需；缺失时读取端要求重新分析）。
+        [SerializeField, FormerlySerializedAs("runnerPlanBindings")] private List<string> planBindings = new List<string>();
 
-        public void Initialize(string sourceGuid, string prefabPath, string validatedRunnerPlanJson)
+        public void Initialize(string sourceGuid, string prefabPath, string validatedPlanJson)
         {
-            Initialize(sourceGuid, prefabPath, validatedRunnerPlanJson, string.Empty);
+            Initialize(sourceGuid, prefabPath, validatedPlanJson, string.Empty);
         }
 
         public void Initialize(
             string sourceGuid,
             string prefabPath,
-            string validatedRunnerPlanJson,
+            string validatedPlanJson,
             string validatedBindingJson)
         {
             string normalizedTarget = NormalizeAssetPath(prefabPath);
@@ -46,7 +46,8 @@ namespace PsdLayoutTool2
             if (!IsAssetPath(normalizedTarget) || !normalizedTarget.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Target Prefab must be an Assets path.", nameof(prefabPath));
 
-            JObject plan = ParseAndValidatePlan(validatedRunnerPlanJson, normalizedTarget);
+            JObject plan = ParseAndValidatePlan(validatedPlanJson, normalizedTarget);
+            RequireVersionTwo(plan);
 
             schemaVersion = CurrentSchemaVersion;
             sourcePsdGuid = sourceGuid.Trim();
@@ -54,25 +55,25 @@ namespace PsdLayoutTool2
             targetPrefabGuid = AssetDatabase.AssetPathToGUID(normalizedTarget);
             if (string.IsNullOrEmpty(targetPrefabGuid))
                 throw new InvalidOperationException("Target Prefab GUID could not be resolved.");
-            runnerPlanJson = string.Empty;
+            legacyPlanJson = string.Empty;
             requiresRebind = false;
             rebindReason = string.Empty;
-            runnerPlanStages = new List<string>
+            planStages = new List<string>
             {
                 plan.ToString(Newtonsoft.Json.Formatting.None),
             };
-            runnerPlanBindings = new List<string> { NormalizeBinding(validatedBindingJson) };
+            planBindings = new List<string> { NormalizeBinding(validatedBindingJson) };
         }
 
-        public void AppendStage(string sourceGuid, string prefabPath, string validatedRunnerPlanJson)
+        public void AppendStage(string sourceGuid, string prefabPath, string validatedPlanJson)
         {
-            AppendStage(sourceGuid, prefabPath, validatedRunnerPlanJson, string.Empty);
+            AppendStage(sourceGuid, prefabPath, validatedPlanJson, string.Empty);
         }
 
         public void AppendStage(
             string sourceGuid,
             string prefabPath,
-            string validatedRunnerPlanJson,
+            string validatedPlanJson,
             string validatedBindingJson)
         {
             string normalizedTarget = NormalizeAssetPath(prefabPath);
@@ -80,7 +81,8 @@ namespace PsdLayoutTool2
             ValidateBinding(sourceGuid, normalizedTarget);
             if (requiresRebind)
                 throw new InvalidDataException(BuildRebindRequiredMessage());
-            JObject plan = ParseAndValidatePlan(validatedRunnerPlanJson, normalizedTarget);
+            JObject plan = ParseAndValidatePlan(validatedPlanJson, normalizedTarget);
+            RequireVersionTwo(plan);
 
             List<string> stages = ReadStoredStages(normalizedTarget);
             stages.Add(plan.ToString(Newtonsoft.Json.Formatting.None));
@@ -94,9 +96,9 @@ namespace PsdLayoutTool2
                         "Schema-1 cleanup replay Profile cannot migrate because the target Prefab GUID is missing.");
             }
             schemaVersion = CurrentSchemaVersion;
-            runnerPlanJson = string.Empty;
-            runnerPlanStages = stages;
-            runnerPlanBindings = bindings;
+            legacyPlanJson = string.Empty;
+            planStages = stages;
+            planBindings = bindings;
         }
 
         public bool TryBuildReplayPlans(
@@ -193,29 +195,33 @@ namespace PsdLayoutTool2
                     throw new InvalidDataException(
                         "Cleanup replay Profile stage and binding counts do not match. Re-analyze the current Prefab.");
 
-                // v2 阶段引用旧快照的位置型节点 ID，必须先在重新生成的结果上证明唯一对应关系。
-                // 缺少绑定证据是永久失败：绝不猜对应关系，也不覆盖指纹后强行执行。
+                // 阶段引用旧快照的位置型节点 ID，必须先在重新生成的结果上证明唯一对应关系。
+                // 版本不受支持或缺少绑定证据都是永久失败：绝不猜对应关系，也不覆盖指纹后强行执行。
                 for (int index = 0; index < storedStages.Count; index++)
                 {
-                    if (ParseAndValidatePlan(storedStages[index], normalizedTarget).Value<int?>("version") == 2 &&
-                        string.IsNullOrWhiteSpace(storedBindings[index]))
+                    if (ParseAndValidatePlan(storedStages[index], normalizedTarget).Value<int?>("version") != 2)
                     {
                         throw new InvalidDataException(
                             PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
-                            " 该 v2 阶段没有保存节点绑定证据。");
+                            " 该清理阶段的计划版本不受支持。");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(storedBindings[index]))
+                    {
+                        throw new InvalidDataException(
+                            PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
+                            " 该阶段没有保存节点绑定证据。");
                     }
                 }
 
-                bool hasVersionTwoStage = storedStages.Any(stage =>
-                    ParseAndValidatePlan(stage, normalizedTarget).Value<int?>("version") == 2);
-                if (hasVersionTwoStage && storedStages.Count > 1)
+                if (storedStages.Count > 1)
                 {
                     throw new InvalidDataException(
-                        "Multi-stage v2 cleanup replay must build and execute one stage at a time so each stage uses the Prefab saved by the previous stage.");
+                        "Multi-stage cleanup replay must build and execute one stage at a time so each stage uses the Prefab saved by the previous stage.");
                 }
                 string freshSnapshotJson = string.Empty;
                 string freshFingerprint = string.Empty;
-                if (hasVersionTwoStage &&
+                if (storedStages.Count > 0 &&
                     !PsdHierarchyChatContextBuilder.TryBuildSnapshotForPrefab(
                         normalizedReplayTarget,
                         out freshSnapshotJson,
@@ -229,16 +235,6 @@ namespace PsdLayoutTool2
                 for (int index = 0; index < storedStages.Count; index++)
                 {
                     JObject plan = ParseAndValidatePlan(storedStages[index], normalizedTarget);
-                    if (plan.Value<int?>("version") != 2)
-                    {
-                        plan["replaySourcePrefabAssetPath"] = normalizedTarget;
-                        plan["prefabAssetPath"] = normalizedReplayTarget;
-                        ((JObject)plan["output"])["assetPath"] = normalizedReplayTarget;
-                        plan["verify"] = new JObject();
-                        replayStages.Add(plan.ToString(Newtonsoft.Json.Formatting.None));
-                        continue;
-                    }
-
                     if (!PsdHierarchyReplayBinding.TryRebind(
                             storedBindings[index],
                             freshSnapshotJson,
@@ -288,7 +284,7 @@ namespace PsdLayoutTool2
             if (schemaVersion != CurrentSchemaVersion)
             {
                 error = PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
-                        " 旧 v1 Replay Profile 不会自动迁移或进入执行队列。";
+                        " 旧版 Replay Profile 不会自动迁移或进入执行队列。";
                 return false;
             }
             if (string.IsNullOrEmpty(targetPrefabGuid))
@@ -338,7 +334,7 @@ namespace PsdLayoutTool2
                     {
                         throw new InvalidDataException(
                             PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
-                            " 旧 v1 清理阶段不会自动迁移或进入执行队列。请重新分析并审核 v2 计划。");
+                            " 该清理阶段的计划版本不受支持，不会进入执行队列。请重新分析并审核新计划。");
                     }
                     if (string.IsNullOrWhiteSpace(bindings[index]))
                     {
@@ -413,7 +409,7 @@ namespace PsdLayoutTool2
                 {
                     throw new InvalidDataException(
                         PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage +
-                        " 旧 v1 清理阶段不会自动迁移或执行。请重新分析并审核 v2 计划。");
+                        " 该清理阶段的计划版本不受支持，不会被执行。请重新分析并审核新计划。");
                 }
                 if (!PsdHierarchyChatContextBuilder.TryBuildSnapshotForPrefab(
                         normalizedReplayTarget,
@@ -555,13 +551,13 @@ namespace PsdLayoutTool2
         /// </summary>
         private List<string> ReadStoredBindings(string normalizedTarget)
         {
-            if (schemaVersion == 1 && !string.IsNullOrWhiteSpace(runnerPlanJson))
+            if (schemaVersion == 1 && !string.IsNullOrWhiteSpace(legacyPlanJson))
                 return new List<string> { string.Empty };
 
             var bindings = new List<string>();
-            foreach (string stage in runnerPlanStages ?? new List<string>())
+            foreach (string stage in planStages ?? new List<string>())
                 bindings.Add(string.Empty);
-            List<string> stored = runnerPlanBindings ?? new List<string>();
+            List<string> stored = planBindings ?? new List<string>();
             for (int index = 0; index < bindings.Count && index < stored.Count; index++)
                 bindings[index] = NormalizeBinding(stored[index]);
             return bindings;
@@ -577,14 +573,14 @@ namespace PsdLayoutTool2
         private List<string> ReadStoredStages(string normalizedTarget)
         {
             var stages = new List<string>();
-            if (schemaVersion == 1 && !string.IsNullOrWhiteSpace(runnerPlanJson))
+            if (schemaVersion == 1 && !string.IsNullOrWhiteSpace(legacyPlanJson))
             {
-                stages.Add(ParseAndValidatePlan(runnerPlanJson, normalizedTarget)
+                stages.Add(ParseAndValidatePlan(legacyPlanJson, normalizedTarget)
                     .ToString(Newtonsoft.Json.Formatting.None));
                 return stages;
             }
 
-            foreach (string stage in runnerPlanStages ?? new List<string>())
+            foreach (string stage in planStages ?? new List<string>())
             {
                 if (string.IsNullOrWhiteSpace(stage))
                     throw new InvalidDataException("Cleanup replay Profile contains an empty stage.");
@@ -836,11 +832,11 @@ namespace PsdLayoutTool2
         {
             string normalizedTarget = NormalizeAssetPath(newTargetPath);
             targetPrefabPath = normalizedTarget;
-            runnerPlanJson = RewritePlanTarget(runnerPlanJson, normalizedTarget);
+            legacyPlanJson = RewritePlanTarget(legacyPlanJson, normalizedTarget);
             var migratedStages = new List<string>();
-            foreach (string stage in runnerPlanStages ?? new List<string>())
+            foreach (string stage in planStages ?? new List<string>())
                 migratedStages.Add(RewritePlanTarget(stage, normalizedTarget));
-            runnerPlanStages = migratedStages;
+            planStages = migratedStages;
         }
 
         private static string RewritePlanTarget(string planJson, string targetPath)
@@ -919,15 +915,15 @@ namespace PsdLayoutTool2
         public static PsdHierarchyCleanupReplayProfile Persist(
             string sourcePsdAssetPath,
             string prefabPath,
-            string validatedRunnerPlanJson)
+            string validatedPlanJson)
         {
-            return Persist(sourcePsdAssetPath, prefabPath, validatedRunnerPlanJson, string.Empty);
+            return Persist(sourcePsdAssetPath, prefabPath, validatedPlanJson, string.Empty);
         }
 
         public static PsdHierarchyCleanupReplayProfile Persist(
             string sourcePsdAssetPath,
             string prefabPath,
-            string validatedRunnerPlanJson,
+            string validatedPlanJson,
             string validatedBindingJson)
         {
             string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(sourcePsdAssetPath));
@@ -941,12 +937,12 @@ namespace PsdLayoutTool2
             if (profile == null)
             {
                 profile = CreateInstance<PsdHierarchyCleanupReplayProfile>();
-                profile.Initialize(sourceGuid, prefabPath, validatedRunnerPlanJson, validatedBindingJson);
+                profile.Initialize(sourceGuid, prefabPath, validatedPlanJson, validatedBindingJson);
                 AssetDatabase.CreateAsset(profile, profilePath);
             }
             else
             {
-                profile.AppendStage(sourceGuid, prefabPath, validatedRunnerPlanJson, validatedBindingJson);
+                profile.AppendStage(sourceGuid, prefabPath, validatedPlanJson, validatedBindingJson);
                 EditorUtility.SetDirty(profile);
             }
 
@@ -957,15 +953,15 @@ namespace PsdLayoutTool2
         public static PsdHierarchyCleanupReplayProfile ReplaceWithFirstStage(
             string sourcePsdAssetPath,
             string prefabPath,
-            string validatedRunnerPlanJson)
+            string validatedPlanJson)
         {
-            return ReplaceWithFirstStage(sourcePsdAssetPath, prefabPath, validatedRunnerPlanJson, string.Empty);
+            return ReplaceWithFirstStage(sourcePsdAssetPath, prefabPath, validatedPlanJson, string.Empty);
         }
 
         public static PsdHierarchyCleanupReplayProfile ReplaceWithFirstStage(
             string sourcePsdAssetPath,
             string prefabPath,
-            string validatedRunnerPlanJson,
+            string validatedPlanJson,
             string validatedBindingJson)
         {
             string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(sourcePsdAssetPath));
@@ -979,12 +975,12 @@ namespace PsdLayoutTool2
             if (profile == null)
             {
                 profile = CreateInstance<PsdHierarchyCleanupReplayProfile>();
-                profile.Initialize(sourceGuid, prefabPath, validatedRunnerPlanJson, validatedBindingJson);
+                profile.Initialize(sourceGuid, prefabPath, validatedPlanJson, validatedBindingJson);
                 AssetDatabase.CreateAsset(profile, profilePath);
             }
             else
             {
-                profile.Initialize(sourceGuid, prefabPath, validatedRunnerPlanJson, validatedBindingJson);
+                profile.Initialize(sourceGuid, prefabPath, validatedPlanJson, validatedBindingJson);
                 EditorUtility.SetDirty(profile);
             }
 
@@ -995,7 +991,7 @@ namespace PsdLayoutTool2
         internal static bool TryDiscardMatchingLastStage(
             string sourcePsdAssetPath,
             string prefabPath,
-            string validatedRunnerPlanJson,
+            string validatedPlanJson,
             out string error)
         {
             error = string.Empty;
@@ -1014,7 +1010,7 @@ namespace PsdLayoutTool2
 
             try
             {
-                string expectedStage = ParseAndValidatePlan(validatedRunnerPlanJson, normalizedTarget)
+                string expectedStage = ParseAndValidatePlan(validatedPlanJson, normalizedTarget)
                     .ToString(Newtonsoft.Json.Formatting.None);
                 List<string> stages = profile.ReadStoredStages(normalizedTarget);
                 if (stages.Count == 0 || !string.Equals(
@@ -1032,9 +1028,9 @@ namespace PsdLayoutTool2
                 }
 
                 profile.schemaVersion = CurrentSchemaVersion;
-                profile.runnerPlanJson = string.Empty;
-                profile.runnerPlanStages = stages;
-                profile.runnerPlanBindings = bindings;
+                profile.legacyPlanJson = string.Empty;
+                profile.planStages = stages;
+                profile.planBindings = bindings;
                 EditorUtility.SetDirty(profile);
                 AssetDatabase.SaveAssetIfDirty(profile);
                 return true;
@@ -1059,14 +1055,18 @@ namespace PsdLayoutTool2
 
 
 
+        private static void RequireVersionTwo(JObject plan)
+        {
+            if (plan.Value<int?>("version") != 2)
+                throw new InvalidDataException("Only version 2 cleanup plans can be recorded for replay.");
+        }
+
         private static JObject ParseAndValidatePlan(string json, string expectedTarget)
         {
             JObject plan = JObject.Parse(json ?? string.Empty);
-            int? version = plan.Value<int?>("version");
-            // 容器版本与内嵌清理计划版本分别检查：v2 阶段计划连同节点绑定证据一起保存，
-            // 重放读取端（TryBuildReplayPlans）用绑定证据证明对应关系；v1 路径计划没有证据。
-            if (version != 1 && version != 2)
-                throw new InvalidDataException("Cleanup replay plan version must be 1 or 2.");
+            // 读取端只要求计划声明整数 version；version != 2 的已存阶段由各读取入口统一拒绝并要求重新分析。
+            if (plan["version"] == null || plan["version"].Type != JTokenType.Integer)
+                throw new InvalidDataException("Cleanup replay plan must declare an integer version.");
             if (!string.Equals(
                     NormalizeAssetPath(plan.Value<string>("prefabAssetPath")),
                     expectedTarget,

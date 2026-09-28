@@ -19,10 +19,16 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettingsWebServer
     {
-        // 注意：PSD2UIForm 插件的设置页也占了 9527（Psd2UIFormSettingsServer.cs），
-        // 两边都写死同一个端口时，谁后启动谁绑定失败。这里让开，改用 9528。
-        private const int Port = 9528;
-        private const string Url = "http://localhost:9528/";
+        // PSD2UIForm 插件的设置页占用 9527，这里从 9528 起步。
+        // 同时开多个使用本插件的 Unity 工程时，后启动的工程依次顺延到下一个空闲端口。
+        internal const int BasePort = 9528;
+        internal const int PortSearchCount = 20;
+
+        /// <summary>记住本次会话实际使用的端口：域重载后优先复用，浏览器里已打开的页面继续可用。</summary>
+        private const string PortKey = "PsdLayoutTool2.SettingsWebServer.Port";
+
+        /// <summary>页面里的工程名占位符，启动时替换成当前工程目录名。</summary>
+        private const string ProjectNamePlaceholder = "{{PSD_LAYOUT_PROJECT_NAME}}";
 
         /// <summary>
         /// SessionState 跨域重载存活、编辑器退出后清空，正好对应「编译后自动恢复、关掉 Unity 不幽灵拉起」。
@@ -47,7 +53,43 @@ namespace PsdLayoutTool2
         private double nextRefresh;
         private string previewAddress = string.Empty;
         private double nextPreviewAddressRefresh;
+
+        /// <summary>实际监听的端口（BasePort 起的某个空闲端口）；未启动时为 0。</summary>
+        private int port;
+        private string projectName = string.Empty;
+
+        /// <summary>替换好工程名的页面。在主线程启动时生成，监听线程只读。</summary>
+        private string pageHtml = string.Empty;
+
         internal static PsdLayoutProjectSettingsWebServer Current { get; private set; }
+
+        internal string Url => BuildUrl(port);
+
+        internal static string BuildUrl(int port) => "http://localhost:" + port + "/";
+
+        /// <summary>
+        /// 端口尝试顺序：上次会话用过的端口优先（域重载后浏览器页面不失效），
+        /// 然后从 BasePort 起顺延 PortSearchCount 个。
+        /// </summary>
+        internal static IReadOnlyList<int> BuildPortCandidates(int preferredPort)
+        {
+            var candidates = new List<int>(PortSearchCount + 1);
+            if (preferredPort >= BasePort && preferredPort < BasePort + PortSearchCount)
+            {
+                candidates.Add(preferredPort);
+            }
+
+            for (int offset = 0; offset < PortSearchCount; offset++)
+            {
+                int candidate = BasePort + offset;
+                if (!candidates.Contains(candidate))
+                {
+                    candidates.Add(candidate);
+                }
+            }
+
+            return candidates;
+        }
 
         internal static void Open(PsdLayoutProjectSettings target)
         {
@@ -57,7 +99,8 @@ namespace PsdLayoutTool2
             {
                 Current = server;
                 SessionState.SetBool(ResumeKey, true);
-                Application.OpenURL(Url);
+                Debug.Log("[PSDLayoutTool2] 网页设置服务已启动：" + server.Url + "（工程：" + server.projectName + "）");
+                Application.OpenURL(server.Url);
             }
         }
 
@@ -100,20 +143,35 @@ namespace PsdLayoutTool2
         private bool Start(PsdLayoutProjectSettings target)
         {
             settings = target;
+            projectName = ResolveProjectName();
+            pageHtml = Page().Replace(ProjectNamePlaceholder, WebUtilityHtmlEncode(projectName));
             RefreshCache();
-            try
+
+            string lastFailure = string.Empty;
+            foreach (int candidate in BuildPortCandidates(SessionState.GetInt(PortKey, 0)))
             {
-                listener = new HttpListener();
-                listener.Prefixes.Add(Url);
-                listener.Start();
+                if (TryListen(candidate, out lastFailure))
+                {
+                    port = candidate;
+                    break;
+                }
             }
-            catch (Exception e)
+
+            if (listener == null)
             {
                 Debug.LogError(
-                    "[PSDLayoutTool2] 网页设置服务启动失败：" + e.Message +
-                    "。如果同时开着另一个 Unity 工程，它可能已经占用了 " + Port + " 端口。");
+                    "[PSDLayoutTool2] 网页设置服务启动失败：端口 " + BasePort + "–" + (BasePort + PortSearchCount - 1) +
+                    " 均被占用（最后一次错误：" + lastFailure + "）。请关闭其他占用这些端口的 Unity 工程或程序后，从菜单重新打开设置页。");
                 CloseListenerOnly();
                 return false;
+            }
+
+            SessionState.SetInt(PortKey, port);
+            if (port != BasePort)
+            {
+                Debug.Log(
+                    "[PSDLayoutTool2] 端口 " + BasePort + " 已被占用（可能是另一个 Unity 工程），网页设置服务改用 " +
+                    Url + "（工程：" + projectName + "）");
             }
 
             running = true;
@@ -126,6 +184,43 @@ namespace PsdLayoutTool2
             EditorApplication.quitting -= StopForQuit;
             EditorApplication.quitting += StopForQuit;
             return true;
+        }
+
+        private bool TryListen(int candidate, out string failure)
+        {
+            failure = string.Empty;
+            var attempt = new HttpListener();
+            try
+            {
+                attempt.Prefixes.Add(BuildUrl(candidate));
+                attempt.Start();
+                listener = attempt;
+                return true;
+            }
+            catch (Exception e)
+            {
+                failure = e.Message;
+                try { attempt.Close(); } catch { }
+                return false;
+            }
+        }
+
+        private static string ResolveProjectName()
+        {
+            try
+            {
+                DirectoryInfo projectDirectory = Directory.GetParent(Application.dataPath);
+                return projectDirectory != null ? projectDirectory.Name : Application.productName;
+            }
+            catch (Exception)
+            {
+                return Application.productName;
+            }
+        }
+
+        private static string WebUtilityHtmlEncode(string value)
+        {
+            return WebUtility.HtmlEncode(value ?? string.Empty);
         }
 
         /// <summary>只关 socket / 卸载 update，保留 Resume 标记，供域重载后恢复。</summary>
@@ -255,7 +350,7 @@ namespace PsdLayoutTool2
             response.AddHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
             string path = context.Request.Url == null ? "/" : context.Request.Url.AbsolutePath;
             if (context.Request.HttpMethod == "OPTIONS") { response.StatusCode = 204; response.Close(); return; }
-            if (path == "/" || path == "/index.html") { Write(response, Page(), "text/html; charset=utf-8"); return; }
+            if (path == "/" || path == "/index.html") { Write(response, pageHtml, "text/html; charset=utf-8"); return; }
             if (path == "/config" && context.Request.HttpMethod == "GET")
             {
                 Write(response, cachedJson ?? "{}", "application/json; charset=utf-8");
@@ -766,9 +861,6 @@ namespace PsdLayoutTool2
             root["availableClis"] = clis;
             // 配置里选的 CLI 现在没装时，页面上要能照实显示出来而不是掉回「不启用」。
             root["providerInstalled"] = !ai.isConfigured || ContainsProvider(installed, ai.provider);
-            PsdHierarchyCleanupExecutionSettingsSnapshot cleanup =
-                settings.ResolveHierarchyCleanupExecutionSettings();
-            root["cleanupBackend"] = (int)cleanup.backend;
 
             // ---- 公共资源库：映射表规模 + 共享预览服务状态 ----
             PsdCommonAssetCatalog catalog = PsdCommonAssetCatalog.Load();
@@ -919,14 +1011,6 @@ namespace PsdLayoutTool2
                     }
                 }
 
-                // ---- Prefab 清理执行后端（已固定 Native Unity，ADR 0001/0002）----
-                // 旧页面可能仍提交 cleanupBackend；一律归一，不接受 CLI。
-                if (HasAny(data, "cleanupBackend"))
-                {
-                    settings.SetHierarchyCleanupExecutionBackend(
-                        PsdHierarchyCleanupExecutionBackend.NativeUnity);
-                }
-
                 // ---- 共享预览服务端口 ----
                 if (HasAny(data, "previewServerPort"))
                 {
@@ -1019,7 +1103,7 @@ namespace PsdLayoutTool2
 <head>
 <meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>PSD Layout Tool 设置</title>
+<title>PSD Layout Tool 设置 · {{PSD_LAYOUT_PROJECT_NAME}}</title>
 <link rel='preconnect' href='https://fonts.googleapis.com'>
 <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
 <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
@@ -1344,10 +1428,6 @@ border-top:0;padding-top:0;flex:0 0 auto}
       <svg viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round'><path d='M9.4 2.6 11 7l4.4 1.6L11 10.2 9.4 14.6 7.8 10.2 3.4 8.6 7.8 7 9.4 2.6Z'/><path d='m15.4 13.2.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z'/></svg>
       <span>AI 层级整理</span>
     </a>
-    <a class='nav-item' href='#sec-cleanup'>
-      <svg viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round'><path d='M3 6.2h7.4'/><path d='M3 13.8h3.6'/><circle cx='14.6' cy='6.2' r='2.4'/><circle cx='10.6' cy='13.8' r='2.4'/></svg>
-      <span>Prefab 清理执行</span>
-    </a>
     <a class='nav-item' href='#sec-share'>
       <svg viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='10' cy='10' r='2.2'/><path d='M6.4 6.4a5.1 5.1 0 0 0 0 7.2'/><path d='M13.6 6.4a5.1 5.1 0 0 1 0 7.2'/><path d='M4.2 4.2a8.2 8.2 0 0 0 0 11.6'/><path d='M15.8 4.2a8.2 8.2 0 0 1 0 11.6'/></svg>
       <span>公共资源库</span>
@@ -1366,7 +1446,7 @@ border-top:0;padding-top:0;flex:0 0 auto}
   <header class='page-header'>
     <div class='page-icon'>🖼️</div>
     <h1>全局配置</h1>
-    <p class='page-subtitle'>项目导入、Prefab 生成、公共资源命名与 AI 整理</p>
+    <p class='page-subtitle'>当前工程：<strong>{{PSD_LAYOUT_PROJECT_NAME}}</strong> · 项目导入、Prefab 生成、公共资源命名与 AI 整理</p>
   </header>
 
   <div id='offline' hidden>
@@ -1566,21 +1646,6 @@ border-top:0;padding-top:0;flex:0 0 auto}
       </div>
       <div class='form-group'>
         <button class='btn btn-secondary' id='clearKey'>清除本机保存的 Key</button>
-      </div>
-    </div>
-  </section>
-
-  <section class='card' id='sec-cleanup'>
-    <div class='card-header'>
-      <div class='card-icon violet'>🧹</div>
-      <div class='card-title'>
-        <h2>Prefab 清理执行</h2>
-        <p>层级整理计划的正式执行入口</p>
-      </div>
-    </div>
-    <div class='form-group'>
-      <div class='info-banner' id='cleanupBackendNote'>
-        执行后端已固定为 Native Unity（ADR 0001/0002）。CLI Runner 不再可选；Python 仅作只读诊断。
       </div>
     </div>
   </section>
@@ -1842,8 +1907,6 @@ function refreshDetailVisibility(){
   if(comboCtx.aiModel&&!comboCtx.aiModel.panel.hidden)comboRender('aiModel');
   if(comboCtx.aiEffort&&!comboCtx.aiEffort.panel.hidden)comboRender('aiEffort');
 }
-
-/* Prefab 清理执行：后端已固定 Native Unity（ADR 0001/0002），无切换 UI。 */
 
 /* 九宫格：开关状态 + 徽标文案。徽标反映「自动裁剪」是否开启，
    而不是「九宫检测是否可用」—— 检测本身始终在跑。 */

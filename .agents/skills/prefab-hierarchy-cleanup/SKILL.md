@@ -7,8 +7,8 @@ description: Safely organize one existing Unity Prefab in place into a complete 
 
 Organize existing Unity Prefabs by transferring the *discipline* of Figma hierarchy cleanup, not Figma's node model or tooling. Treat Unity components, serialized bindings, RectTransforms, asset references, prefab overrides, and sibling order as source-of-truth data.
 
-> This project's engine deviates from the written plan format in ways that have already caused
-> real failures (auto-tightening, extraction-stage counts, text snapshots without node ids). Read
+> This project's engine has behaviors that have already caused real failures (no automatic
+> tightening, extraction-stage counts, a rename-locked Prefab root). Read
 > **Project-verified engine realities** at the end of this file before authoring a plan.
 
 > **Current capability (2026-09-17, ADR 0001/0002) — authoritative over the rest of this file.**
@@ -27,18 +27,20 @@ Organize existing Unity Prefabs by transferring the *discipline* of Figma hierar
 > plus a few states; `[States]` is created before `[Common]`; every direct child of an instance
 > source must be mapped exactly once by `commonSourceNames` + `stateSourceNames`), and
 > `textureRenames` / `spriteAtlasRenames` (`toName` without extension; every Texture `toName` must
-> start with `<prefabName>_`; every SpriteAtlas `toName` must equal `prefabName`; each `from` must
-> be a private asset of the target Prefab; the target path must not exist yet; the rename keeps the
-> asset identity so Prefab references stay valid).
+> start with `<prefabName>_`; every SpriteAtlas `toName` must equal `prefabName`; `prefabName` is
+> the prefix you choose, independent of the Prefab file name; each `from` must be a private asset
+> of the target Prefab; the target path must not exist yet; the rename keeps the asset identity so
+> Prefab references stay valid).
 > `postGroupingExtractionIntents` is executable too, but only as an automatic **second stage**:
 > Unity saves and re-verifies the hierarchy stage, refreshes the authoritative snapshot, rebuilds
 > the extraction plan from the reviewed intents (paths, modes, instances, states and Common
 > members) and applies it without asking again.
 > Every other operation array — `containmentResolutions`, `flatSiblingResolutions`,
 > `selectedPrefabExtractions`, `crossParentPrefabExtractions` —
-> **must be empty**: a non-empty one is refused before any write, and Unity no longer normalizes,
-> repairs, force-extracts or converts the reviewed plan. `render_prefab_cleanup.py --mode
-> apply|reapply` and the PowerShell `-ApplyConfirmed` path are **retired** and fail by design.
+> **must be empty**: a non-empty one is refused before any write, and Unity never normalizes,
+> repairs, force-extracts or converts the reviewed plan. `verify` accepts only `nodes`,
+> `hierarchy`, `absentPaths`, `directChildren` and `tightBounds`; any other key is refused. The
+> Prefab root (snapshot `isPrefabRoot` / `renameLocked`) must never appear in `renames`.
 > Report containment or flat-sibling work in the review text only. Receipt statuses are `applied`,
 > `rejected`, `partial`, `uncertain`. A `rejected` request wrote nothing, but any corrected plan is
 > still a new request that must be completely reviewed and explicitly approved before its own
@@ -53,75 +55,28 @@ When this skill is supplied to the Unity AI hierarchy chat window, use exactly t
 2. The user may correct the tables before approval. The eventual explicit `确认`, `满意`, or equivalent apply intent is the only confirmation. It authorizes the complete reviewed workflow: first-stage hierarchy apply, authoritative resnapshot, exact manifest-matching child-Prefab extraction, save, and final verification.
 3. After that confirmation, the Unity chat window rechecks the Prefab fingerprint, applies the first stage, refreshes the snapshot, rebuilds and validates the second stage from `postGroupingExtractionIntents`, and applies it without asking again. The second stage keeps the confirmed IDs, modes, output paths, ordered instance names and states, ordered Common members, state IDs, names and members, and default states; it may only add the `componentFamilyDecisions` entries the refreshed snapshot requires, and it may not include hierarchy, rename, containment, flat-sibling, or asset-rename operations.
 
-The one confirmation is sufficient authorization for every stage that exactly matches the displayed tables and machine-readable manifest. Do not ask the user to choose an output mode, repeat confirmation, approve the refreshed snapshot, approve child Prefabs separately, or manually run a script. A revision requested before confirmation replaces the review and still leads to one eventual confirmation. After execution starts, evidence that conflicts with the confirmed manifest is a blocking failure: stop, report the exact mismatch and current saved state, and never guess, broaden scope, or obtain a second confirmation as a bypass. Before enabling confirmation, the chat window must reject a plan whose `version`, required fields, `snapshotFingerprint`, `prefabAssetPath`, `output.assetPath`, assets, node references, or post-grouping intent shape are invalid, then run the same renderer validation used by the runner on the converted internal plan. That validation simulates wrapper creation, moves, renames, tight bounds, and ordered empty-container removals against an unsaved Prefab instance, then resnapshots that simulated tree and proves every `verify.hierarchy`, `verify.directChildren`, and `verify.tightBounds` entry. It must also inspect the simulated tree's complete `componentFamilyCandidates`, `containmentFindings`, and `flatSiblingFindings` before confirmation. An existing-node reference must be copied from the Unity-generated snapshot; it must never be inferred from displayed text, a Sprite name, a visual label, or a guessed hierarchy path.
+The one confirmation is sufficient authorization for every stage that exactly matches the displayed tables and machine-readable manifest. Do not ask the user to choose an output mode, repeat confirmation, approve the refreshed snapshot, approve child Prefabs separately, or manually run a script. A revision requested before confirmation replaces the review and still leads to one eventual confirmation. After execution starts, evidence that conflicts with the confirmed manifest is a blocking failure: stop, report the exact mismatch and current saved state, and never guess, broaden scope, or obtain a second confirmation as a bypass. Before enabling confirmation, the chat window must reject a plan whose `version`, required fields, `snapshotFingerprint`, `prefabAssetPath`, `output.assetPath`, assets, node references, Prefab-root renames, or post-grouping intent shape are invalid, then run the Unity executor's in-memory preflight on the reviewed plan itself. That validation simulates wrapper creation, moves, renames, tight bounds, and ordered empty-container removals against an unsaved Prefab instance, then resnapshots that simulated tree and proves every `verify.hierarchy`, `verify.directChildren`, and `verify.tightBounds` entry. It must also inspect the simulated tree's complete `componentFamilyCandidates`, `containmentFindings`, and `flatSiblingFindings` before confirmation. An existing-node reference must be copied from the Unity-generated snapshot; it must never be inferred from displayed text, a Sprite name, a visual label, or a guessed hierarchy path.
 
 `postGroupingExtractionIntents: []` is allowed only when the simulated post-grouping snapshot has no required component family and no repeated family that the reviewed scope requires or clearly implies extracting. If grouping creates a required family, the first confirmable response must disclose and freeze its complete extraction intent. Every mandatory (`requiresExtraction: true`) candidate gets exactly one `componentFamilyDecisions` entry: `parent` and `sources` exactly match the snapshot candidate; `recommendedMode` is advisory only; `mode` is `component`, `state`, `variant`, or `stateful` and matches the actual extraction list or `postGroupingExtractionIntents` entry named by `extractionId`; and that extraction's source roots completely cover the candidate sources. When the family only becomes extractable after grouping, Unity repeats the exact candidate-coverage check against the refreshed snapshot before executing it. If the simulated snapshot introduces an undisclosed candidate, unresolved cluster, changed extraction path, or changed member/state mapping, reject the plan before confirmation and report the exact difference without changing the real Prefab.
 
-Asset GUIDs are Unity-owned data. In a version 2 AI chat plan, use an empty `expectedGuid` for Texture and SpriteAtlas renames. The chat execution bridge resolves each existing `from` path through `AssetDatabase`, rejects a missing asset with the exact array index and path, and injects the current GUID into the internal version 1 runner plan. The runner then keeps enforcing that captured GUID before and after rename so an identity change between validation and apply remains blocking.
+Asset GUIDs are Unity-owned data. Use an empty `expectedGuid` for Texture and SpriteAtlas renames so Unity captures the current `AssetDatabase` GUID, or paste an exact GUID to pin it. Unity rejects a missing asset with the exact array index and path, and enforces the captured GUID before and after the rename so an identity change between validation and apply remains blocking.
 
-Private-asset `prefabName` is also execution-derived in a version 2 AI chat plan. The reviewed fields are the actual `textureRenames[].toName` and `spriteAtlasRenames[].toName` values: every Texture target contributes the prefix before its first underscore, every SpriteAtlas target contributes its complete name, and all candidates must agree on one PascalCase name ending with `View`. The chat bridge writes that candidate into the internal version 1 runner plan. Keep the required version 2 `prefabName` field present for schema stability, but do not treat it as authoritative or try to repair a naming failure by changing only that field. Conflicting or invalid reviewed targets fail before the external runner and report the submitted value, candidates, array indices, and complete `toName` values.
+`prefabName` is the private-asset prefix Unity enforces verbatim: every `textureRenames[].toName` must start with `<prefabName>_` and every `spriteAtlasRenames[].toName` must equal `prefabName`. It is independent of the Prefab asset file name and of the root name. Choose the English PascalCase name the assets should carry (ending with `View`, for example `MainScreenView`) and make every `toName` agree with it. A prefix-mismatch rejection is fixed by making `prefabName` and every `toName` consistent; it never means the prefix is hard-coded to the Prefab file name.
 
-Every AI-specific prompt must supply the canonical plan format and authoritative node snapshot before the first response. The snapshot is authoritative for hierarchy, node identity, geometry, components, active state, and references. Read only a targeted Prefab section when the snapshot explicitly lacks evidence or conflicts with serialized data; do not repeatedly read the complete Prefab and snapshot. Do not infer JSON names, node IDs, or paths from prose or use a legacy schema. The complete workflow has one automatic JSON-repair budget. Keep that repair in the same AI session and request one complete replacement JSON code block with no prose. The automatic second stage has no additional repair budget: any invalid or manifest-mismatching result stops immediately. The repair may use only IDs present in the original snapshot; it must remove an operation whose intended source cannot be proven instead of inventing another ID. If the replacement still fails, leave the Prefab unchanged, disable confirmation, and report the final validation failure.
+Every AI-specific prompt must supply the canonical plan format and authoritative node snapshot before the first response. The snapshot is authoritative for hierarchy, node identity, geometry, components, active state, and references. Read only a targeted Prefab section when the snapshot explicitly lacks evidence or conflicts with serialized data; do not repeatedly read the complete Prefab and snapshot. Do not infer JSON names, node IDs, or paths from prose or use a legacy schema. The complete workflow has a small, bounded automatic JSON-repair budget, and each repair message lists every problem Unity found. Keep that repair in the same AI session and request one complete replacement JSON code block with no prose. The automatic second stage has no additional repair budget: any invalid or manifest-mismatching result stops immediately. The repair may use only IDs present in the original snapshot; it must remove an operation whose intended source cannot be proven instead of inventing another ID. If the replacement still fails, leave the Prefab unchanged, disable confirmation, and report the final validation failure.
 
-## Bundled Tools
+## Workflow Tools
 
-Use a supported Unity Editor API execution path. When the project setting is `NativeUnity`, keep the entire standard workflow on that backend. Do not invoke uloop merely because a bundled fallback script exists. Do not hand-edit serialized Unity files or write one-off cleanup payloads.
+Execute everything through Unity Editor APIs. Do not hand-edit serialized Unity files or write one-off cleanup payloads.
 
-1. Inspect first through `scripts/snapshot_prefab_hierarchy.ps1`; it is read-only and emits the complete tree, RectTransform state, UI components, Sprite/Texture paths, TMP state, nested Prefab boundaries, and counts.
-2. Run `scripts/find_prefab_component_candidates.py` whenever the snapshot contains repeated visual units. The Unity AI chat snapshot also emits numbered repeated-family candidates. Record every candidate in `componentFamilyDecisions`; a chat candidate marked `requiresExtraction: true` must be extracted and cannot be skipped. A candidate marked `requiresExtraction: false` is advisory and may be skipped with concrete recursive-structure evidence. A family whose members are not all structurally identical also reports `numbered_structure_subset` candidates: the members that do share one recursive structure. Prefer the family-level extraction when it is marked required, and use a subset when the family only fits a variant or when a narrower boundary is cleaner. A single-member subset is a report that the member has no peer, not an instruction to extract it alone.
-3. Author a version 2 `node:<id>` plan from [references/plan-format.md](references/plan-format.md). A path-based version 1 plan is read-only diagnostics only, and the retired runner modes refuse it.
-4. Execute only through the Unity core: the human approves in the terminal, the AI writes `<session>.apply`, and Unity applies it and reports `<session>.apply-result.json`. `scripts/run_native_cleanup.py` and `run_prefab_hierarchy_cleanup.ps1 -ApplyConfirmed` no longer perform formal writes.
+1. Read the authoritative JSON snapshot that Unity provides for the session (the chat window supplies it; a terminal session names its absolute path in the task file). It carries every node as `node:<id>` with path, name, components, geometry, Sprite/Texture paths, TMP state, nested Prefab boundaries, `componentFamilyCandidates`, `containmentFindings` and `flatSiblingFindings`. Its root node is marked `isPrefabRoot: true`, `renameLocked: true` and `requiredName`. Copy `fingerprint` into `snapshotFingerprint`.
+2. Review every `componentFamilyCandidates` entry; `scripts/find_prefab_component_candidates.py` is an optional extra discovery aid. Record every candidate in `componentFamilyDecisions`; a candidate marked `requiresExtraction: true` must be extracted and cannot be skipped. A candidate marked `requiresExtraction: false` is advisory and may be skipped with concrete recursive-structure evidence. A family whose members are not all structurally identical also reports `numbered_structure_subset` candidates: the members that do share one recursive structure. Prefer the family-level extraction when it is marked required, and use a subset when the family only fits a variant or when a narrower boundary is cleaner. A single-member subset is a report that the member has no peer, not an instruction to extract it alone.
+3. Author a version 2 `node:<id>` plan from [references/plan-format.md](references/plan-format.md). Optionally lint it offline with `scripts/validate_plan_locally.py` and `scripts/simulate_and_verify_plan.py` against the same JSON snapshot.
+4. Execute only through the Unity core: the human approves, the AI writes `<session>.apply`, and Unity validates, applies and reports `<session>.apply-result.json`.
 5. Never write `.apply` before explicit human approval, and never write it twice for the same request.
 6. If the receipt reports `rejected`, report the complete error and stop. A correction must be emitted as a complete new review and plan under a new request, then receive explicit human approval before its own `.apply` is written.
 7. If the receipt reports `partial` or `uncertain`, do not apply again: verify the saved state and require a new review.
-
-```text
-# Retired: this form fails by design and performs no write.
-# & <skill-dir>/scripts/run_prefab_hierarchy_cleanup.ps1 -ProjectPath ... -PlanPath ... -AllowUloopFallback -ApplyConfirmed
-```
-
-```powershell
-& <skill-dir>/scripts/snapshot_prefab_hierarchy.ps1 `
-  -ProjectPath "E:\\Project\\Demo\\monsterhunter" `
-  -PrefabAssetPath "Assets/UI/RewardPanel.prefab"
-```
-
-The snapshot script calls the registered NativeUnity `eval_file` Unity Pipeline command and therefore never invokes uloop. The optional runner is uloop-only, requires `-AllowUloopFallback`, never installs or downloads uloop, and removes its temporary UTF-8 C# payload after the Unity call returns.
-
-Use `-CompileOnly` only after the renderer, runner, or generated C# source changes. An ordinary new extraction plan uses one preflight and one apply; do not add a redundant compile-only pass.
-
-### NativeUnity run ledger and timing contract
-
-Every snapshot, preflight, apply, and verify invocation must go through `scripts/run_native_cleanup.py` (or an equivalent Unity chat bridge that emits the same evidence). The runner creates a unique `Library/PrefabCleanupRuns/<run-id>/` directory containing:
-
-- `events.jsonl`: one flushed JSON object for every phase start, periodic heartbeat, phase end, and workflow error. Each event includes the target, UTC timestamp, phase, status, exit code when available, and elapsed milliseconds from both the phase and run start.
-- `summary.json`: final status, total elapsed time, every completed phase, and the slowest phases. A missing summary or non-`passed` status is not completion evidence.
-- phase stdout/stderr and the validated phase result, plus a frozen copy of the exact plan used for mutation.
-
-The heartbeat interval must be bounded and visible while Unity is compiling, importing, saving, or waiting. Never infer a hang from silence. If the CLI times out during Apply, the state is indeterminate: do not replay Apply or create a second mutation plan. Run Verify with the same frozen plan, inspect the ledger, and only then decide whether a narrowly corrected plan is safe.
-
-The runner's phase semantics are exact: Snapshot is read-only; Preflight simulates the complete unsaved tree and rejects any contract mismatch; Apply is the only mutating phase and requires the already-reviewed plan plus explicit apply authorization; Verify reopens the saved asset and checks the same manifest, hierarchy, names, references, layout, extraction topology, image ownership, and missing-component invariants. A zero exit code without a validated `PREFLIGHT_OK`/`VERIFY_OK` result is failure.
-
-```powershell
-& <skill-dir>/scripts/run_prefab_hierarchy_cleanup.ps1 `
-  -ProjectPath "E:\\Project\\Demo\\monsterhunter" `
-  -PlanPath "C:\\Temp\\reward-panel-components.plan.json" `
-  -AllowUloopFallback `
-  -CompileOnly
-```
-
-```powershell
-$priorOutputEncoding = $OutputEncoding
-try {
-  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-  $snapshot = & <skill-dir>/scripts/snapshot_prefab_hierarchy.ps1 `
-    -ProjectPath "E:\\Project\\Demo\\monsterhunter" `
-    -PrefabAssetPath "Assets/UI/RewardPanel.prefab"
-  ($snapshot | ConvertFrom-Json).data.result |
-    python <skill-dir>/scripts/find_prefab_component_candidates.py -
-}
-finally { $OutputEncoding = $priorOutputEncoding }
-```
+8. After every successful apply the Prefab file, and therefore the snapshot fingerprint, has changed. Read the current snapshot again before authoring any further plan; never reuse an old `snapshotFingerprint` or old node IDs.
 
 ## Operating Contract
 
@@ -130,7 +85,7 @@ finally { $OutputEncoding = $priorOutputEncoding }
 - Start read-only. Inspect the complete hierarchy, components, RectTransforms, active state, asset references, and nested Prefab instances before proposing changes.
 - Infer semantic groups from geometry, component/type patterns, visible hierarchy, repeated structures, and existing names. Names are a hint, never sole membership evidence.
 - Produce one complete final-tree proposal before applying. Include nested repeated units such as `[Item_*]`, cards, progress segments, map markers, tabs, or rows; do not stop at coarse region wrappers.
-- Assign every moved source node exactly once. Rename every exported object to a concise English semantic name; retain brackets only for structural groups such as `[ContentCard_1]`. A text value (`20`, `+`, `150k`, `login 1 day`), PSD/export token (for example a configured `ui_*` or `img_v*` prefix), UUID-like export name, punctuation-only name, or duplicate ambiguous sibling name is not semantic. Name the role, such as `ActivityAmount`, `PlusLabel`, `MissionIcon`, or `MissionDescription`. With `verify.requireEnglishNames`, the runner rejects those baseline invalid forms even when a plan omits custom patterns. Never delete, duplicate, merge, replace components, or change bindings merely to make the tree look cleaner. The sole structural exception is `emptyContainerRemovals`: list a pre-existing container only when every one of its current direct children is moved out or is itself removed earlier in the same removal list. Nested removals must use child-before-parent order. The resulting container must be empty, have no components beyond its `Transform`, and have no external serialized references.
+- Assign every moved source node exactly once. Rename every exported object to a concise English semantic name; retain brackets only for structural groups such as `[ContentCard_1]`. A text value (`20`, `+`, `150k`, `login 1 day`), PSD/export token (for example a configured `ui_*` or `img_v*` prefix), UUID-like export name, punctuation-only name, or duplicate ambiguous sibling name is not semantic. Name the role, such as `ActivityAmount`, `PlusLabel`, `MissionIcon`, or `MissionDescription`. Before confirmation the Unity chat window's naming gate computes every node's final name and lists every one that is still not semantic, so rename all of them in the same plan. Never delete, duplicate, merge, replace components, or change bindings merely to make the tree look cleaner. The sole structural exception is `emptyContainerRemovals`: list a pre-existing container only when every one of its current direct children is moved out or is itself removed earlier in the same removal list. Nested removals must use child-before-parent order. The resulting container must be empty, have no components beyond its `Transform`, and have no external serialized references.
 - Every plan-owned ID, including `wrappers[].id`, extraction `id`, and state `id`, must be lower snake_case matching `^[a-z][a-z0-9_]*$`. Use IDs such as `screen_root`, `day_markers`, or `task_in_progress`; never use PascalCase, kebab-case, spaces, brackets, or an `@` prefix. The `@` prefix is reserved only for a later reference to an earlier wrapper, such as `@screen_root`.
 - Treat ambiguous membership, a likely serialized binding, nested Prefab boundary, or unfamiliar custom component as a blocker. State the ambiguity and leave that portion unchanged rather than guessing.
 - Require explicit user confirmation of the reviewed plan before writing. A request to inspect or organize does not authorize an immediate asset mutation.
@@ -140,7 +95,7 @@ finally { $OutputEncoding = $priorOutputEncoding }
 - Treat the candidate scanner as a discovery aid, not a safety proof. It reports both strictly matching structures and high-confidence numbered families; the latter may vary in `sizeDelta` or state structure, which must be represented as reviewed instance overrides or a stateful mapping. Every result still passes the Unity-side nested-boundary, external-reference, and structural checks during apply.
 - Treat visually overlapping alternatives as states, not repeated instances. A `stateComponentExtractions` plan replaces all approved sibling state sources with one nested component containing a `[States]` container. It requires an explicit semantic state mapping and a single default state; never infer those names from layer order alone.
 - Treat simultaneously visible list rows that share one logical component but display at least two distinct observed visual states as a `variantComponentExtractions` family. Create exactly one shared Prefab under `Prefab/Common/`; its root must contain direct `[Common]` and `[States]` children. Use one observed representative row in `states[].source` for each unique state, then list every approved row exactly once in `instances`; multiple instances may select the same state. If all visible rows have one observed state, use `componentExtractions` instead and do not invent a state branch. Replace every approved source row with an instance of that same Prefab, preserve the row's list position and instance name, and activate exactly the mapped state in each instance. `[Common]` may be empty only when no element can be proven common to every state without changing the rendering.
-- Treat a repeated unit with both stable members and a finite set of visual variants as a `statefulComponentExtractions` family. Create exactly one shared Prefab under `Prefab/Common/`, with direct `[States]` followed by `[Common]` children so shared labels still render above state backgrounds. Every source unit must map every direct member exactly once into `[Common]` or its selected state; `Common` must contain every member proven common. A named all-common state may have an empty `members` list only when its instances map every direct child through `commonSourceNames` and use an empty `stateSourceNames` list; never use an empty state to hide an unmapped child. In the Unity chat, an incomplete Common or selected-state list is rebuilt from the authoritative snapshot only when the opposite side or the reviewed source contract proves the partition, and the other side is the exact ordered complement; the direct runner keeps requiring both explicit complete mappings. Reuse one semantic state branch across all matching instances and apply only the approved instance overrides, such as a counter value. Do not create a distinct state solely because an instance label differs.
+- Treat a repeated unit with both stable members and a finite set of visual variants as a `statefulComponentExtractions` family. Create exactly one shared Prefab under `Prefab/Common/`, with direct `[States]` followed by `[Common]` children so shared labels still render above state backgrounds. Every source unit must map every direct member exactly once into `[Common]` or its selected state; `Common` must contain every member proven common. A named all-common state may have an empty `members` list only when its instances map every direct child through `commonSourceNames` and use an empty `stateSourceNames` list; never use an empty state to hide an unmapped child. Every instance must list both complete mappings explicitly; Unity never rebuilds or completes a missing Common or selected-state list. Reuse one semantic state branch across all matching instances and apply only the approved instance overrides, such as a counter value. Do not create a distinct state solely because an instance label differs.
 - State extraction creates hierarchy and the initial active branch only. It does not create or attach a runtime state-switching script, Animator, or binding; use the project's established presentation owner to switch the branches later.
 
 ## Workflow
@@ -171,14 +126,14 @@ Present complete Markdown tables for the in-place target, grouping and naming, e
 
 Never use Python, Shell, regular expressions, or other text processing to edit `.prefab`, `.asset`, or `.unity` serialized contents. All hierarchy mutations must use Unity Editor APIs.
 
-- Use `PrefabUtility`, `GameObject`, `Transform`, `AssetDatabase`, and the project's supported NativeUnity or runner backend.
+- Use `PrefabUtility`, `GameObject`, `Transform`, `AssetDatabase`, and the Unity shared cleanup core.
 - Each stage gets one Apply attempt. A timeout or indeterminate result permits exactly one read-only verification of the saved state, then stops.
 - Never automatically rerun the same plan, restore a backup, reimport the PSD, generate a third plan, or continue to another AI stage after an Apply failure or contract warning.
 - A failed Apply may have partially saved the Prefab. Report the observed saved state; never assume either the original or intended state.
 
 ### 4. Apply Through Unity
 
-After the single confirmation, apply through the backend selected in the Unity AI chat window. With `NativeUnity`, do not call the uloop runner. If the confirmed hierarchy stage creates the repeated-unit roots needed for extraction, Unity itself refreshes the snapshot, rebuilds the second stage from `postGroupingExtractionIntents` (adding the `componentFamilyDecisions` the refreshed snapshot requires), preflights it, and applies it through the same shared core without asking the user. The generated Unity operations use Editor APIs only:
+After the single confirmation, Unity applies the plan through its shared cleanup core. If the confirmed hierarchy stage creates the repeated-unit roots needed for extraction, Unity itself refreshes the snapshot, rebuilds the second stage from `postGroupingExtractionIntents` (adding the `componentFamilyDecisions` the refreshed snapshot requires), preflights it, and applies it through the same shared core without asking the user. The generated Unity operations use Editor APIs only:
 
 - Load with `PrefabUtility.LoadPrefabContents`.
 - Create only the approved wrapper `GameObject`s, transfer the approved transforms under them, preserve sibling order, then tighten each wrapper to its direct-child bounds while preserving every existing child's world corners.
@@ -193,8 +148,6 @@ Only the reviewed in-place plan may create a shared nested component asset. Its 
 
 When the confirmed plan includes private asset renames, it also verifies the original GUID for every Texture after `AssetDatabase.RenameAsset`, then reloads the saved Prefab and checks all `Image` Sprite references.
 
-For this project, use the existing NativeUnity backend when it is selected. The bundled uloop runner is an explicit fallback only and requires `-AllowUloopFallback`; it must never be reached implicitly from a NativeUnity workflow. Never download or install an execution tool during a cleanup run.
-
 Never edit `.prefab` YAML text, reconstruct the Prefab, reimport PSD assets, regenerate textures, manually move files, or create replacement `.meta` files as part of hierarchy cleanup.
 
 ### 5. Verify the Saved Asset
@@ -207,12 +160,12 @@ Reopen the saved Prefab and compare it with the before snapshot. Report evidence
 - all object names are English semantic names; no PSD/export, Chinese, or punctuation-heavy source names remain;
 - preserved active states, component counts/types, object references, Sprite/TMP/font/material assignments, and nested Prefab boundaries;
 - missing Sprite references on the target Prefab itself are target-owned verification issues and must be surfaced, never silently classified as inherited nested-Prefab issues. A missing Sprite inside an unchanged nested Prefab instance is reported separately by path; fix that source asset through its own owner rather than crossing the nested boundary;
-- after a successful save, surface any `VERIFY_WARN issue=...` and stop before another stage. A hierarchy, membership, path, state, reference, layout, or manifest mismatch is blocking and is never completion proof. The pre-confirmation simulation must treat the same mismatch as a rejection, not a warning that may reach user confirmation;
+- after a save, a `partial` result means a verification contract failed: surface it and stop before another stage. A hierarchy, membership, path, state, reference, layout, or manifest mismatch is blocking and is never completion proof. The pre-confirmation simulation must treat the same mismatch as a rejection, not a warning that may reach user confirmation;
 - each separately extracted unit is a nested Prefab instance sourced from the approved shared component asset, with every affected RectTransform world corner preserved within `0.01`;
 - each separately extracted state component is a nested Prefab instance with one direct `[States]` container, all approved state branch names in order, exactly one active default branch, and every state branch's world corners preserved within `0.01`;
 - each separately extracted variant component is a nested instance of the one reviewed `Prefab/Common` asset, has direct `[Common]` and `[States]` containers, contains every approved state branch in order, and has exactly its mapped branch active;
 - each separately extracted stateful component is a nested instance of the one reviewed `Prefab/Common` asset, has non-empty `[Common]` and `[States]` containers, contains each approved state branch once, maps every source direct member exactly once, and has exactly its mapped branch active;
-- all private Texture files in scope use the exact `PrefabName_` filename prefix, and `verify.forbiddenObjectNamePatterns` rejects residual PSD/export or text-value node names;
+- all private Texture files in scope use the exact `<prefabName>_` filename prefix, and no residual PSD/export or text-value node name remains in scope;
 - `Missing Component = 0`;
 - every pre-existing node is still present with an unchanged fingerprint (component types, `Image`
   sprite, TMP text, `sizeDelta`/anchors/pivot/`localScale`/`rotationZ`), and every extracted unit's
@@ -282,9 +235,8 @@ Technical verification is not completion proof. A cleanup must be rejected as in
 
 ## Project-verified engine realities (read this before authoring a plan)
 
-Measured in this project with the NativeUnity backend (`run_native_cleanup.py`, `unity.exe command
-eval_file`). Two of them contradict the written plan format and have already produced real damage,
-so they are rules, not tips.
+Measured in this project with the Unity shared cleanup core. They have already produced real
+damage, so they are rules, not tips.
 
 - **R1 — New containers are not tightened automatically.** A wrapper created by a plan keeps
   `sizeDelta = 0` unless the same plan lists it in `tightBounds`. Always emit `tightBounds` for
@@ -293,31 +245,26 @@ so they are rules, not tips.
   `validate_plan_locally.py` fails this rule as a warning before the Unity preflight.
 - **R2 — Extraction stages expand the tree.** `componentExtractions`, `stateComponentExtractions`,
   `variantComponentExtractions` and `statefulComponentExtractions` replace source units with nested
-  instances, so `verify.nodes|components|images` must be the **post-expansion** expectation. Passing
-  the pre-apply snapshot numbers gives `VERIFY_WARN issue=nodes expected=.. actual=..` *after* the
-  asset is already saved. Prefer omitting those counts in an extraction stage, or take a fresh
+  instances, so `verify.nodes` must be the **post-expansion** expectation. Passing the pre-apply
+  snapshot count fails verification (`partial`) *after* the asset is already saved. Prefer omitting those counts in an extraction stage, or take a fresh
   snapshot first.
-- **R3 — The CLI text snapshot has no node ids.** `snapshot_prefab_hierarchy.ps1` (and the runner's
-  Snapshot phase) emit `SUMMARY`/`NODE` text with paths, rects, active flags and children, but no
-  `node:<id>`. Such a snapshot can only author a **version 1 (path) plan**; a version 2 (node-id)
-  plan needs the Unity chat window's JSON snapshot. See `parse_hierarchy_snapshot.py`.
-- **R4 — A transport timeout is not a contract mismatch.** If the `verify` phase fails with
-  `Pipeline server returned 400 Bad Request ... Main thread operation timed out`, the Apply phase has
-  already returned `VERIFY_OK`. Do not replay Apply: re-run `--mode verify` once (read-only) or run
-  the read-only checkers, and report the ledger paths.
+- **R3 — The Prefab root is rename-locked.** The snapshot root carries `isPrefabRoot`,
+  `renameLocked` and `requiredName` (the asset file name). Never put it in `renames`, even when the
+  name is Chinese; Unity rejects the plan. `prefabName` is not the root name. A different root name
+  requires renaming the Prefab asset file, which is outside this skill.
+- **R4 — The snapshot expires on every successful apply.** `fingerprint` is the Prefab file hash.
+  Read the current snapshot again before the next plan; an old `snapshotFingerprint` or old node IDs
+  are rejected.
 - **R5 — `eval_file` payloads are top-level statements only.** No `using` directives (they fail to
   compile with "Identifier expected"); `UnityEngine`, `UnityEditor`, `System` and
   `System.Collections.Generic` are implicitly available; qualify `UnityEngine.UI.*` explicitly, and
   `return` a string to get it back in the CLI result.
-- **R6 — Never name a version 1 plan `*.plan.json`.** Terminal / external sessions write
-  `Library/PsdHierarchyTerminal/<session>.plan.json` and Unity auto-applies only after a human-approved
-  `<session>.apply` sentinel (then reports `<session>.apply-result.json`). That chat/terminal plan must
-  be **version 2** (`node:<id>` references). Never run `scripts/render_prefab_cleanup.py` yourself on a
-  version 2 plan: the Python runner only accepts **version 1** path plans and will fail with
-  `version must be 1`. Unity converts/executes v2 internally. Use e.g. `<session>.rectfix.v1.json` only
-  for non-chat path plans that are not applied through the terminal sentinel flow.
+- **R6 — Terminal session files.** External sessions write
+  `Library/PsdHierarchyTerminal/<session>.plan.json` (version 2, `node:<id>` references) and the
+  review file; Unity applies only after a human-approved `<session>.apply` sentinel and reports
+  `<session>.apply-result.json`. Never run any script to apply a plan yourself.
 - **R7 — What the plan language cannot express** (verified: no `UnpackPrefab` anywhere in the project
-  tooling, and the renderer deletes assets only in rollback/replay paths): moving nodes across a
+  tooling, and the executor deletes assets only in rollback/replay paths): moving nodes across a
   nested-Prefab boundary, editing an existing asset's internals, unpacking an instance, and deleting
   an asset. When a request needs one of these (e.g. "these two Prefabs should be one"), a plan cannot
   do it. The reviewed escape hatch is *bake-and-propagate*:
@@ -339,7 +286,7 @@ so they are rules, not tips.
 - **R9 — Authored plan files never live inside this skill directory.** A plan JSON is a per-run
   artifact, not skill knowledge. Write every authored/frozen plan to
   `<project-root>/Library/PrefabCleanupPlans/` (already covered by the `Library/` gitignore rule);
-  the runner's own evidence stays in `Library/PrefabCleanupRuns/<run-id>/`. Test fixtures are the
+  Test fixtures are the
   only plan files that belong to the skill, and they live in `scripts/tests/fixtures/`. The former
   `plans/` directory at the skill root was removed on 2026-09-16 precisely because runtime output
   kept landing there untracked.
@@ -348,18 +295,23 @@ so they are rules, not tips.
 
 | script | purpose |
 |---|---|
-| `scripts/parse_hierarchy_snapshot.py` | normalise a text/JSON snapshot, print metrics + tree, emit a v1 plan skeleton |
-| `scripts/validate_plan_locally.py` | offline linter: refs, uniqueness, removals, naming gate, directChildren, plus R1/R2 warnings |
+| `scripts/parse_hierarchy_snapshot.py` | normalise the Unity JSON snapshot, print metrics + tree |
+| `scripts/validate_plan_locally.py` | offline linter for version 2 `node:<id>` plans: refs, root rename, uniqueness, removals, naming gate, directChildren, plus R1/R2 warnings |
 | `scripts/simulate_and_verify_plan.py` | rebuild the final tree offline and prove `verify.hierarchy/directChildren/absentPaths` (caught a real double-wrapper defect) |
-| `scripts/check_extraction_result.py` | prove a finished extraction: instance names/order, `[Common]`/`[States]`, exactly one active mapped state, and (stateful) the declared Common + state member names - covers `component`, `state`, `variant` and `stateful` |
+| `scripts/check_extraction_result.py` | prove a finished extraction: instance names/order, `[Common]`/`[States]`, exactly one active mapped state, and (stateful) the declared Common + state member names - covers `component`, `state`, `variant` and `stateful`; run as `--plan <plan> --before-snapshot <snapshot the plan was written against> --snapshot <fresh after-apply snapshot>` |
 | `scripts/audit_prefab_preservation.py` | **before/after preservation audit**: prove that every pre-existing node survived with the same components, sprite, TMP text and reparent-invariant RectTransform values, and that each extracted unit's `[Common]` + active branch reproduces the unit it replaced (`--mode capture` needs Unity, `--mode compare` is pure offline) |
 | `scripts/read_unity_selection.py` | read the user's live Editor selection / Prefab Stage / nested-instance links (read-only, `--mode selection|instance-links|prefab-stage`) |
+| `scripts/find_prefab_component_candidates.py` | optional extra discovery of repeated component families from the JSON snapshot (advisory only) |
+| `scripts/prefab_visual_audit.py` | render-capture payloads plus a strict RGBA comparison for before/after visual proof |
 | `scripts/payloads/read_selection.cs` | the eval_file payload behind it (template for R5) |
 | `scripts/payloads/audit_prefab_dump.cs` | the read-only tree+fingerprint dump behind the preservation audit (marker `DUMP_BEGIN`/`DUMP_END`) |
 
-Typical session order: snapshot -> semantics -> plan -> `validate_plan_locally.py` ->
+All read-only diagnostics accept only the Unity JSON snapshot and version 2 `node:<id>` plans; none of
+them writes to the Prefab.
+
+Typical session order: read the current JSON snapshot -> semantics -> plan -> `validate_plan_locally.py` ->
 `simulate_and_verify_plan.py` -> `audit_prefab_preservation.py --mode capture` (BEFORE, per stage) ->
-Unity preflight -> user confirmation -> one Apply ->
+user approval -> one `.apply` (Unity preflights and applies) ->
 read-only verification (`check_extraction_result.py`, `audit_prefab_preservation.py --mode compare`,
-container tightness, world-rect preservation,
-`--mode instance-links`) -> record evidence in the review file.
+`read_unity_selection.py --mode instance-links`) -> record evidence in the review file -> read a fresh
+snapshot before any further plan.

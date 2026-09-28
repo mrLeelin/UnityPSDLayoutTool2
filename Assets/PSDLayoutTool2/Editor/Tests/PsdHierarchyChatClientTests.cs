@@ -568,6 +568,11 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(prompt, Does.Contain("Use skill prefab-hierarchy-cleanup"));
             Assert.That(prompt, Does.Contain("EXTERNAL SESSION CONTRACT"));
+            Assert.That(prompt, Does.Contain(PsdHierarchyChatClient.PrefabRootNameContract));
+            Assert.That(prompt, Does.Contain(PsdHierarchyChatClient.VerifyFieldContract));
+            Assert.That(prompt, Does.Contain(PsdHierarchyChatClient.PrefabNameContract));
+            Assert.That(prompt, Does.Contain(PsdHierarchyChatClient.SnapshotRefreshContract));
+            Assert.That(prompt, Does.Not.Contain("version 1"));
             Assert.That(prompt, Does.Contain("Unity project root: E:/Project/Demo/monsterhunter"));
             Assert.That(
                 prompt,

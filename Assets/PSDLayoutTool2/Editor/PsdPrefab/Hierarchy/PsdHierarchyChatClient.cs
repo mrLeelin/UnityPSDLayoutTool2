@@ -217,7 +217,7 @@ namespace PsdLayoutTool2
         internal readonly IReadOnlyList<PsdHierarchyComponentFamilyCandidate> componentFamilyCandidates;
 
         // Kept as raw snapshot JSON: the plan writer copies these entries through to the
-        // runner plan unchanged apart from node-reference resolution.
+        // execution plan unchanged apart from node-reference resolution.
         internal readonly JArray containmentFindings;
         internal readonly JArray flatSiblingFindings;
         private readonly Dictionary<string, string> nodePathsById;
@@ -289,6 +289,8 @@ namespace PsdLayoutTool2
             builder.AppendLine("Private-asset renames ARE executable: textureRenames[] and spriteAtlasRenames[] entries are {from, toName, expectedGuid}. toName has no extension; every Texture toName must start with \"<prefabName>_\", every SpriteAtlas toName must equal prefabName, each from must be a private asset of the current target Prefab (a Texture referenced by it, or a SpriteAtlas in the Prefab's own folder), and the rename target must not exist yet. Leave expectedGuid empty so Unity captures the current identity, or paste an exact GUID to pin it.");
             builder.AppendLine(PsdHierarchyChatClient.PlanIdentifierContract);
             builder.AppendLine(PsdHierarchyChatClient.PrefabRootNameContract);
+            builder.AppendLine(PsdHierarchyChatClient.VerifyFieldContract);
+            builder.AppendLine(PsdHierarchyChatClient.PrefabNameContract);
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
             if (localRepairScope != null)
             {
@@ -618,13 +620,6 @@ namespace PsdLayoutTool2
                     out snapshotFingerprint,
                     out hierarchySnapshotFullPath,
                     out error))
-            {
-                return false;
-            }
-
-            PsdHierarchyCleanupExecutionSettingsSnapshot executionSettings =
-                PsdLayoutProjectSettings.instance.ResolveHierarchyCleanupExecutionSettings();
-            if (!executionSettings.TryValidate(out error))
             {
                 return false;
             }
@@ -2014,6 +2009,12 @@ namespace PsdLayoutTool2
             "Every wrappers[].id must use lower snake_case matching [a-z][a-z0-9_]*; examples: screen, screen_root, day_markers. Do not use uppercase, hyphens, spaces, brackets, or @ in an id. The @ prefix is only for a later reference such as @screen_root. Apply the same lower snake_case rule to all extraction IDs and state IDs.";
         internal const string PrefabRootNameContract =
             "PREFAB ROOT IS RENAME-LOCKED: the snapshot node marked isPrefabRoot/renameLocked is the asset identity and must keep its requiredName (the Prefab file name) exactly, even when it is Chinese, contains _psd, or is not PascalCase. Never put the root in renames[]; the English-semantic naming rule and prefabName do not apply to the root. Every verify path must begin with that unchanged root name. Rename the Prefab asset file outside this plan if a different root name is wanted.";
+        internal const string VerifyFieldContract =
+            "VERIFY FIELDS: verify may contain only nodes, hierarchy, absentPaths, directChildren and tightBounds. Any other key (components, objectReferences, images, requireEnglishNames, forbiddenObjectNamePatterns, ...) is rejected before any write.";
+        internal const string PrefabNameContract =
+            "PREFAB NAME IS THE PRIVATE-ASSET PREFIX: every textureRenames[].toName must start with prefabName + \"_\" and every spriteAtlasRenames[].toName must equal prefabName. Choose prefabName yourself as an English PascalCase name ending with View (for example MainScreenView); it is independent of the Prefab root and file name, which stay unchanged.";
+        internal const string SnapshotRefreshContract =
+            "SNAPSHOT FRESHNESS: snapshotFingerprint is the hash of the Prefab file, so it changes after every successful apply. Re-read the current snapshot before planning again and never reuse an old fingerprint or node id.";
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
             "1. 结合 PSD 与 Prefab 的完整层级、节点几何、组件、同级顺序和重复结构，说明当前结构的主要问题。\n" +
@@ -2051,6 +2052,8 @@ namespace PsdLayoutTool2
             builder.AppendLine("Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.");
             builder.AppendLine(PlanIdentifierContract);
             builder.AppendLine(PrefabRootNameContract);
+            builder.AppendLine(VerifyFieldContract);
+            builder.AppendLine(PrefabNameContract);
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.");
             builder.AppendLine("CRITICAL: Every emptyContainerRemovals entry must reference a container that will be COMPLETELY EMPTY after all moves execute. Before adding a container to emptyContainerRemovals, verify that EVERY child node under that container has a corresponding move operation that relocates it elsewhere. If any child remains unmoved, the container is not empty and must NOT be in emptyContainerRemovals. When the error says 'Container is not empty after planned moves', it means you listed a container for removal that still has children—either move ALL its children first, or remove that container from emptyContainerRemovals.");
             builder.AppendLine("CRITICAL: Keep containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions as EMPTY arrays. The current Unity executor runs wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents, and it refuses any other non-empty array before a write; repeating an unsupported operation in the replacement plan cannot succeed. Report the blocked work in the review text instead. Keep every reviewed postGroupingExtractionIntents entry byte-identical: its post-grouping paths and states are resolved against a refreshed snapshot after the hierarchy stage is saved, so do not rewrite them into node:<id> references.");
@@ -2070,6 +2073,9 @@ namespace PsdLayoutTool2
             builder.AppendLine("Failure detail: " + detail);
             builder.AppendLine("Do not reuse a failed hierarchy assumption. Every existing-node reference and direct-child contract must be rebuilt from the current authoritative snapshot.");
             builder.AppendLine(PsdHierarchyChatClient.PrefabRootNameContract);
+            builder.AppendLine(PsdHierarchyChatClient.VerifyFieldContract);
+            builder.AppendLine(PsdHierarchyChatClient.PrefabNameContract);
+            builder.AppendLine(PsdHierarchyChatClient.SnapshotRefreshContract);
             builder.AppendLine("For every textureRenames[].from or spriteAtlasRenames[].from, use only an exact path from the current allowed asset source list. If the failed path is absent, remove or replace that operation; never guess an incremented filename.");
             if (context?.hasAuthoritativeAssetRenameSourcePaths == true)
             {
@@ -2123,6 +2129,8 @@ namespace PsdLayoutTool2
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every reference to an existing node must use node:<id> from the authoritative snapshot. Never emit a raw hierarchy path or invent a node ID.");
             builder.AppendLine(PlanIdentifierContract);
             builder.AppendLine(PrefabRootNameContract);
+            builder.AppendLine(VerifyFieldContract);
+            builder.AppendLine(PrefabNameContract);
             builder.AppendLine("EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions (with componentFamilyDecisions mode=component), stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents (executed automatically as a second stage after the grouping is saved and the snapshot is refreshed) are executable. Everything else must stay empty: containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions, crossParentPrefabExtractions. Unity refuses a non-empty unsupported array before any write.");
             builder.AppendLine("Keep prefabName present for schema stability; this version never derives it, and it must not be used to hide conflicting toName values. Every postGroupingExtractionIntents entry uses post-grouping hierarchy paths in templatePath and instances[].path, never node:<id>.");
             builder.AppendLine("The executable plan-format file is authoritative for field names and object shapes; where it still describes an operation as unsupported, this instruction wins.");
@@ -2818,7 +2826,11 @@ namespace PsdLayoutTool2
             builder.AppendLine("If a listed file cannot be read, stop and report that exact absolute path instead of guessing its contents.");
             builder.AppendLine("This is an analysis and plan session started outside Unity. Do not modify Unity assets and do not claim that any asset was changed.");
             builder.AppendLine("Write the complete executable version 2 JSON plan (and no partial patch) to: " + ToPortableFullPath(planFullPath));
-            builder.AppendLine("Do not write a version 1 path plan. Do not call any Python renderer or CLI runner: their write modes are retired and Unity applies the reviewed plan itself after the .apply sentinel.");
+            builder.AppendLine("Unity validates and applies the reviewed plan itself after the .apply sentinel; never run a script to modify the Prefab.");
+            builder.AppendLine(PrefabRootNameContract);
+            builder.AppendLine(VerifyFieldContract);
+            builder.AppendLine(PrefabNameContract);
+            builder.AppendLine(SnapshotRefreshContract);
             builder.AppendLine("EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents are executable; every other operation array must stay empty because Unity refuses a non-empty unsupported array before any write.");
             builder.AppendLine("Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's source roots must completely cover the candidate sources. A deferred candidate is checked again against the refreshed snapshot before second-stage execution.");
             builder.AppendLine("containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions MUST stay empty arrays: Unity refuses a non-empty one before any write.");

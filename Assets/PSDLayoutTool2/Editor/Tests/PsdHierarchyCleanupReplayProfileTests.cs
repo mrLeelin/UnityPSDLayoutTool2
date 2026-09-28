@@ -42,52 +42,14 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void ReplayPlansRetargetOnlyTheGeneratedPrefab()
-        {
-            PsdHierarchyCleanupReplayProfile profile = CreateProfile();
-            try
-            {
-                const string stagedPath =
-                    "Assets/PSDLayoutTool2Settings/HierarchyReplayTemp/candidate.prefab";
-
-                Assert.That(profile.TryBuildReplayPlans(
-                    SourceGuid,
-                    TargetPath,
-                    stagedPath,
-                    out IReadOnlyList<string> replayPlanJsonStages,
-                    out string error), Is.True, error);
-
-                Assert.That(replayPlanJsonStages, Has.Count.EqualTo(1));
-                var replayPlan = JObject.Parse(replayPlanJsonStages[0]);
-                Assert.That(replayPlan.Value<string>("prefabAssetPath"), Is.EqualTo(stagedPath));
-                Assert.That(replayPlan["output"].Value<string>("assetPath"), Is.EqualTo(stagedPath));
-                Assert.That(
-                    replayPlan["componentExtractions"][0].Value<string>("assetPath"),
-                    Is.EqualTo(ComponentPath));
-                Assert.That(replayPlan["verify"], Is.TypeOf<JObject>());
-                Assert.That(((JObject)replayPlan["verify"]).HasValues, Is.False);
-            }
-            finally
-            {
-                Object.DestroyImmediate(profile);
-            }
-        }
-
-        [Test]
         public void AppendStagePreservesExecutionOrder()
         {
             PsdHierarchyCleanupReplayProfile profile = CreateProfile();
             try
             {
-                string secondPlan = CreateRunnerPlan("second_component");
-                profile.AppendStage(SourceGuid, TargetPath, secondPlan);
+                profile.AppendStage(SourceGuid, TargetPath, CreateStagePlan("second_component"));
 
-                Assert.That(profile.TryBuildReplayPlans(
-                    SourceGuid,
-                    TargetPath,
-                    "Assets/Temp/ExampleView.prefab",
-                    out IReadOnlyList<string> stages,
-                    out string error), Is.True, error);
+                List<string> stages = ((List<string>)GetPrivateField(profile, "planStages"));
                 Assert.That(stages, Has.Count.EqualTo(2));
                 Assert.That(
                     JObject.Parse(stages[0])["componentExtractions"][0].Value<string>("id"),
@@ -115,14 +77,17 @@ namespace PsdLayoutTool2.Tests
                     TargetPath,
                     "Assets/Temp/ExampleView.prefab",
                     out _,
-                    out _), Is.False);
+                    out string guidError), Is.False);
+                Assert.That(guidError, Does.Contain("GUID no longer matches"));
+
+                // 全新生成跳过 GUID 门禁，继续进入绑定证据校验（本阶段无证据，因此要求重新分析）。
                 Assert.That(profile.TryBuildFreshGenerationReplayPlans(
                     SourceGuid,
                     TargetPath,
                     "Assets/Temp/ExampleView.prefab",
-                    out IReadOnlyList<string> stages,
-                    out string error), Is.True, error);
-                Assert.That(stages, Has.Count.EqualTo(1));
+                    out _,
+                    out string error), Is.False);
+                Assert.That(error, Does.StartWith(PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage));
             }
             finally
             {
@@ -139,21 +104,16 @@ namespace PsdLayoutTool2.Tests
                 AssetDatabase.CreateAsset(source, SourceAssetPath);
                 string sourceGuid = AssetDatabase.AssetPathToGUID(SourceAssetPath);
                 PsdHierarchyCleanupReplayProfile.Persist(
-                    SourceAssetPath, TargetPath, CreateRunnerPlan("first_component"));
+                    SourceAssetPath, TargetPath, CreateStagePlan("first_component"));
                 PsdHierarchyCleanupReplayProfile.Persist(
-                    SourceAssetPath, TargetPath, CreateRunnerPlan("second_component"));
+                    SourceAssetPath, TargetPath, CreateStagePlan("second_component"));
                 PsdHierarchyCleanupReplayProfile.ReplaceWithFirstStage(
-                    SourceAssetPath, TargetPath, CreateRunnerPlan("current_component"));
+                    SourceAssetPath, TargetPath, CreateStagePlan("current_component"));
 
                 PsdHierarchyCleanupReplayProfile profile = PsdHierarchyCleanupReplayProfile.Load(
                     TargetPath, sourceGuid);
                 Assert.That(profile, Is.Not.Null);
-                Assert.That(profile.TryBuildReplayPlans(
-                    sourceGuid,
-                    TargetPath,
-                    "Assets/Temp/ExampleView.prefab",
-                    out IReadOnlyList<string> stages,
-                    out string error), Is.True, error);
+                List<string> stages = ((List<string>)GetPrivateField(profile, "planStages"));
                 Assert.That(stages, Has.Count.EqualTo(1));
                 Assert.That(
                     JObject.Parse(stages[0])["componentExtractions"][0].Value<string>("id"),
@@ -176,7 +136,7 @@ namespace PsdLayoutTool2.Tests
             {
                 AssetDatabase.CreateAsset(source, SourceAssetPath);
                 PsdHierarchyCleanupReplayProfile.Persist(
-                    SourceAssetPath, TargetPath, CreateRunnerPlan("existing_component"));
+                    SourceAssetPath, TargetPath, CreateStagePlan("existing_component"));
 
                 Assert.That(
                     PsdHierarchyCleanupReplayProfile.HasConfirmedStages(SourceAssetPath, TargetPath),
@@ -197,7 +157,7 @@ namespace PsdLayoutTool2.Tests
             var profile = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
             try
             {
-                var plan = JObject.Parse(CreateRunnerPlan());
+                var plan = JObject.Parse(CreateStagePlan());
                 plan["componentExtractions"] = new JArray();
                 plan["wrappers"] = new JArray
                 {
@@ -214,13 +174,7 @@ namespace PsdLayoutTool2.Tests
                     SourceGuid,
                     TargetPath,
                     plan.ToString(Newtonsoft.Json.Formatting.None)));
-                Assert.That(profile.TryBuildReplayPlans(
-                    SourceGuid,
-                    TargetPath,
-                    "Assets/Temp/ExampleView.prefab",
-                    out IReadOnlyList<string> stages,
-                    out string error), Is.True, error);
-                Assert.That(stages, Has.Count.EqualTo(1));
+                Assert.That(((List<string>)GetPrivateField(profile, "planStages")), Has.Count.EqualTo(1));
             }
             finally
             {
@@ -323,7 +277,7 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void SchemaOnePlanMigratesWithoutLosingItsFirstStage()
+        public void SchemaOneLegacyPlanIsKeptButNeverReplayed()
         {
             var profile = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
             try
@@ -331,24 +285,21 @@ namespace PsdLayoutTool2.Tests
                 SetPrivateField(profile, "schemaVersion", 1);
                 SetPrivateField(profile, "sourcePsdGuid", SourceGuid);
                 SetPrivateField(profile, "targetPrefabPath", TargetPath);
-                SetPrivateField(profile, "runnerPlanJson", CreateRunnerPlan("legacy_component"));
-                SetPrivateField(profile, "runnerPlanStages", new List<string>());
+                SetPrivateField(profile, "legacyPlanJson", CreateUnsupportedVersionPlan());
+                SetPrivateField(profile, "planStages", new List<string>());
 
-                profile.AppendStage(SourceGuid, TargetPath, CreateRunnerPlan("second_component"));
+                profile.AppendStage(SourceGuid, TargetPath, CreateStagePlan("second_component"));
 
+                Assert.That(((List<string>)GetPrivateField(profile, "planStages")), Has.Count.EqualTo(2), "旧数据不能被静默丢弃。");
                 Assert.That(profile.TryBuildReplayPlans(
                     SourceGuid,
                     TargetPath,
                     "Assets/Temp/ExampleView.prefab",
                     out IReadOnlyList<string> stages,
-                    out string error), Is.True, error);
-                Assert.That(stages, Has.Count.EqualTo(2));
-                Assert.That(
-                    JObject.Parse(stages[0])["componentExtractions"][0].Value<string>("id"),
-                    Is.EqualTo("legacy_component"));
-                Assert.That(
-                    JObject.Parse(stages[1])["componentExtractions"][0].Value<string>("id"),
-                    Is.EqualTo("second_component"));
+                    out string error), Is.False, "旧数据不能被静默执行。");
+                Assert.That(stages, Is.Empty);
+                Assert.That(error, Does.StartWith(PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage));
+                Assert.That(error, Does.Contain("计划版本不受支持"));
             }
             finally
             {
@@ -490,7 +441,7 @@ namespace PsdLayoutTool2.Tests
                 out string replayError), Is.False);
             Assert.That(replayError, Does.Contain("requires a fresh confirmed plan"));
 
-            profile.Initialize(SourceGuid, TargetPath, CreateRunnerPlan("recovery_component"));
+            profile.Initialize(SourceGuid, TargetPath, CreateStagePlan("recovery_component"));
 
             Assert.That(PsdHierarchyCleanupReplayProfile.RequiresRebindByGuid(
                 SourceGuid,
@@ -599,7 +550,7 @@ namespace PsdLayoutTool2.Tests
                 renamedTarget);
             string expectedGuid = AssetDatabase.AssetPathToGUID(renamedTarget);
 
-            var plan = JObject.Parse(CreateRunnerPlan());
+            var plan = JObject.Parse(CreateStagePlan());
             plan["textureRenames"] = new JArray
             {
                 new JObject
@@ -629,12 +580,12 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(preRenamePaths, Is.Empty);
 
                 var mismatchedPlan = JObject.Parse(
-                    ((List<string>)GetPrivateField(profile, "runnerPlanStages"))[0]);
+                    ((List<string>)GetPrivateField(profile, "planStages"))[0]);
                 mismatchedPlan["textureRenames"][0]["expectedGuid"] =
                     "ffffffffffffffffffffffffffffffff";
                 SetPrivateField(
                     profile,
-                    "runnerPlanStages",
+                    "planStages",
                     new List<string>
                     {
                         mismatchedPlan.ToString(Newtonsoft.Json.Formatting.None),
@@ -704,11 +655,13 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void VersionOneProfileCannotEnterTheReplayExecutionQueue()
+        public void UnsupportedPlanVersionStageCannotEnterTheReplayExecutionQueue()
         {
-            PsdHierarchyCleanupReplayProfile profile = CreateProfile(CreateRunnerPlan());
+            PsdHierarchyCleanupReplayProfile profile = CreateProfile(CreateStagePlan());
             try
             {
+                SetPrivateField(profile, "planStages", new List<string> { CreateUnsupportedVersionPlan() });
+                SetPrivateField(profile, "planBindings", new List<string> { string.Empty });
                 Assert.That(
                     profile.TryGetReplayStageSources(
                         SourceGuid,
@@ -723,12 +676,34 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(
                     error,
                     Does.StartWith(PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage));
-                Assert.That(error, Does.Contain("v1"));
+                Assert.That(error, Does.Contain("计划版本不受支持"));
             }
             finally
             {
                 Object.DestroyImmediate(profile);
             }
+        }
+
+        [Test]
+        public void UnsupportedPlanVersionCannotBeRecordedForReplay()
+        {
+            var profile = ScriptableObject.CreateInstance<PsdHierarchyCleanupReplayProfile>();
+            try
+            {
+                Assert.Throws<System.IO.InvalidDataException>(
+                    () => profile.Initialize(SourceGuid, TargetPath, CreateUnsupportedVersionPlan()));
+            }
+            finally
+            {
+                Object.DestroyImmediate(profile);
+            }
+        }
+
+        private static string CreateUnsupportedVersionPlan()
+        {
+            JObject plan = JObject.Parse(CreateStagePlan("legacy_component"));
+            plan["version"] = 1;
+            return plan.ToString(Newtonsoft.Json.Formatting.None);
         }
 
         private static string CreateVersionTwoPlan()
@@ -755,7 +730,7 @@ namespace PsdLayoutTool2.Tests
 
         private static PsdHierarchyCleanupReplayProfile CreateProfile()
         {
-            return CreateProfile(CreateRunnerPlan());
+            return CreateProfile(CreateStagePlan());
         }
 
         private static PsdHierarchyCleanupReplayProfile CreateProfile(string planJson)
@@ -830,11 +805,11 @@ namespace PsdLayoutTool2.Tests
             }
         }
 
-        private static string CreateRunnerPlan(string extractionId = "reusable_item")
+        private static string CreateStagePlan(string extractionId = "reusable_item")
         {
             return new JObject
             {
-                ["version"] = 1,
+                ["version"] = 2,
                 ["prefabAssetPath"] = TargetPath,
                 ["output"] = new JObject
                 {

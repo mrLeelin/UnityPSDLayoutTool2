@@ -481,6 +481,13 @@ namespace PsdLayoutTool2
                     return;
                 }
 
+                // 与聊天窗口相同的命名完整性闸门：写入前拒绝，不改动 Prefab。
+                if (!PsdHierarchyChatCleanupExecution.TryValidateSemanticNames(context, planJson, out string namingError))
+                {
+                    FailApply(applyPath, claimPath, session, claim, StatusRejected, "naming", namingError);
+                    return;
+                }
+
                 PsdHierarchyChatCleanupExecutionResult result =
                     await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(context, planJson);
 
@@ -551,7 +558,7 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            // 读取端校验独立协议版本：旧 v1 会话必须重新生成，不能静默执行。
+            // 读取端校验独立协议版本：旧版本会话必须重新生成，不能静默执行。
             if (session.version != CurrentProtocolVersion)
             {
                 int actualVersion = session.version;

@@ -60,7 +60,7 @@ from read_unity_selection import run_payload  # noqa: E402
 PAYLOAD_TEMPLATE = os.path.join(HERE, "payloads", "audit_prefab_dump.cs")
 SCHEMA = 1
 
-# Name gate copied from the runner's IsNonSemanticObjectName(): PSD/export tokens, raw display
+# Name gate mirrored from Unity's PsdHierarchyChatCleanupExecution.IsNonSemanticObjectName(): PSD/export tokens, raw display
 # values and punctuation-only names are not semantic names.
 NONSEMANTIC_NAME = re.compile(
     r"^(?:\d+(?:_\d+)?|\d+(?:\.\d+)?[kKmM]|\d+[A-Za-z]\d+[A-Za-z]|[+_-]+|img_v\d.*|ui_[A-Za-z0-9_]+)$")

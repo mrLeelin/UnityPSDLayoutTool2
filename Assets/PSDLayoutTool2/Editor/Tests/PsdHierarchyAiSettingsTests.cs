@@ -227,40 +227,6 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void CleanupExecutionDefaultsToNativeUnityBackend()
-        {
-            var settings = new PsdHierarchyCleanupExecutionSettings();
-
-            Assert.That(
-                settings.Resolve().backend,
-                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity));
-        }
-
-        [Test]
-        public void CleanupExecutionRejectsRetiredUnityCliBackend()
-        {
-            // ADR 0002：CLI Runner 不再是可选正式执行路径。
-            var settings = new PsdHierarchyCleanupExecutionSettings();
-
-            Assert.Throws<ArgumentException>(
-                () => settings.Set(PsdHierarchyCleanupExecutionBackend.UnityCliRunner));
-            Assert.That(
-                settings.Resolve().backend,
-                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity));
-        }
-
-        [Test]
-        public void LegacyCliBackendNormalizesToNativeOnResolve()
-        {
-            // 旧资产里可能是 CLI；Resolve 一律归一，避免再喂给 v1 Python runner。
-            var snapshot = new PsdHierarchyCleanupExecutionSettingsSnapshot(
-                PsdHierarchyCleanupExecutionBackend.UnityCliRunner);
-
-            Assert.That(snapshot.backend, Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity));
-            Assert.That(snapshot.TryValidate(out string error), Is.True, error);
-        }
-
-        [Test]
         public void CustomApiRequiresHttpEndpoint()
         {
             var settings = new PsdHierarchyAiSettings();

@@ -6,8 +6,8 @@ namespace PsdLayoutTool2.Tests
     using NUnit.Framework;
 
     /// <summary>
-    /// 10：v1 写入、旧 CLI Runner 调用与无调用的兼容入口必须已经从交付面消失；
-    /// 只保留明确标注的只读诊断和“拒绝”行为（旧后端取值仍然只会归一化为 Unity 核心）。
+    /// 已退役的写入路径、旧执行后端和无调用的兼容入口必须已经从交付面消失；
+    /// 只保留明确的“拒绝”行为：不受支持的计划版本永久拒绝并要求重新分析。
     /// </summary>
     public sealed class PsdHierarchyLegacyRemovalTests
     {
@@ -19,7 +19,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 PluginAssembly.GetType("PsdLayoutTool2.PsdHierarchyNativePayloadExecutor"),
                 Is.Null,
-                "运行 Python renderer 的旧执行器必须删除，不能再作为写入路径存在。");
+                "旧的外部载荷执行器必须删除，不能再作为写入路径存在。");
         }
 
         [Test]
@@ -41,7 +41,7 @@ namespace PsdLayoutTool2.Tests
                 .Distinct()
                 .ToArray();
 
-            Assert.That(remaining, Is.Empty, "旧 Runner 兼容入口必须删除：" + string.Join(", ", remaining));
+            Assert.That(remaining, Is.Empty, "旧兼容入口必须删除：" + string.Join(", ", remaining));
 
             // 保留的正式入口仍然存在，并且都要求权威快照上下文或 v2 重放计划。
             const BindingFlags AnyStatic = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
@@ -87,24 +87,19 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void LegacyRunnerBackendValueStillNormalizesToTheUnityCore()
+        public void RetiredExecutionBackendSettingIsGone()
         {
-            // 保留的“拒绝”行为：旧设置值仍然只能解析为共享核心，不会重新打开 CLI 写入。
+            Assert.That(PluginAssembly.GetType("PsdLayoutTool2.PsdHierarchyCleanupExecutionBackend"), Is.Null);
+            Assert.That(PluginAssembly.GetType("PsdLayoutTool2.PsdHierarchyCleanupExecutionSettings"), Is.Null);
             Assert.That(
-                PsdHierarchyCleanupExecutionSettingsSnapshot.Normalize(
-                    PsdHierarchyCleanupExecutionBackend.UnityCliRunner),
-                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity));
-
-            PsdHierarchyCleanupExecutionSettingsSnapshot resolved =
-                PsdLayoutProjectSettings.instance.ResolveHierarchyCleanupExecutionSettings();
-            Assert.That(
-                resolved.backend,
-                Is.EqualTo(PsdHierarchyCleanupExecutionBackend.NativeUnity),
-                "正式链路只能解析为 Native Unity 核心。");
+                typeof(PsdHierarchyChatCleanupExecution).GetMethod(
+                    "TryPrepareRunnerPlan",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static),
+                Is.Null);
         }
 
         [Test]
-        public async System.Threading.Tasks.Task RetiredV1PlansRemainPermanentlyRejectedWithoutWrites()
+        public async System.Threading.Tasks.Task UnsupportedPlanVersionsRemainPermanentlyRejectedWithoutWrites()
         {
             string plan = "{\"version\":1,\"prefabAssetPath\":\"Assets/UI/Example.prefab\"," +
                           "\"output\":{\"mode\":\"in_place\",\"assetPath\":\"Assets/UI/Example.prefab\"}," +
@@ -122,7 +117,7 @@ namespace PsdLayoutTool2.Tests
                 PsdHierarchyCleanupReplayCoordinator.IsPermanentReplayFailure(
                     PsdHierarchyChatCleanupExecution.ReplayRequiresFreshAnalysisMessage),
                 Is.True,
-                "v1 计划必须是永久拒绝，不能作为瞬时可重试失败。");
+                "不受支持的计划版本必须是永久拒绝，不能作为瞬时可重试失败。");
         }
     }
 }

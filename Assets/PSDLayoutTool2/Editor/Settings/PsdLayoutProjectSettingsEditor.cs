@@ -13,7 +13,6 @@ namespace PsdLayoutTool2
     internal sealed class PsdLayoutProjectSettingsEditor : UnityEditor.Editor
     {
         private const string AiSectionName = "psd-project-settings-ai";
-        private const string CleanupExecutionSectionName = "psd-project-settings-cleanup-execution";
         private const string OutputSectionName = "psd-project-settings-output";
         private const string UiComponentSectionName = "psd-project-settings-ui-components";
         private const string NineSliceSectionName = "psd-project-settings-nine-slice";
@@ -49,7 +48,6 @@ namespace PsdLayoutTool2
             root.style.borderBottomRightRadius = 6;
             root.Add(CreateHeader());
             root.Add(CreateHierarchyAiSection(settings));
-            root.Add(CreateHierarchyCleanupExecutionSection(settings));
             root.Add(CreateOutputSection(settings));
             root.Add(CreateUiComponentSection(settings));
             root.Add(CreateNineSliceSection(settings));
@@ -258,18 +256,6 @@ namespace PsdLayoutTool2
             }
 
             return string.IsNullOrWhiteSpace(typed) ? (selected ?? string.Empty) : typed;
-        }
-
-        private static VisualElement CreateHierarchyCleanupExecutionSection(PsdLayoutProjectSettings settings)
-        {
-            VisualElement section = CreateSection(CleanupExecutionSectionName, "Prefab Cleanup Execution");
-            // ADR 0001/0002：正式清理固定 Native Unity；不再提供 CLI Runner 切换。
-            section.Add(new HelpBox(
-                "Cleanup execution is fixed to Native Unity (ADR 0001/0002). " +
-                "Version 2 node-id plans are applied inside this Editor; " +
-                "the Python CLI is read-only diagnostics only.",
-                HelpBoxMessageType.Info));
-            return section;
         }
 
         private static VisualElement CreateHierarchyAiSection(PsdLayoutProjectSettings settings)

@@ -171,7 +171,7 @@ namespace PsdLayoutTool2
                 error = exception.Message;
                 if (IsPermanentReplayFailure(exception.Message))
                 {
-                    // 永久失败（v1 路径计划、绑定证据缺失或对应关系无法证明）时标记 Profile
+                    // 永久失败（计划版本不受支持、绑定证据缺失或对应关系无法证明）时标记 Profile
                     // 需要重新分析，让下一次导入直接给出明确原因，而不是重复暂存后再失败。
                     PsdHierarchyCleanupReplayProfile.TryMarkRequiresRebindByGuid(
                         sourceGuid,

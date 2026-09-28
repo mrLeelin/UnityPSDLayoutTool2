@@ -701,10 +701,6 @@ namespace PsdLayoutTool2
         private PsdHierarchyAiSettings hierarchyAiSettings = new PsdHierarchyAiSettings();
 
         [SerializeField]
-        private PsdHierarchyCleanupExecutionSettings hierarchyCleanupExecutionSettings =
-            new PsdHierarchyCleanupExecutionSettings();
-
-        [SerializeField]
         private PsdCommonAssetPreviewSettings previewServerSettings = new PsdCommonAssetPreviewSettings();
 
         internal static PsdLayoutProjectSettings instance => PsdLayoutProjectSettingsAsset.GetOrCreate();
@@ -891,21 +887,6 @@ namespace PsdLayoutTool2
             return PsdLayoutLocalUserSettings.Save(data, out error);
         }
 
-        internal PsdHierarchyCleanupExecutionSettingsSnapshot ResolveHierarchyCleanupExecutionSettings()
-        {
-            EnsureData();
-            return hierarchyCleanupExecutionSettings.Resolve();
-        }
-
-        internal void SetHierarchyCleanupExecutionBackend(PsdHierarchyCleanupExecutionBackend backend)
-        {
-            EnsureData();
-            if (hierarchyCleanupExecutionSettings.Set(backend))
-            {
-                SaveAsset();
-            }
-        }
-
         internal int ResolvePreviewServerPort()
         {
             EnsureData();
@@ -1050,12 +1031,6 @@ namespace PsdLayoutTool2
             if (hierarchyAiSettings == null)
             {
                 hierarchyAiSettings = new PsdHierarchyAiSettings();
-                changed = true;
-            }
-
-            if (hierarchyCleanupExecutionSettings == null)
-            {
-                hierarchyCleanupExecutionSettings = new PsdHierarchyCleanupExecutionSettings();
                 changed = true;
             }
 

@@ -80,8 +80,12 @@ namespace PsdLayoutTool2
                 "\n\n===== TERMINAL SESSION CONTRACT =====\n" +
                 "This is an analysis and plan session. Do not claim that Unity assets were changed.\n" +
                 "Write the complete executable JSON plan (and no partial patch) to: " + planPath.Replace('\\', '/') + "\n" +
-                "The plan must be version 2 using node:<id> references from the snapshot. Do not write version 1 path plans.\n" +
-                "Do not call any Python renderer or CLI runner: their write modes are retired, and Unity applies the reviewed plan itself after .apply.\n" +
+                "The plan must be version 2 using node:<id> references from the snapshot.\n" +
+                "Unity validates and applies the reviewed plan itself after .apply; never run a script to modify the Prefab.\n" +
+                PsdHierarchyChatClient.PrefabRootNameContract + "\n" +
+                PsdHierarchyChatClient.VerifyFieldContract + "\n" +
+                PsdHierarchyChatClient.PrefabNameContract + "\n" +
+                PsdHierarchyChatClient.SnapshotRefreshContract + "\n" +
                 "EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents are executable. " +
                 "For componentExtractions use {id, name, assetPath, template: node:<id>, instances: [node:<id>...]}; the template must also appear in instances, every instance must share the template's recursive component structure, and assetPath must be a NEW PascalCase .prefab under Assets/. " +
                 "Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's sources must fully cover the candidate. When a mandatory candidate only becomes extractable after the grouping you just planned, Unity revalidates the refreshed candidate before performing that extraction in the second stage. " +

@@ -426,7 +426,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(Render("after"), Is.EqualTo(before), "Rendering changed after structural cleanup.");
         }
 
-        [TestCase("v1")]
+        [TestCase("unsupportedVersion")]
         [TestCase("missingVersion")]
         [TestCase("stringVersion")]
         [TestCase("unknownNode")]
@@ -452,7 +452,7 @@ namespace PsdLayoutTool2.Tests
             JObject plan = Plan();
             switch (scenario)
             {
-                case "v1": plan["version"] = 1; break;
+                case "unsupportedVersion": plan["version"] = 1; break;
                 case "missingVersion": plan.Remove("version"); break;
                 case "stringVersion": plan["version"] = "2"; break;
                 case "unknownNode": plan["renames"][0]["target"] = "node:unknown"; break;

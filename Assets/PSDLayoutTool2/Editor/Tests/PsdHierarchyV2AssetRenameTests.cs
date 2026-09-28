@@ -246,7 +246,7 @@ namespace PsdLayoutTool2.Tests
                 context, Plan(textureToName: "Background").ToString());
 
             Assert.That(result.success, Is.False);
-            Assert.That(result.message, Does.Contain("must start with"));
+            Assert.That(result.message, Does.Contain("textureRenames[0]").And.Contain("prefabName + \"_\""));
             Assert.That(File.Exists(RenamedTexturePath), Is.False);
         }
 
