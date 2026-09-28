@@ -21,6 +21,7 @@ Checks performed:
   * `verify.directChildren` names match the members declared for that container
   * `forbiddenObjectNamePatterns` do not match any *final* node name (renames applied),
     and never match the prefab root (it must keep the asset file name, even when non-ASCII)
+  * no rename targets the prefab root with a name other than the asset file name
   * extraction ids referenced by `componentFamilyDecisions` exist and cover the same sources
   * R1 / R2 warnings described above
 
@@ -140,6 +141,12 @@ def main():
     root_name = None
     if args.snapshot:
         root_name = next((n for n in sorted(path_set, key=len) if "/" not in n), None)
+    required_root = os_basename_stem(plan.get("prefabAssetPath", "")) or root_name
+    for index, r in enumerate(plan.get("renames", [])):
+        path = resolve(r.get("target", ""))
+        if path and "/" not in path and r.get("name", "") != required_root:
+            errors.append("renames[%d] 试图把主根改名为 %r —— 主根必须保留资产文件名 %r，请删除这条 rename"
+                          % (index, r.get("name", ""), required_root))
     for pat in plan.get("verify", {}).get("forbiddenObjectNamePatterns", []):
         try:
             rx = re.compile(pat, re.IGNORECASE)

@@ -370,7 +370,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(request.url, Is.EqualTo(PsdHierarchyChatClient.AnthropicEndpoint));
             Assert.That(request.GetHeader("x-api-key"), Is.EqualTo("anthropic-key"));
             Assert.That(request.GetHeader("anthropic-version"), Is.EqualTo("2023-06-01"));
-            Assert.That(request.body, Does.Contain("\"max_tokens\":4096"));
+            Assert.That(request.body, Does.Contain("\"max_tokens\":" + PsdHierarchyChatClient.AnthropicMaxOutputTokens));
+            Assert.That(PsdHierarchyChatClient.AnthropicMaxOutputTokens, Is.GreaterThanOrEqualTo(16000));
             Assert.That(request.body, Does.Contain("Skill Body"));
             Assert.That(request.body, Does.Contain("n000001").And.Contain("node:<id>"));
         }
@@ -425,6 +426,27 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(result.success, Is.False);
             Assert.That(result.message, Does.Contain("invalid key"));
+        }
+
+        [TestCase(true,
+            "{\"content\":[{\"type\":\"text\",\"text\":\"评审 ```json {\\\"renames\\\":[\"}],\"stop_reason\":\"max_tokens\"}", true)]
+        [TestCase(true,
+            "{\"content\":[{\"type\":\"text\",\"text\":\"完整方案\"}],\"stop_reason\":\"end_turn\"}", false)]
+        [TestCase(false,
+            "{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"output\":[{\"content\":[{\"text\":\"评审 ```json {\"}]}]}", true)]
+        [TestCase(false,
+            "{\"status\":\"completed\",\"output\":[{\"content\":[{\"text\":\"完整方案\"}]}]}", false)]
+        public void ResponseCutOffAtOutputLimitIsReportedAsTruncated(
+            bool anthropic,
+            string body,
+            bool expectedTruncated)
+        {
+            PsdHierarchyChatSendResult result = PsdHierarchyChatClient.ParseResponse(
+                anthropic ? PsdHierarchyAiProvider.Claude : PsdHierarchyAiProvider.Codex,
+                new PsdHierarchyChatHttpResponse(true, 200, body, string.Empty));
+
+            Assert.That(result.success, Is.True);
+            Assert.That(result.truncated, Is.EqualTo(expectedTruncated));
         }
 
         [Test]

@@ -173,6 +173,97 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void PrefabRootRenameToDifferentNameIsRejectedBeforeConfirmation()
+        {
+            PsdHierarchyChatContext context = CreateRootSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["renames"] = new JArray
+            {
+                new JObject { ["target"] = "node:n000001", ["name"] = "TitleLabel" },
+                new JObject { ["target"] = "node:n000000", ["name"] = "RewardView" },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
+                context, plan.ToString(), out _, out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("renames[1]"));
+            Assert.That(error, Does.Contain("主根"));
+            Assert.That(error, Does.Contain("\"ExampleView\""));
+        }
+
+        [Test]
+        public void PrefabRootRenameToAssetFileNameIsAccepted()
+        {
+            PsdHierarchyChatContext context = CreateRootSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["renames"] = new JArray
+            {
+                new JObject { ["target"] = "node:n000000", ["name"] = "ExampleView" },
+            };
+
+            AssertPreparedPlanIsUnchanged(context, plan);
+        }
+
+        [Test]
+        public void IndependentPlanErrorsAreReportedTogetherInOneRound()
+        {
+            PsdHierarchyChatContext context = CreateRootSnapshotContext();
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n999999", "node:n000002", "snapshot-123"));
+            plan["renames"] = new JArray
+            {
+                new JObject { ["target"] = "node:n000000", ["name"] = "RewardView" },
+            };
+
+            bool prepared = PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
+                context, plan.ToString(), out _, out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("2 类问题"));
+            Assert.That(error, Does.Contain("n999999"));
+            Assert.That(error, Does.Contain("主根"));
+        }
+
+        [Test]
+        public void NamingGateListsEveryNodeThePlanLeftWithoutASemanticName()
+        {
+            PsdHierarchyChatContext context = CreateNamingSnapshotContext();
+            JObject plan = CreateNamingPlan(new JObject { ["target"] = "node:n000001", ["name"] = "TitleLabel" });
+            plan["wrappers"] = new JArray
+            {
+                new JObject { ["id"] = "content", ["name"] = "内容", ["parent"] = "node:n000000", ["siblingIndex"] = 0 },
+            };
+
+            bool valid = PsdHierarchyChatCleanupExecution.TryValidateSemanticNames(
+                context, plan.ToString(), out string error);
+
+            Assert.That(valid, Is.False);
+            Assert.That(error, Does.Contain("共 2 个节点"));
+            Assert.That(error, Does.Contain("node:n000002"), "未改名的显示数值节点必须被列出");
+            Assert.That(error, Does.Contain("@content"), "不合规的新容器名必须被列出");
+            Assert.That(error, Does.Not.Contain("node:n000000"), "Prefab 主根豁免");
+            Assert.That(error, Does.Not.Contain("node:n000001"), "已改成语义名的节点不应再报");
+            Assert.That(error, Does.Not.Contain("node:n000004"), "嵌套 Prefab 内部节点豁免");
+            Assert.That(error, Does.Not.Contain("node:n000005"), "将被移除的空容器豁免");
+        }
+
+        [Test]
+        public void NamingGateAcceptsPlanThatRenamesEveryNonSemanticNode()
+        {
+            PsdHierarchyChatContext context = CreateNamingSnapshotContext();
+            JObject plan = CreateNamingPlan(
+                new JObject { ["target"] = "node:n000001", ["name"] = "TitleLabel" },
+                new JObject { ["target"] = "node:n000002", ["name"] = "RewardAmountText" });
+
+            bool valid = PsdHierarchyChatCleanupExecution.TryValidateSemanticNames(
+                context, plan.ToString(), out string error);
+
+            Assert.That(valid, Is.True, error);
+        }
+
+        [Test]
         public void PreparedVersionTwoPlanPreservesPostGroupingExtractionIntentsForLaterMigration()
         {
             PsdHierarchyChatContext context = CreateNodeSnapshotContext();
@@ -1796,6 +1887,62 @@ namespace PsdLayoutTool2.Tests
                 snapshot,
                 "snapshot-123",
                 "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateRootSnapshotContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/ExampleView.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000000\",\"path\":\"ExampleView\",\"isPrefabRoot\":true}," +
+                "{\"id\":\"n000001\",\"path\":\"ExampleView/Title\"}," +
+                "{\"id\":\"n000002\",\"path\":\"ExampleView/Group\"}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static PsdHierarchyChatContext CreateNamingSnapshotContext()
+        {
+            const string snapshot =
+                "{\"schemaVersion\":1,\"prefabAssetPath\":\"Assets/UI/Prefab/奖励面板.prefab\"," +
+                "\"fingerprint\":\"snapshot-123\",\"nodes\":[" +
+                "{\"id\":\"n000000\",\"path\":\"奖励面板\",\"name\":\"奖励面板\",\"parentId\":\"\"}," +
+                "{\"id\":\"n000001\",\"path\":\"奖励面板/标题\",\"name\":\"标题\",\"parentId\":\"n000000\"}," +
+                "{\"id\":\"n000002\",\"path\":\"奖励面板/15K\",\"name\":\"15K\",\"parentId\":\"n000000\"}," +
+                "{\"id\":\"n000003\",\"path\":\"奖励面板/ShopEntry\",\"name\":\"ShopEntry\",\"parentId\":\"n000000\"," +
+                "\"nestedPrefabAssetPath\":\"Assets/UI/Prefab/Common/ShopEntry.prefab\"}," +
+                "{\"id\":\"n000004\",\"path\":\"奖励面板/ShopEntry/图标\",\"name\":\"图标\",\"parentId\":\"n000003\"}," +
+                "{\"id\":\"n000005\",\"path\":\"奖励面板/空组\",\"name\":\"空组\",\"parentId\":\"n000000\"}," +
+                "{\"id\":\"n000006\",\"path\":\"奖励面板/CloseButton\",\"name\":\"CloseButton\",\"parentId\":\"n000000\"}]}";
+            return new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/Prefab/奖励面板.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md",
+                "Skill Body",
+                "Prefab Body",
+                "Plan Format",
+                snapshot,
+                "snapshot-123",
+                "E:/Project/Demo/monsterhunter/Library/PSDLayoutTool2/HierarchySnapshots/snapshot-123.json");
+        }
+
+        private static JObject CreateNamingPlan(params JObject[] renames)
+        {
+            var plan = JObject.Parse(CreateNodeReferencePlan("node:n000001", "node:n000002", "snapshot-123"));
+            plan["moves"] = new JArray();
+            plan["renames"] = new JArray(renames);
+            plan["emptyContainerRemovals"] = new JArray { new JObject { ["source"] = "node:n000005" } };
+            return plan;
         }
 
         private static PsdHierarchyChatContext CreateAssetRenameContext(string[] assetRenameSourcePaths)

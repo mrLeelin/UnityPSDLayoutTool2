@@ -26,7 +26,8 @@ namespace PsdLayoutTool2
         internal const string CopyMessageButtonClassName = "psd-hierarchy-chat-message-copy";
 
         private const string StyleSheetGuid = "18f53073502d4d7e89345f900b727c7e";
-        private const int MaxAutomaticPlanRepairAttempts = 1;
+        // 截断、命名缺漏和执行器错误可能依次出现，只修 1 次会把剩余问题留给用户手动追问。
+        private const int MaxAutomaticPlanRepairAttempts = 3;
         private PsdHierarchyChatContext context;
         private readonly List<PsdHierarchyChatMessage> conversation = new List<PsdHierarchyChatMessage>();
 
@@ -585,7 +586,12 @@ namespace PsdLayoutTool2
 
                     bool hasPlanPayload = !string.IsNullOrWhiteSpace(
                         PsdHierarchyChatCleanupExecution.ExtractJsonCodeBlock(result.message));
-                    if (PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
+                    if (result.truncated)
+                    {
+                        lastPlanError = PsdHierarchyChatClient.TruncatedReplyPlanError;
+                        lastFailureCategory = PsdHierarchyPlanIssueCategory.PlanExtraction;
+                    }
+                    else if (PsdHierarchyChatCleanupExecution.TryExtractApprovedPlan(
                             result.message,
                             context,
                             out string planJson,
@@ -596,7 +602,14 @@ namespace PsdLayoutTool2
                         PsdHierarchyChatCleanupExecutionResult validation =
                             await PsdHierarchyChatCleanupExecution.ValidatePlanAsync(context, planJson);
                         HideThinkingIndicator();
-                        if (validation.success)
+                        string namingError = string.Empty;
+                        if (validation.success &&
+                            !PsdHierarchyChatCleanupExecution.TryValidateSemanticNames(context, planJson, out namingError))
+                        {
+                            lastPlanError = namingError;
+                            lastFailureCategory = PsdHierarchyPlanIssueCategory.RunnerPreflight;
+                        }
+                        else if (validation.success)
                         {
                             string reviewableReply = PsdHierarchyChatCleanupExecution.ComposeReviewableReply(
                                 initialReviewText,
@@ -611,12 +624,14 @@ namespace PsdLayoutTool2
                             SetSending(false, "方案待确认");
                             return;
                         }
-
-                        lastPlanError = validation.message;
-                        lastFailureCategory = PsdHierarchyPlanIssueCategory.RunnerPreflight;
-                        if (IsNonRepairableValidationFailure(validation.message))
+                        else
                         {
-                            break;
+                            lastPlanError = validation.message;
+                            lastFailureCategory = PsdHierarchyPlanIssueCategory.RunnerPreflight;
+                            if (IsNonRepairableValidationFailure(validation.message))
+                            {
+                                break;
+                            }
                         }
                     }
                     else

@@ -596,16 +596,23 @@ namespace PsdLayoutTool2
                     throw new InvalidDataException("计划引用的层级快照已经失效，请重新分析当前 Prefab。");
                 }
 
-                PsdHierarchyPostGroupingExtraction.ValidateIntents(plan);
-                ValidateAllExistingNodeReferences(plan, context);
-                if (context.localRepairScope != null)
+                // 以下检查彼此独立：全部执行后一次性报告，避免自动修复每轮只看到一个错误。
+                var errors = new List<string>();
+                CollectValidationError(errors, () => PsdHierarchyPostGroupingExtraction.ValidateIntents(plan));
+                CollectValidationError(errors, () => ValidateAllExistingNodeReferences(plan, context));
+                CollectValidationError(errors, () => ValidatePrefabRootNotRenamed(plan, context));
+                CollectValidationError(errors, () =>
                 {
-                    context.localRepairScope.ValidatePlan(plan);
-                }
-                else if (HasLocalPrefabExtractions(plan))
-                {
-                    throw new InvalidDataException("selectedPrefabExtractions 只能由已锁定选区的局部修复生成。");
-                }
+                    if (context.localRepairScope != null)
+                    {
+                        context.localRepairScope.ValidatePlan(plan);
+                    }
+                    else if (HasLocalPrefabExtractions(plan))
+                    {
+                        throw new InvalidDataException("selectedPrefabExtractions 只能由已锁定选区的局部修复生成。");
+                    }
+                });
+                ThrowIfAnyValidationErrors(errors);
 
                 // Formal execution consumes the reviewed v2 document itself.
                 // Preparation validates it but must not expand or rewrite the
@@ -1087,6 +1094,329 @@ namespace PsdLayoutTool2
                 throw new InvalidDataException(
                     "节点引用校验失败：" + Environment.NewLine +
                     "- " + string.Join(Environment.NewLine + "- ", errors.Distinct().ToArray()));
+            }
+        }
+
+        internal static void CollectValidationError(List<string> errors, Action check)
+        {
+            try
+            {
+                check();
+            }
+            catch (Exception exception) when (
+                exception is InvalidDataException ||
+                exception is InvalidOperationException)
+            {
+                errors.Add(exception.Message);
+            }
+        }
+
+        internal static void ThrowIfAnyValidationErrors(List<string> errors)
+        {
+            if (errors.Count == 1)
+            {
+                throw new InvalidDataException(errors[0]);
+            }
+
+            if (errors.Count > 1)
+            {
+                throw new InvalidDataException(
+                    "计划共有 " + errors.Count + " 类问题，请在同一份替换计划中全部修正：" + Environment.NewLine +
+                    string.Join(Environment.NewLine, errors.Select((message, index) => "[" + (index + 1) + "] " + message).ToArray()));
+            }
+        }
+
+        // 与 Python 运行器 IsNonSemanticObjectName / audit_prefab_preservation.py 保持同一套规则。
+        private static readonly Regex SemanticAsciiNameRegex = new Regex(
+            @"^[A-Za-z0-9_\[\]]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex NonSemanticTokenNameRegex = new Regex(
+            @"^(?:\d+(?:_\d+)?|\d+(?:\.\d+)?[kKmM]|\d+[A-Za-z]\d+[A-Za-z]|[+_-]+|img_v\d.*|ui_[A-Za-z0-9_]+)$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private const int MaxReportedNamingIssues = 150;
+
+        private static readonly string[] ExtractionOperationArrays =
+        {
+            "componentExtractions", "stateComponentExtractions",
+            "variantComponentExtractions", "statefulComponentExtractions",
+            "selectedPrefabExtractions", "crossParentPrefabExtractions",
+        };
+
+        internal static bool IsNonSemanticObjectName(string name)
+        {
+            string value = name ?? string.Empty;
+            return !SemanticAsciiNameRegex.IsMatch(value) || NonSemanticTokenNameRegex.IsMatch(value);
+        }
+
+        /// <summary>
+        /// 确认前的命名完整性闸门：按"快照名 + 计划 renames"推算执行后的最终名，
+        /// 一次性列出所有仍不是英文语义名的节点，让自动修复一轮补齐，而不是只改一部分。
+        /// 局部修复阶段不在此处检查（其可编辑范围由 LocalRepairScope 单独约束）。
+        /// </summary>
+        internal static bool TryValidateSemanticNames(
+            PsdHierarchyChatContext context,
+            string planJson,
+            out string error)
+        {
+            error = string.Empty;
+            if (context == null || context.localRepairScope != null)
+            {
+                return true;
+            }
+
+            JObject plan;
+            JArray nodes;
+            try
+            {
+                plan = JObject.Parse(planJson ?? string.Empty);
+                nodes = JObject.Parse(context.hierarchySnapshotJson ?? string.Empty)["nodes"] as JArray;
+            }
+            catch (Newtonsoft.Json.JsonException)
+            {
+                return true;
+            }
+
+            if (nodes == null)
+            {
+                return true;
+            }
+
+            var originalNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            var finalNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            var paths = new Dictionary<string, string>(StringComparer.Ordinal);
+            var excluded = new HashSet<string>(StringComparer.Ordinal);
+            var nestedInstanceRootPaths = new List<string>();
+            foreach (JObject node in nodes.OfType<JObject>())
+            {
+                string id = node.Value<string>("id");
+                string path = node.Value<string>("path");
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                paths[id] = path;
+                originalNames[id] = node.Value<string>("name") ?? LastPathSegment(path);
+                finalNames[id] = originalNames[id];
+                if (path.IndexOf('/') < 0)
+                {
+                    excluded.Add(id);
+                }
+
+                if (!string.IsNullOrWhiteSpace(node.Value<string>("nestedPrefabAssetPath")))
+                {
+                    nestedInstanceRootPaths.Add(path);
+                }
+            }
+
+            // 嵌套 Prefab 实例内部节点不属于本 Prefab 的命名范围；实例根本身仍需检查。
+            foreach (KeyValuePair<string, string> pair in paths)
+            {
+                if (nestedInstanceRootPaths.Any(root => pair.Value.StartsWith(root + "/", StringComparison.Ordinal)))
+                {
+                    excluded.Add(pair.Key);
+                }
+            }
+
+            foreach (JObject removal in ReadObjects(plan, "emptyContainerRemovals"))
+            {
+                AddNodeReference(removal.Value<string>("source"), excluded);
+            }
+
+            // 抽取为子 Prefab 的子树由抽取管线负责命名，这里不重复判定。
+            var extractionReferences = new List<string>();
+            foreach (string property in ExtractionOperationArrays)
+            {
+                if (plan[property] is JArray extractions)
+                {
+                    CollectNodeReferenceStrings(extractions, extractionReferences);
+                }
+            }
+
+            foreach (string id in context.GetNodeIdsWithinSubtrees(extractionReferences))
+            {
+                excluded.Add(id);
+            }
+
+            // 第二阶段按 sourceName 映射改名的成员，在首阶段保留原名是合法的。
+            var deferredSourceNames = new HashSet<string>(StringComparer.Ordinal);
+            CollectDeferredSourceNames(plan, deferredSourceNames);
+
+            var wrapperNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (JObject wrapper in ReadObjects(plan, "wrappers"))
+            {
+                string id = wrapper.Value<string>("id");
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    wrapperNames[id] = wrapper.Value<string>("name") ?? string.Empty;
+                }
+            }
+
+            foreach (JObject rename in ReadObjects(plan, "renames"))
+            {
+                string target = rename.Value<string>("target") ?? string.Empty;
+                string name = rename.Value<string>("name") ?? string.Empty;
+                if (target.StartsWith("@", StringComparison.Ordinal))
+                {
+                    wrapperNames[target.Substring(1)] = name;
+                }
+                else if (target.StartsWith("node:", StringComparison.Ordinal))
+                {
+                    finalNames[target.Substring("node:".Length)] = name;
+                }
+            }
+
+            var issues = new List<string>();
+            foreach (KeyValuePair<string, string> pair in finalNames.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                if (excluded.Contains(pair.Key) || !paths.TryGetValue(pair.Key, out string path))
+                {
+                    continue;
+                }
+
+                string originalName = originalNames[pair.Key];
+                bool renamed = !string.Equals(pair.Value, originalName, StringComparison.Ordinal);
+                if (!renamed && deferredSourceNames.Contains(originalName))
+                {
+                    continue;
+                }
+
+                if (IsNonSemanticObjectName(pair.Value))
+                {
+                    issues.Add("node:" + pair.Key + " (" + path + ") 最终名 \"" + pair.Value + "\"" +
+                               (renamed ? "（计划里的新名也不合规）" : "（计划没有给它 rename）"));
+                }
+            }
+
+            foreach (KeyValuePair<string, string> pair in wrapperNames.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                if (IsNonSemanticObjectName(pair.Value))
+                {
+                    issues.Add("@" + pair.Key + " 新容器名 \"" + pair.Value + "\"");
+                }
+            }
+
+            if (issues.Count == 0)
+            {
+                return true;
+            }
+
+            IEnumerable<string> reported = issues.Take(MaxReportedNamingIssues);
+            string overflow = issues.Count > MaxReportedNamingIssues
+                ? Environment.NewLine + "- ……另有 " + (issues.Count - MaxReportedNamingIssues) + " 个节点同样需要改名"
+                : string.Empty;
+            error =
+                "命名完整性校验失败：共 " + issues.Count + " 个节点在执行后仍不是英文语义名（只允许 A-Z a-z 0-9 _ [ ]，" +
+                "且不能是纯数字、显示数值、PSD/导出名）。请在同一份完整计划里一次性为下列每个节点补上 renames，" +
+                "不要只改一部分；Prefab 主根与嵌套 Prefab 内部节点已自动豁免。" + Environment.NewLine +
+                "- " + string.Join(Environment.NewLine + "- ", reported) + overflow +
+                Environment.NewLine +
+                "(Naming gate: add a renames[] entry with an English semantic PascalCase name for EVERY node listed above in one complete replacement plan.)";
+            return false;
+        }
+
+        private static IEnumerable<JObject> ReadObjects(JObject plan, string property)
+        {
+            return plan[property] is JArray values ? values.OfType<JObject>() : Enumerable.Empty<JObject>();
+        }
+
+        private static void AddNodeReference(string reference, HashSet<string> ids)
+        {
+            if (reference != null && reference.StartsWith("node:", StringComparison.Ordinal))
+            {
+                ids.Add(reference.Substring("node:".Length));
+            }
+        }
+
+        private static void CollectNodeReferenceStrings(JToken token, List<string> references)
+        {
+            if (token.Type == JTokenType.String)
+            {
+                string value = token.Value<string>();
+                if (value != null && value.StartsWith("node:", StringComparison.Ordinal))
+                {
+                    references.Add(value);
+                }
+
+                return;
+            }
+
+            foreach (JToken child in token.Children())
+            {
+                CollectNodeReferenceStrings(child, references);
+            }
+        }
+
+        private static void CollectDeferredSourceNames(JToken token, HashSet<string> names)
+        {
+            if (token is JProperty property)
+            {
+                if (property.Name == "sourceName" && property.Value.Type == JTokenType.String)
+                {
+                    names.Add(property.Value.Value<string>());
+                }
+                else if ((property.Name == "commonSourceNames" || property.Name == "stateSourceNames") &&
+                         property.Value is JArray sourceNames)
+                {
+                    foreach (JToken item in sourceNames.Where(item => item.Type == JTokenType.String))
+                    {
+                        names.Add(item.Value<string>());
+                    }
+                }
+            }
+
+            foreach (JToken child in token.Children())
+            {
+                CollectDeferredSourceNames(child, names);
+            }
+        }
+
+        private static string LastPathSegment(string path)
+        {
+            string segment = (path ?? string.Empty).Substring((path ?? string.Empty).LastIndexOf('/') + 1);
+            int duplicateMarker = segment.LastIndexOf('#');
+            return duplicateMarker > 0 ? segment.Substring(0, duplicateMarker) : segment;
+        }
+
+        /// <summary>
+        /// 拒绝把 Prefab 主根改成与资产文件名不同的名字。
+        /// Unity 保存时主根名始终对齐资产文件名，放行会导致应用后校验路径失配、保存阶段才报错。
+        /// </summary>
+        private static void ValidatePrefabRootNotRenamed(
+            JObject plan,
+            PsdHierarchyChatContext context)
+        {
+            if (!(plan["renames"] is JArray renames))
+            {
+                return;
+            }
+
+            string requiredRootName = Path.GetFileNameWithoutExtension(context.targetPrefabAssetPath);
+            const string prefix = "node:";
+            for (int index = 0; index < renames.Count; index++)
+            {
+                if (!(renames[index] is JObject rename))
+                {
+                    continue;
+                }
+
+                string reference = rename.Value<string>("target") ?? string.Empty;
+                if (!reference.StartsWith(prefix, StringComparison.Ordinal) ||
+                    !context.TryGetNodePath(reference.Substring(prefix.Length), out string path) ||
+                    path.IndexOf('/') >= 0)
+                {
+                    continue;
+                }
+
+                string name = rename.Value<string>("name") ?? string.Empty;
+                if (!string.Equals(name, requiredRootName, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "renames[" + index + "] 试图把 Prefab 主根 " + reference + " 改名为 \"" + name + "\"。" +
+                        "主根名是资产身份，必须保持资产文件名 \"" + requiredRootName + "\"（即使是中文或非 PascalCase），" +
+                        "prefabName 也不是主根名。请删除这条 rename，并让所有 verify 路径以 \"" + requiredRootName + "\" 开头。" +
+                        " (renames[" + index + "] targets the Prefab root; the root must keep the asset file name \"" +
+                        requiredRootName + "\". Remove this rename.)");
+                }
             }
         }
 

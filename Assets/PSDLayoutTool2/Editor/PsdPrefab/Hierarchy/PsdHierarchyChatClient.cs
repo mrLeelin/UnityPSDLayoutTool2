@@ -288,6 +288,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Every reference to an existing Prefab node must use node:<id> from the authoritative snapshot. Never write a raw hierarchy path in wrappers, moves, renames, removals, tight bounds, component-family decisions, or extraction contracts.");
             builder.AppendLine("Private-asset renames ARE executable: textureRenames[] and spriteAtlasRenames[] entries are {from, toName, expectedGuid}. toName has no extension; every Texture toName must start with \"<prefabName>_\", every SpriteAtlas toName must equal prefabName, each from must be a private asset of the current target Prefab (a Texture referenced by it, or a SpriteAtlas in the Prefab's own folder), and the rename target must not exist yet. Leave expectedGuid empty so Unity captures the current identity, or paste an exact GUID to pin it.");
             builder.AppendLine(PsdHierarchyChatClient.PlanIdentifierContract);
+            builder.AppendLine(PsdHierarchyChatClient.PrefabRootNameContract);
             builder.AppendLine("The target is already confirmed for in-place cleanup. Do not ask the user to choose an output mode or whether to create a new Prefab.");
             if (localRepairScope != null)
             {
@@ -798,6 +799,14 @@ namespace PsdLayoutTool2
                 ["active"] = node.gameObject.activeSelf,
                 ["components"] = componentTypes,
             };
+
+            if (node.parent == null)
+            {
+                // 主根名由资产文件名决定，向 AI 显式声明不可改名。
+                entry["isPrefabRoot"] = true;
+                entry["renameLocked"] = true;
+                entry["requiredName"] = node.name;
+            }
 
             if (node is RectTransform rect)
             {
@@ -1922,16 +1931,20 @@ namespace PsdLayoutTool2
 
     internal readonly struct PsdHierarchyChatSendResult
     {
-        internal PsdHierarchyChatSendResult(bool success, string message, string cliSessionId = "")
+        internal PsdHierarchyChatSendResult(bool success, string message, string cliSessionId = "", bool truncated = false)
         {
             this.success = success;
             this.message = message ?? string.Empty;
             this.cliSessionId = cliSessionId ?? string.Empty;
+            this.truncated = truncated;
         }
 
         internal readonly bool success;
         internal readonly string message;
         internal readonly string cliSessionId;
+
+        /// <summary>回复因达到模型输出上限而被截断（其中的 JSON 计划不可信）。</summary>
+        internal readonly bool truncated;
     }
 
     internal interface IPsdHierarchyChatTransport
@@ -1979,6 +1992,16 @@ namespace PsdLayoutTool2
     internal static class PsdHierarchyChatClient
     {
         private const int AiRequestTimeoutSeconds = 120;
+
+        // 首轮回复需同时容纳中文评审表格与完整 JSON 计划；4096 会迫使模型只写出部分 rename。
+        internal const int AnthropicMaxOutputTokens = 16000;
+
+        // 16000 token 的非流式生成约需 3~4 分钟，HTTP 超时必须明显长于生成时间。
+        private const int HttpAiRequestTimeoutSeconds = 600;
+
+        internal const string TruncatedReplyPlanError =
+            "The previous reply hit the model output-token limit and was cut off, so its JSON plan is incomplete. " +
+            "Return ONLY the complete JSON plan in one fenced ```json block with no review text, keeping every required operation (including every rename).";
         internal const string OpenAiEndpoint = "https://api.openai.com/v1/responses";
         internal const string AnthropicEndpoint = "https://api.anthropic.com/v1/messages";
         private const int MaxClaudePromptCharacters = 6000;
@@ -1989,6 +2012,8 @@ namespace PsdLayoutTool2
             "\"variantComponentExtractions\", \"statefulComponentExtractions\", \"postGroupingExtractionIntents\", \"verify\"";
         internal const string PlanIdentifierContract =
             "Every wrappers[].id must use lower snake_case matching [a-z][a-z0-9_]*; examples: screen, screen_root, day_markers. Do not use uppercase, hyphens, spaces, brackets, or @ in an id. The @ prefix is only for a later reference such as @screen_root. Apply the same lower snake_case rule to all extraction IDs and state IDs.";
+        internal const string PrefabRootNameContract =
+            "PREFAB ROOT IS RENAME-LOCKED: the snapshot node marked isPrefabRoot/renameLocked is the asset identity and must keep its requiredName (the Prefab file name) exactly, even when it is Chinese, contains _psd, or is not PascalCase. Never put the root in renames[]; the English-semantic naming rule and prefabName do not apply to the root. Every verify path must begin with that unchanged root name. Rename the Prefab asset file outside this plan if a different root name is wanted.";
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
             "1. 结合 PSD 与 Prefab 的完整层级、节点几何、组件、同级顺序和重复结构，说明当前结构的主要问题。\n" +
@@ -2025,6 +2050,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Return exactly one complete UTF-8 JSON plan in one fenced ```json code block. Do not output prose, headings, explanations, diffs, or Markdown outside that code block. This must be a full replacement plan, not a patch.");
             builder.AppendLine("Use \"version\": 2 and exactly these required root fields: " + RequiredPlanRootFields + ". Copy snapshotFingerprint exactly from the authoritative snapshot. Use [] for unused operation arrays. Do not use legacy fields wrapperCreations, nodeTransfers, nodeRenames, or privateAssetRenames. prefabAssetPath and output.assetPath must exactly equal the current target Prefab, and output.mode must be in_place.");
             builder.AppendLine(PlanIdentifierContract);
+            builder.AppendLine(PrefabRootNameContract);
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.");
             builder.AppendLine("CRITICAL: Every emptyContainerRemovals entry must reference a container that will be COMPLETELY EMPTY after all moves execute. Before adding a container to emptyContainerRemovals, verify that EVERY child node under that container has a corresponding move operation that relocates it elsewhere. If any child remains unmoved, the container is not empty and must NOT be in emptyContainerRemovals. When the error says 'Container is not empty after planned moves', it means you listed a container for removal that still has children—either move ALL its children first, or remove that container from emptyContainerRemovals.");
             builder.AppendLine("CRITICAL: Keep containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions as EMPTY arrays. The current Unity executor runs wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents, and it refuses any other non-empty array before a write; repeating an unsupported operation in the replacement plan cannot succeed. Report the blocked work in the review text instead. Keep every reviewed postGroupingExtractionIntents entry byte-identical: its post-grouping paths and states are resolved against a refreshed snapshot after the hierarchy stage is saved, so do not rewrite them into node:<id> references.");
@@ -2043,6 +2069,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("The confirmed cleanup plan failed before the Prefab was saved. Re-analyze the current authoritative snapshot and return one complete replacement JSON plan.");
             builder.AppendLine("Failure detail: " + detail);
             builder.AppendLine("Do not reuse a failed hierarchy assumption. Every existing-node reference and direct-child contract must be rebuilt from the current authoritative snapshot.");
+            builder.AppendLine(PsdHierarchyChatClient.PrefabRootNameContract);
             builder.AppendLine("For every textureRenames[].from or spriteAtlasRenames[].from, use only an exact path from the current allowed asset source list. If the failed path is absent, remove or replace that operation; never guess an incremented filename.");
             if (context?.hasAuthoritativeAssetRenameSourcePaths == true)
             {
@@ -2095,6 +2122,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Use version 2 and copy snapshotFingerprint exactly from the authoritative snapshot.");
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every reference to an existing node must use node:<id> from the authoritative snapshot. Never emit a raw hierarchy path or invent a node ID.");
             builder.AppendLine(PlanIdentifierContract);
+            builder.AppendLine(PrefabRootNameContract);
             builder.AppendLine("EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions (with componentFamilyDecisions mode=component), stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents (executed automatically as a second stage after the grouping is saved and the snapshot is refreshed) are executable. Everything else must stay empty: containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions, crossParentPrefabExtractions. Unity refuses a non-empty unsupported array before any write.");
             builder.AppendLine("Keep prefabName present for schema stability; this version never derives it, and it must not be used to hide conflicting toName values. Every postGroupingExtractionIntents entry uses post-grouping hierarchy paths in templatePath and instances[].path, never node:<id>.");
             builder.AppendLine("The executable plan-format file is authoritative for field names and object shapes; where it still describes an operation as unsupported, this instruction wins.");
@@ -2837,7 +2865,10 @@ namespace PsdLayoutTool2
                     return new PsdHierarchyChatSendResult(false, "AI 未返回可显示的文本。");
                 }
 
-                return new PsdHierarchyChatSendResult(true, text.Trim());
+                bool truncated = provider == PsdHierarchyAiProvider.Codex
+                    ? IsOpenAiResponseTruncated(response.body)
+                    : IsAnthropicResponseTruncated(response.body);
+                return new PsdHierarchyChatSendResult(true, text.Trim(), string.Empty, truncated);
             }
             catch (Exception exception)
             {
@@ -2871,7 +2902,7 @@ namespace PsdLayoutTool2
             var request = new AnthropicRequest
             {
                 model = connection.model.Trim(),
-                max_tokens = 4096,
+                max_tokens = AnthropicMaxOutputTokens,
                 system = context.BuildInstructions(),
                 messages = BuildAnthropicMessages(messages),
             };
@@ -3010,6 +3041,22 @@ namespace PsdLayoutTool2
             return builder.ToString();
         }
 
+        private static bool IsAnthropicResponseTruncated(string json)
+        {
+            AnthropicResponse response = JsonUtility.FromJson<AnthropicResponse>(json);
+            return response != null &&
+                   string.Equals(response.stop_reason, "max_tokens", StringComparison.Ordinal);
+        }
+
+        private static bool IsOpenAiResponseTruncated(string json)
+        {
+            OpenAiResponse response = JsonUtility.FromJson<OpenAiResponse>(json);
+            return response != null &&
+                   string.Equals(response.status, "incomplete", StringComparison.Ordinal) &&
+                   response.incomplete_details != null &&
+                   string.Equals(response.incomplete_details.reason, "max_output_tokens", StringComparison.Ordinal);
+        }
+
         private static string TryExtractErrorMessage(string json)
         {
             if (string.IsNullOrWhiteSpace(json))
@@ -3064,6 +3111,14 @@ namespace PsdLayoutTool2
         private sealed class OpenAiResponse
         {
             public OpenAiOutput[] output;
+            public string status;
+            public OpenAiIncompleteDetails incomplete_details;
+        }
+
+        [Serializable]
+        private sealed class OpenAiIncompleteDetails
+        {
+            public string reason;
         }
 
         [Serializable]
@@ -3082,6 +3137,7 @@ namespace PsdLayoutTool2
         private sealed class AnthropicResponse
         {
             public AnthropicContent[] content;
+            public string stop_reason;
         }
 
         [Serializable]
@@ -3110,7 +3166,7 @@ namespace PsdLayoutTool2
                 {
                     webRequest.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(request.body));
                     webRequest.downloadHandler = new DownloadHandlerBuffer();
-                    webRequest.timeout = AiRequestTimeoutSeconds;
+                    webRequest.timeout = HttpAiRequestTimeoutSeconds;
                     foreach (KeyValuePair<string, string> header in request.Headers)
                     {
                         webRequest.SetRequestHeader(header.Key, header.Value);

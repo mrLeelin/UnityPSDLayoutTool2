@@ -300,31 +300,48 @@ namespace PsdLayoutTool2
                 if (!PsdHierarchyChatCleanupExecution.TryPrepareExecutionPlan(
                         context, planJson, out string prepared, out string preparationError))
                     throw new InvalidDataException(preparationError);
-                plan = JObject.Parse(prepared);
-                prefabPath = plan.Value<string>("prefabAssetPath") ?? string.Empty;
-                if (!string.Equals(prefabPath, context.targetPrefabAssetPath, StringComparison.Ordinal))
-                    throw new InvalidDataException("Plan target does not match the authoritative Prefab context.");
-                if (!(plan["output"] is JObject output) ||
+                JObject parsed = JObject.Parse(prepared);
+                plan = parsed;
+                string targetPath = parsed.Value<string>("prefabAssetPath") ?? string.Empty;
+                prefabPath = targetPath;
+
+                // 各项检查互不依赖：全部执行后一次性报告，避免自动修复每轮只修一个错误。
+                var errors = new List<string>();
+                if (!string.Equals(targetPath, context.targetPrefabAssetPath, StringComparison.Ordinal))
+                    errors.Add("Plan target does not match the authoritative Prefab context.");
+                if (!(parsed["output"] is JObject output) ||
                     !string.Equals(output.Value<string>("mode"), "in_place", StringComparison.Ordinal) ||
-                    !string.Equals(output.Value<string>("assetPath"), prefabPath, StringComparison.Ordinal))
-                    throw new InvalidDataException("Version 2 basic cleanup requires output.mode=in_place for the target Prefab.");
-                if (!string.Equals(plan.Value<string>("snapshotFingerprint"), context.hierarchySnapshotFingerprint, StringComparison.Ordinal))
-                    throw new InvalidDataException("Plan snapshot fingerprint does not match the authoritative context.");
-                string fullPath = GetProjectAssetFullPath(prefabPath);
+                    !string.Equals(output.Value<string>("assetPath"), targetPath, StringComparison.Ordinal))
+                    errors.Add("Version 2 basic cleanup requires output.mode=in_place for the target Prefab.");
+                if (!string.Equals(parsed.Value<string>("snapshotFingerprint"), context.hierarchySnapshotFingerprint, StringComparison.Ordinal))
+                    errors.Add("Plan snapshot fingerprint does not match the authoritative context.");
+                string fullPath = GetProjectAssetFullPath(targetPath);
                 if (!File.Exists(fullPath) ||
                     !string.Equals(PsdHierarchyChatContextBuilder.ComputeFileFingerprint(fullPath), context.hierarchySnapshotFingerprint, StringComparison.Ordinal))
-                    throw new InvalidDataException("Target Prefab changed after the hierarchy snapshot was captured.");
-                if (!(plan["verify"] is JObject verify))
-                    throw new InvalidDataException("Plan is missing the verify object.");
-                ValidateOperationFields(plan, "wrappers", "id", "name", "parent", "siblingIndex");
-                ValidateOperationFields(plan, "moves", "source", "destination", "siblingIndex");
-                ValidateOperationFields(plan, "renames", "target", "name");
-                ValidateOperationFields(plan, "tightBounds", "target");
-                ValidateOperationFields(plan, "emptyContainerRemovals", "source");
-                ValidateVerifySchema(verify);
-                string unsupportedVerify = DescribeUnsupportedVerificationFields(verify);
-                if (!string.IsNullOrEmpty(unsupportedVerify))
-                    throw new InvalidDataException("Unsupported verification fields: " + unsupportedVerify + ".");
+                    errors.Add("Target Prefab changed after the hierarchy snapshot was captured.");
+
+                PsdHierarchyChatCleanupExecution.CollectValidationError(errors,
+                    () => ValidateOperationFields(parsed, "wrappers", "id", "name", "parent", "siblingIndex"));
+                PsdHierarchyChatCleanupExecution.CollectValidationError(errors,
+                    () => ValidateOperationFields(parsed, "moves", "source", "destination", "siblingIndex"));
+                PsdHierarchyChatCleanupExecution.CollectValidationError(errors,
+                    () => ValidateOperationFields(parsed, "renames", "target", "name"));
+                PsdHierarchyChatCleanupExecution.CollectValidationError(errors,
+                    () => ValidateOperationFields(parsed, "tightBounds", "target"));
+                PsdHierarchyChatCleanupExecution.CollectValidationError(errors,
+                    () => ValidateOperationFields(parsed, "emptyContainerRemovals", "source"));
+
+                if (!(parsed["verify"] is JObject verify))
+                {
+                    errors.Add("Plan is missing the verify object.");
+                }
+                else
+                {
+                    PsdHierarchyChatCleanupExecution.CollectValidationError(errors, () => ValidateVerifySchema(verify));
+                    string unsupportedVerify = DescribeUnsupportedVerificationFields(verify);
+                    if (!string.IsNullOrEmpty(unsupportedVerify))
+                        errors.Add("Unsupported verification fields: " + unsupportedVerify + ".");
+                }
 
                 string[] unsupportedOperations =
                 {
@@ -332,8 +349,8 @@ namespace PsdLayoutTool2
                 };
                 foreach (string property in unsupportedOperations)
                 {
-                    if (plan[property] != null && (!(plan[property] is JArray values) || values.Count > 0))
-                        throw new InvalidDataException(property + " is not supported by the version 2 basic cleanup executor.");
+                    if (parsed[property] != null && (!(parsed[property] is JArray values) || values.Count > 0))
+                        errors.Add(property + " is not supported by the version 2 basic cleanup executor.");
                 }
                 var knownArrays = new HashSet<string>(StringComparer.Ordinal)
                 {
@@ -344,11 +361,13 @@ namespace PsdLayoutTool2
                     "selectedPrefabExtractions", "crossParentPrefabExtractions", "postGroupingExtractionIntents",
                     "requiredComponentFamilies", "containmentFindings", "flatSiblingFindings",
                 };
-                foreach (JProperty property in plan.Properties())
+                foreach (JProperty property in parsed.Properties())
                 {
                     if (property.Value is JArray values && values.Count > 0 && !knownArrays.Contains(property.Name))
-                        throw new InvalidDataException("Unknown operation array is not executable: " + property.Name + ".");
+                        errors.Add("Unknown operation array is not executable: " + property.Name + ".");
                 }
+
+                PsdHierarchyChatCleanupExecution.ThrowIfAnyValidationErrors(errors);
                 return true;
             }
             catch (Exception exception)
