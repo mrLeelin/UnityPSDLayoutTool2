@@ -2015,6 +2015,8 @@ namespace PsdLayoutTool2
             "PREFAB NAME IS THE PRIVATE-ASSET PREFIX: every textureRenames[].toName must start with prefabName + \"_\" and every spriteAtlasRenames[].toName must equal prefabName. Choose prefabName yourself as an English PascalCase name ending with View (for example MainScreenView); it is independent of the Prefab root and file name, which stay unchanged.";
         internal const string SnapshotRefreshContract =
             "SNAPSHOT FRESHNESS: snapshotFingerprint is the hash of the Prefab file, so it changes after every successful apply. Re-read the current snapshot before planning again and never reuse an old fingerprint or node id.";
+        internal const string WorkflowBindingContract =
+            "WORKFLOW BINDING: every plan must also include targetPrefabAssetPath, selectionNodeIds (node:<id> only), operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion. These fields bind the plan to the current selection review and are revalidated immediately before apply.";
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
             "1. 结合 PSD 与 Prefab 的完整层级、节点几何、组件、同级顺序和重复结构，说明当前结构的主要问题。\n" +
@@ -2076,6 +2078,7 @@ namespace PsdLayoutTool2
             builder.AppendLine(PsdHierarchyChatClient.VerifyFieldContract);
             builder.AppendLine(PsdHierarchyChatClient.PrefabNameContract);
             builder.AppendLine(PsdHierarchyChatClient.SnapshotRefreshContract);
+            builder.AppendLine(PsdHierarchyChatClient.WorkflowBindingContract);
             builder.AppendLine("For every textureRenames[].from or spriteAtlasRenames[].from, use only an exact path from the current allowed asset source list. If the failed path is absent, remove or replace that operation; never guess an incremented filename.");
             if (context?.hasAuthoritativeAssetRenameSourcePaths == true)
             {
@@ -2834,6 +2837,7 @@ namespace PsdLayoutTool2
             builder.AppendLine(VerifyFieldContract);
             builder.AppendLine(PrefabNameContract);
             builder.AppendLine(SnapshotRefreshContract);
+            builder.AppendLine(WorkflowBindingContract);
             builder.AppendLine("EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents are executable; every other operation array must stay empty because Unity refuses a non-empty unsupported array before any write.");
             builder.AppendLine("Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's source roots must completely cover the candidate sources. A deferred candidate is checked again against the refreshed snapshot before second-stage execution.");
             builder.AppendLine("containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions MUST stay empty arrays: Unity refuses a non-empty one before any write.");

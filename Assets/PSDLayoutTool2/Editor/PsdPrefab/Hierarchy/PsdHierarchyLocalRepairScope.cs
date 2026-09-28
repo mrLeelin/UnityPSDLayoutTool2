@@ -181,6 +181,11 @@ namespace PsdLayoutTool2
                     continue;
                 }
 
+                GameObject selectedObject = transform.gameObject;
+                PsdHierarchyNormalizedSelection normalizedSelection =
+                    PsdHierarchySelectionNormalizer.Normalize(selectedObject);
+                transform = normalizedSelection.normalized.transform;
+
                 if (!transform.IsChildOf(stage.prefabContentsRoot.transform))
                 {
                     error = "当前选择包含不属于目标 Prefab Stage 的对象：" + transform.name;

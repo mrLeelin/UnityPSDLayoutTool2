@@ -57,6 +57,8 @@ namespace PsdLayoutTool2
             public string targetPrefabPath = string.Empty;
             public string planPath = string.Empty;
             public string reviewPath = string.Empty;
+            public string snapshotFingerprint = string.Empty;
+            public string reviewVersion = "1";
         }
 
         /// <summary>抢占记录：写入计划内容哈希与执行标识，重载后据此判断不确定请求。</summary>
@@ -72,6 +74,7 @@ namespace PsdLayoutTool2
             public string targetPrefabPath = string.Empty;
             public string targetFingerprintBefore = string.Empty;
             public string claimedAtUtc = string.Empty;
+            public string workflowState = "Approved";
         }
 
         /// <summary>写给终端 AI 的回执；失败时 message 即校验/执行错误全文。</summary>
@@ -90,6 +93,25 @@ namespace PsdLayoutTool2
             public string sourcePsdAssetPath = string.Empty;
             public string targetPrefabPath = string.Empty;
             public string finishedAtUtc = string.Empty;
+        }
+
+        [Serializable]
+        internal sealed class WorkflowLedgerRecord
+        {
+            public string originalUserRequest = string.Empty;
+            public string currentSelection = string.Empty;
+            public string normalizedSelection = string.Empty;
+            public string snapshotFingerprint = string.Empty;
+            public string reviewPath = string.Empty;
+            public string planPath = string.Empty;
+            public string planHash = string.Empty;
+            public bool approved;
+            public bool applyCreated;
+            public string unityResult = string.Empty;
+            public string prefabTimestampBefore = string.Empty;
+            public string prefabTimestampAfter = string.Empty;
+            public string[] newAssetPaths = Array.Empty<string>();
+            public string verificationResult = string.Empty;
         }
 
         [InitializeOnLoadMethod]
@@ -456,6 +478,11 @@ namespace PsdLayoutTool2
 
                 // 抢占时一次性读取计划内容：之后计划文件被替换也不改变本次已接受的请求。
                 string planJson = File.ReadAllText(planPath, Encoding.UTF8);
+                if (!PsdWorkflowPlanBinding.TryReadApproval(claimPath, out PsdWorkflowApproval approval, out string approvalError))
+                {
+                    FailApply(applyPath, claimPath, session, null, StatusRejected, "approval", approvalError);
+                    return;
+                }
                 claim = new ApplyClaimRecord
                 {
                     version = CurrentProtocolVersion,
@@ -478,6 +505,28 @@ namespace PsdLayoutTool2
                 {
                     FailApply(applyPath, claimPath, session, claim, StatusRejected, "context",
                         "无法创建整理上下文：" + error);
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(session.snapshotFingerprint) &&
+                    !string.Equals(session.snapshotFingerprint, context.hierarchySnapshotFingerprint, StringComparison.Ordinal))
+                {
+                    FailApply(applyPath, claimPath, session, claim, StatusRejected, "snapshot",
+                        "当前选择或 Prefab 已变化，旧 snapshot fingerprint 已失效；请重新生成 review/plan。");
+                    return;
+                }
+
+                if (!PsdWorkflowPlanBinding.TryValidate(
+                        planJson,
+                        context.hierarchySnapshotJson,
+                        context.hierarchySnapshotFingerprint,
+                        context.targetPrefabAssetPath,
+                        planPath,
+                        session.reviewPath,
+                        approval,
+                        out string bindingError))
+                {
+                    FailApply(applyPath, claimPath, session, claim, StatusRejected, "binding", bindingError);
                     return;
                 }
 
@@ -576,6 +625,13 @@ namespace PsdLayoutTool2
                 return false;
             }
 
+            if (string.IsNullOrWhiteSpace(session.snapshotFingerprint))
+            {
+                error = "会话缺少 authoritative snapshot fingerprint；旧会话必须重新生成 review/plan。";
+                session = null;
+                return false;
+            }
+
             if (string.IsNullOrWhiteSpace(session.sessionId))
             {
                 session.sessionId = sessionId;
@@ -614,6 +670,7 @@ namespace PsdLayoutTool2
             // 回执必须写到 *.apply-result.json：写到哨兵路径会让 AI 永远读不到结果，
             // 而且会在待执行集合里重新制造一个 .apply 文件，导致同一请求被再次执行。
             WriteResult(BuildResultPath(applyPath), BuildRecord(session, claim, success, status, result.stage, message));
+            WriteLedger(applyPath, session, claim, status, message);
 
             if (success)
             {
@@ -661,6 +718,7 @@ namespace PsdLayoutTool2
         {
             string reason = string.IsNullOrWhiteSpace(message) ? "未知错误。" : message;
             WriteResult(BuildResultPath(applyPath), BuildRecord(session, claim, false, status, stage, reason));
+            WriteLedger(applyPath, session, claim, status, reason);
 
             Debug.LogError("[PSDLayoutTool2] 自动应用 AI 计划未成功（" + status + "/" + stage + "）：" + reason);
             try
@@ -737,6 +795,50 @@ namespace PsdLayoutTool2
             {
                 Debug.LogWarning("[PSDLayoutTool2] 写入 Apply 回执失败：" + exception.Message);
             }
+        }
+
+        private static void WriteLedger(
+            string applyPath,
+            SessionRecord session,
+            ApplyClaimRecord claim,
+            string result,
+            string verification)
+        {
+            try
+            {
+                var ledger = new WorkflowLedgerRecord
+                {
+                    snapshotFingerprint = session?.snapshotFingerprint ?? string.Empty,
+                    reviewPath = session?.reviewPath ?? string.Empty,
+                    planPath = claim?.planPath ?? session?.planPath ?? string.Empty,
+                    planHash = claim?.planHash ?? string.Empty,
+                    approved = claim != null,
+                    applyCreated = true,
+                    unityResult = result ?? string.Empty,
+                    prefabTimestampBefore = ReadTimestamp(session?.targetPrefabPath),
+                    prefabTimestampAfter = ReadTimestamp(session?.targetPrefabPath),
+                    verificationResult = verification ?? string.Empty,
+                };
+                File.WriteAllText(
+                    StripStateExtension(applyPath) + ".ledger.json",
+                    JsonConvert.SerializeObject(ledger, Formatting.Indented),
+                    new UTF8Encoding(false));
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[PSDLayoutTool2] 写入 workflow ledger 失败：" + exception.Message);
+            }
+        }
+
+        private static string ReadTimestamp(string assetPath)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(assetPath)
+                    ? string.Empty
+                    : File.GetLastWriteTimeUtc(assetPath).ToString("o", CultureInfo.InvariantCulture);
+            }
+            catch (Exception) { return string.Empty; }
         }
 
         private static void DeleteIfExists(string path)

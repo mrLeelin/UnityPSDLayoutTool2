@@ -514,6 +514,10 @@ namespace PsdLayoutTool2
                 return;
             }
 
+            SetStatus("当前选择仍处于 AwaitingApproval。局部整理必须通过带有明确审批凭证的 .apply 执行。");
+            confirmButton?.SetEnabled(true);
+            return;
+
             confirmButton?.SetEnabled(false);
             analyzeButton?.SetEnabled(false);
             lockSelectionButton?.SetEnabled(false);
@@ -553,10 +557,10 @@ namespace PsdLayoutTool2
                 // 3. 应用方案。Native 后端通过 PrefabUtility.SaveAsPrefabAsset 写资产，
                 //    不经 Unity Undo 系统，因此不注册 Undo；可回滚性由备份 + 事务保存 + 重放 Profile 兜底。
                 PsdHierarchyChatCleanupExecutionResult result =
-                    await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(
-                        context,
-                        pendingPlanJson,
-                        replaceReplayProfile: false);
+                    new PsdHierarchyChatCleanupExecutionResult(
+                        PsdHierarchyCleanupExecutionState.Rejected,
+                        "approval",
+                        "局部整理已停止：必须由绑定当前快照的 .apply 交给受控 executor 执行。");
 
                 if (result.success)
                 {

@@ -217,6 +217,15 @@ namespace PsdLayoutTool2
                     "version",
                     "snapshotFingerprint",
                     "prefabAssetPath",
+                    "targetPrefabAssetPath",
+                    "selectionNodeIds",
+                    "operationScope",
+                    "expectedNodeCount",
+                    "expectedHierarchy",
+                    "directChildren",
+                    "absentPaths",
+                    "preserveRequirements",
+                    "reviewVersion",
                     "output",
                     "prefabName",
                     "verify",
@@ -225,39 +234,12 @@ namespace PsdLayoutTool2
 
         internal static bool IsExplicitConfirmation(string input)
         {
-            string normalized = (input ?? string.Empty)
-                .Trim()
-                .Trim('。', '！', '!', '，', ',', '；', ';', '：', ':')
-                .ToLowerInvariant();
-            return normalized == "确认" ||
-                   normalized == "确认执行" ||
-                   normalized == "确认更新" ||
-                   normalized == "确认方案" ||
-                   normalized == "确定" ||
-                   normalized == "可以" ||
-                   normalized == "可以执行" ||
-                   normalized == "好的" ||
-                   normalized == "同意" ||
-                   normalized == "满意" ||
-                   normalized == "满意了";
+            return PsdWorkflowPlanBinding.IsExplicitApproval(input);
         }
 
         internal static bool IsApplyIntent(string input)
         {
-            string normalized = (input ?? string.Empty)
-                .Trim()
-                .Trim('。', '！', '!', '，', ',', '；', ';', '：', ':')
-                .Replace(" ", string.Empty)
-                .ToLowerInvariant();
-            return IsExplicitConfirmation(input) ||
-                   normalized == "修改" ||
-                   normalized == "修改吧" ||
-                   normalized == "修改prefab" ||
-                   normalized == "修改预制体" ||
-                   normalized == "执行" ||
-                   normalized == "应用" ||
-                   normalized == "开始修改" ||
-                   normalized == "开始整理";
+            return IsExplicitConfirmation(input);
         }
 
         internal static bool TryBuildSelectedPrefabExtractionPlan(

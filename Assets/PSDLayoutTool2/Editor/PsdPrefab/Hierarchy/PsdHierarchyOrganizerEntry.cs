@@ -25,7 +25,9 @@ namespace PsdLayoutTool2
             string sourcePsdAssetPath,
             string targetPrefabPath,
             string planFullPath,
-            string reviewFullPath)
+            string reviewFullPath,
+            string snapshotFingerprint = "",
+            string reviewVersion = "1")
         {
             string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
             if (string.IsNullOrEmpty(projectRoot))
@@ -43,6 +45,8 @@ namespace PsdLayoutTool2
                 targetPrefabPath = targetPrefabPath,
                 planPath = planFullPath,
                 reviewPath = reviewFullPath,
+                snapshotFingerprint = snapshotFingerprint ?? string.Empty,
+                reviewVersion = reviewVersion ?? "1",
             };
             File.WriteAllText(
                 Path.Combine(directory, sessionId + ".session.json"),
@@ -80,7 +84,7 @@ namespace PsdLayoutTool2
                 "\n\n===== TERMINAL SESSION CONTRACT =====\n" +
                 "This is an analysis and plan session. Do not claim that Unity assets were changed.\n" +
                 "Write the complete executable JSON plan (and no partial patch) to: " + planPath.Replace('\\', '/') + "\n" +
-                "The plan must be version 2 using node:<id> references from the snapshot.\n" +
+                "The plan must be version 2 using node:<id> references from the snapshot. It must also include snapshotFingerprint, targetPrefabAssetPath, selectionNodeIds, operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion.\n" +
                 "Unity validates and applies the reviewed plan itself after .apply; never run a script to modify the Prefab.\n" +
                 PsdHierarchyChatClient.PrefabRootNameContract + "\n" +
                 PsdHierarchyChatClient.VerifyFieldContract + "\n" +
@@ -101,8 +105,9 @@ namespace PsdLayoutTool2
                 "Write the human-readable Chinese review to: " + reviewPath.Replace('\\', '/') + "\n" +
                 "After every revision, replace both files atomically or rewrite them completely.\n" +
                 "Only a later Unity validation triggered by the APPLY sentinel can modify the Prefab. Unity renames .apply to .applying while it works; never write .apply twice for one request.\n" +
-                "After the human reviewer explicitly approves in this conversation, write an empty file at: " +
+                "After the human reviewer explicitly approves with the exact phrase '" + PsdWorkflowPlanBinding.ExplicitApprovalPhrase + "', write a JSON approval record (not an empty file) at: " +
                 applyPath.Replace('\\', '/') + "\n" +
+                "The approval JSON must contain version, approvalText, planPath, planSha256, snapshotFingerprint, reviewVersion, targetPrefabPath, and approvedAtUtc. planSha256 is SHA-256 of the exact UTF-8 plan file.\n" +
                 "That .apply file is the only signal Unity needs. Do not write it before human approval.\n" +
                 "After writing .apply, poll this result file (about every 2s, up to ~3 minutes): " +
                 applyResultPath.Replace('\\', '/') + "\n" +
@@ -227,7 +232,8 @@ namespace PsdLayoutTool2
                 string reviewPath = Path.Combine(promptDirectory, sessionId + ".review.md");
                 string applyPath = BuildApplySentinelPath(planPath);
                 string applyResultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
-                WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planPath, reviewPath);
+                WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planPath, reviewPath,
+                    context.hierarchySnapshotFingerprint);
                 string taskPrompt = PsdHierarchyChatClient.BuildPortablePrompt(context) +
                     BuildTerminalSessionContract(planPath, reviewPath, applyPath, applyResultPath);
                 File.WriteAllText(promptPath, taskPrompt, new UTF8Encoding(false));
@@ -327,7 +333,8 @@ namespace PsdLayoutTool2
                 string planFullPath = Path.Combine(outputDirectory, sessionId + ".plan.json");
                 string reviewFullPath = Path.Combine(outputDirectory, sessionId + ".review.md");
                 string applyFullPath = BuildApplySentinelPath(planFullPath);
-                WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planFullPath, reviewFullPath);
+                WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planFullPath, reviewFullPath,
+                    context.hierarchySnapshotFingerprint);
 
                 string prompt = PsdHierarchyChatClient.BuildExternalSessionPrompt(
                     context,

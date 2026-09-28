@@ -4,6 +4,7 @@ namespace PsdLayoutTool2
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Text;
     using Newtonsoft.Json.Linq;
     using UnityEditor;
     using UnityEngine;
@@ -403,9 +404,9 @@ namespace PsdLayoutTool2
 
             string prompt = draftField.value ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(pendingPlanJson) &&
-                (string.IsNullOrWhiteSpace(prompt) || PsdHierarchyChatCleanupExecution.IsApplyIntent(prompt)))
+                PsdHierarchyChatCleanupExecution.IsApplyIntent(prompt))
             {
-                ApplyPendingPlan(string.IsNullOrWhiteSpace(prompt) ? "确认" : prompt);
+                ApplyPendingPlan(prompt);
                 return;
             }
 
@@ -687,7 +688,7 @@ namespace PsdLayoutTool2
             }
         }
 
-        private async void ApplyPendingPlan(string confirmation, bool appendUserConfirmation = true)
+        private void ApplyPendingPlan(string confirmation, bool appendUserConfirmation = true)
         {
             if (context == null || isSending || string.IsNullOrWhiteSpace(pendingPlanJson))
             {
@@ -695,97 +696,15 @@ namespace PsdLayoutTool2
             }
 
             string planToApply = pendingPlanJson;
+            if (!TryQueueApprovedApply(planToApply, confirmation, out string queueError))
+            {
+                AppendMessage("system", queueError);
+                return;
+            }
             SetPendingPlan(string.Empty);
-            isSending = true;
-            if (appendUserConfirmation)
-            {
-                AppendMessage("user", confirmation.Trim());
-            }
-            if (draftField != null)
-            {
-                draftField.value = string.Empty;
-            }
-
-            ShowThinkingIndicator("正在校验已确认方案，并通过 Unity Editor API 更新 Prefab...");
-            SetSending(true, "正在更新 Prefab...");
-            try
-            {
-                PsdHierarchyChatCleanupExecutionResult result =
-                    await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(
-                        context,
-                        planToApply,
-                        ShouldReplaceReplayProfile(
-                            hasAppliedCleanupStage,
-                            requiresReplayProfileReplacement));
-                HideThinkingIndicator();
-                AppendMessage("system", result.message);
-                bool verificationWarning = result.success &&
-                    result.message.IndexOf("VERIFY_WARN", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (result.success && !verificationWarning)
-                {
-                    hasAppliedCleanupStage = true;
-                    requiresReplayProfileReplacement = false;
-                    pendingRecoveryFailure = string.Empty;
-                    SetPlanWorkspace(null);
-                }
-                if (verificationWarning)
-                {
-                    HandleApplyFailure(planToApply, result.message, infrastructureFailure: false);
-                }
-                else if (!result.success)
-                {
-                    bool requiresProfileReplacement =
-                        PsdHierarchyCleanupReplayCoordinator.IsPermanentReplayFailure(result.message);
-                    requiresReplayProfileReplacement |= requiresProfileReplacement;
-                    if (requiresProfileReplacement)
-                    {
-                        string sourceGuid = AssetDatabase.AssetPathToGUID(context.sourcePsdAssetPath);
-                        PsdHierarchyCleanupReplayProfile.TryMarkRequiresRebindByGuid(
-                            sourceGuid,
-                            context.targetPrefabAssetPath,
-                            result.message);
-                    }
-
-                    bool discarded = PsdHierarchyChatCleanupExecution.TryDiscardFailedReplayStage(
-                        context,
-                        planToApply,
-                        out string discardError);
-                    if (discarded)
-                    {
-                        AppendMessage("system", "已移除未执行成功的重放阶段，避免下次 PSD 生成再次重放旧计划。");
-                    }
-                    else if (!string.IsNullOrEmpty(discardError))
-                    {
-                        AppendMessage("system", "未能清理失败计划的旧重放阶段：" + discardError);
-                    }
-
-                    HandleApplyFailure(
-                        planToApply,
-                        result.message,
-                        infrastructureFailure: false);
-                }
-                if (result.success && !verificationWarning)
-                {
-                    SetSending(false, "更新完成");
-                }
-            }
-            catch (Exception exception)
-            {
-                HideThinkingIndicator();
-                HandleApplyFailure(
-                    planToApply,
-                    "更新 Prefab 时发生异常：" + exception.Message,
-                    infrastructureFailure: true);
-            }
-            finally
-            {
-                HideThinkingIndicator();
-                isSending = false;
-            }
-
-            // 分组后抽取由共享执行核心在首阶段保存并核验后原生完成（见
-            // PsdHierarchyNativeCleanupExecutor.ExecuteV2 的第二阶段），因此这里不再排队
-            // AI 子 Prefab 阶段：重复执行会试图抽取已经变成实例的行。
+            if (appendUserConfirmation) AppendMessage("user", confirmation.Trim());
+            AppendMessage("system", "已创建绑定当前计划的 .apply。Unity 将在重新读取快照并完成门禁校验后执行；请等待 apply-result.json。");
+            if (draftField != null) draftField.value = string.Empty;
         }
 
         internal void HandleCompletedPlanFailure(
@@ -865,6 +784,52 @@ namespace PsdLayoutTool2
             if (!result.success)
             {
                 AppendMessage("system", "自动保存计划诊断失败：" + result.error);
+            }
+        }
+
+        private bool TryQueueApprovedApply(string planJson, string approvalText, out string error)
+        {
+            error = string.Empty;
+            if (!PsdWorkflowPlanBinding.IsExplicitApproval(approvalText))
+            {
+                error = "当前仍在 AwaitingApproval；必须明确输入：" + PsdWorkflowPlanBinding.ExplicitApprovalPhrase;
+                return false;
+            }
+            string directory = Path.Combine(context.projectRoot, "Library", "PsdHierarchyTerminal");
+            Directory.CreateDirectory(directory);
+            string sessionId = "chat-" + Guid.NewGuid().ToString("N");
+            string planPath = Path.Combine(directory, sessionId + ".plan.json");
+            string reviewPath = Path.Combine(directory, sessionId + ".review.md");
+            string applyPath = PsdHierarchyOrganizerEntry.BuildApplySentinelPath(planPath);
+            try
+            {
+                File.WriteAllText(planPath, planJson, new UTF8Encoding(false));
+                File.WriteAllText(reviewPath, "Approved plan review generated by the PSD hierarchy chat.\n", new UTF8Encoding(false));
+                PsdHierarchyOrganizerEntry.WriteTerminalSession(
+                    sessionId,
+                    context.sourcePsdAssetPath,
+                    context.targetPrefabAssetPath,
+                    planPath,
+                    reviewPath,
+                    context.hierarchySnapshotFingerprint);
+                if (!PsdWorkflowPlanBinding.TryCreateApplySentinel(
+                        applyPath,
+                        planPath,
+                        planJson,
+                        context.hierarchySnapshotFingerprint,
+                        "1",
+                        context.targetPrefabAssetPath,
+                        approvalText,
+                        out error))
+                {
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = "创建审批绑定的 .apply 失败：" + exception.Message;
+                return false;
             }
         }
 
