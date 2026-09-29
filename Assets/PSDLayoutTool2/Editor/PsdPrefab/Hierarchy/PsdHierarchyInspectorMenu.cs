@@ -49,7 +49,7 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            if (!PsdHierarchyLocalRepairWindow.TryOpen(psdSourcePath, prefabAssetPath, out string error))
+            if (!PsdHierarchyOrganizerEntry.TryOpenLocalRepair(psdSourcePath, out string error))
             {
                 EditorUtility.DisplayDialog("错误", error, "确定");
             }

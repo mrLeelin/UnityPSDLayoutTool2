@@ -76,7 +76,7 @@ namespace PsdLayoutTool2.Tests
                 "ShouldQueueComponentExtractionFollowUp",
             };
 
-            string[] remaining = typeof(PsdHierarchyChatWindow)
+            string[] remaining = typeof(PsdHierarchyChatCleanupExecution)
                 .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance)
                 .Select(method => method.Name)
                 .Where(name => removed.Contains(name, StringComparer.Ordinal))

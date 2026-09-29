@@ -2,6 +2,7 @@ namespace PsdLayoutTool2
 {
     using System;
     using System.IO;
+    using System.Text;
     using NUnit.Framework;
     using Newtonsoft.Json;
     using Newtonsoft.Json.Linq;
@@ -100,21 +101,90 @@ namespace PsdLayoutTool2
         }
 
         [Test]
+        public void ProtocolTwoApprovalRecordIsAcceptedAndLegacyVersionIsRejected()
+        {
+            string path = Path.GetTempFileName();
+            try
+            {
+                var approval = new PsdWorkflowApproval
+                {
+                    approvalText = PsdWorkflowPlanBinding.ExplicitApprovalPhrase,
+                    planPath = "p",
+                    planSha256 = "h",
+                    snapshotFingerprint = "s",
+                    targetPrefabPath = "t",
+                };
+                File.WriteAllText(path, JsonConvert.SerializeObject(approval));
+                Assert.That(approval.version, Is.EqualTo(PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion));
+                Assert.That(PsdWorkflowPlanBinding.TryReadApproval(path, out _, out string error), Is.True, error);
+
+                approval.version = 1;
+                File.WriteAllText(path, JsonConvert.SerializeObject(approval));
+                Assert.That(PsdWorkflowPlanBinding.TryReadApproval(path, out _, out error), Is.False);
+                Assert.That(error, Does.Contain("协议版本"));
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Test]
         public void ApplySentinelCreationRequiresExplicitApprovalAndIsOneShot()
         {
             string applyPath = Path.Combine(Path.GetTempPath(), "psd-safety-" + Guid.NewGuid().ToString("N") + ".apply");
             try
             {
+                const string plan = "{\"reviewVersion\":\"review-a\"}";
                 Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
-                    applyPath, "Assets/Diary.plan.json", "{}", "snap-a", "1", "Assets/Diary.prefab", "确认", out _), Is.False);
+                    applyPath, "Assets/Diary.plan.json", plan, "snap-a", "review-a", "Assets/Diary.prefab", "确认", out _), Is.False);
                 Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
-                    applyPath, "Assets/Diary.plan.json", "{}", "snap-a", "1", "Assets/Diary.prefab",
+                    applyPath, "Assets/Diary.plan.json", plan, "snap-a", "review-a", "Assets/Diary.prefab",
                     PsdWorkflowPlanBinding.ExplicitApprovalPhrase, out _), Is.True);
                 Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
-                    applyPath, "Assets/Diary.plan.json", "{}", "snap-a", "1", "Assets/Diary.prefab",
+                    applyPath, "Assets/Diary.plan.json", plan, "snap-a", "review-a", "Assets/Diary.prefab",
                     PsdWorkflowPlanBinding.ExplicitApprovalPhrase, out _), Is.False);
             }
             finally { if (File.Exists(applyPath)) File.Delete(applyPath); }
+        }
+
+        [Test]
+        public void EditedPlanCannotReuseApprovalHash()
+        {
+            string plan = BuildPlan("snap-a", "node:root", includeMetadata: true);
+            JObject editedObject = JObject.Parse(plan);
+            editedObject["expectedNodeCount"] = 2;
+            string editedPlan = editedObject.ToString(Formatting.None);
+            PsdWorkflowApproval approval = BuildApproval(plan, "snap-a", "Assets/Diary.prefab");
+            string review = Path.GetTempFileName();
+            try
+            {
+                File.WriteAllText(review, "review v1");
+                Assert.That(PsdWorkflowPlanBinding.TryValidate(
+                    editedPlan, "{\"fingerprint\":\"snap-a\",\"nodes\":[{\"id\":\"root\"}]}",
+                    "snap-a", "Assets/Diary.prefab", "Assets/Diary.plan.json", review, approval,
+                    out string error), Is.False);
+                Assert.That(error, Does.Contain("planSha256"));
+            }
+            finally { File.Delete(review); }
+        }
+
+        [Test]
+        public void CompletedOrPreflightRejectedSessionRequiresNewApprovalSession()
+        {
+            string applyPath = Path.Combine(Path.GetTempPath(), "psd-terminal-state-" + Guid.NewGuid().ToString("N") + ".apply");
+            string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
+            try
+            {
+                File.WriteAllText(resultPath, new JObject { ["status"] = "rejected", ["stage"] = "preflight" }.ToString(), new UTF8Encoding(false));
+                string plan = BuildPlan("snap-a", "node:root", includeMetadata: true);
+                Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
+                    applyPath, "Assets/Diary.plan.json", plan, "snap-a", "review-a", "Assets/Diary.prefab",
+                    PsdWorkflowPlanBinding.ExplicitApprovalPhrase, out string error), Is.False);
+                Assert.That(error, Does.Contain("必须重新生成 review/plan"));
+            }
+            finally
+            {
+                if (File.Exists(applyPath)) File.Delete(applyPath);
+                if (File.Exists(resultPath)) File.Delete(resultPath);
+            }
         }
 
         [Test]
@@ -154,6 +224,48 @@ namespace PsdLayoutTool2
             finally { File.Delete(review); }
         }
 
+        [Test]
+        public void ValidPlanBindingAcceptsObjectOperationScope()
+        {
+            string snapshot = "{\"fingerprint\":\"snap-a\",\"nodes\":[{\"id\":\"root\"}]}";
+            JObject planObject = JObject.Parse(BuildPlan("snap-a", "node:root", includeMetadata: true));
+            planObject["operationScope"] = new JObject
+            {
+                ["kind"] = "selected_navigation_item_review",
+                ["root"] = "node:root",
+                ["includeAllDescendants"] = true,
+            };
+            string plan = planObject.ToString(Formatting.None);
+            PsdWorkflowApproval approval = BuildApproval(plan, "snap-a", "Assets/Diary.prefab");
+            string review = Path.GetTempFileName();
+            try
+            {
+                File.WriteAllText(review, "review v1");
+                Assert.That(PsdWorkflowPlanBinding.TryValidate(plan, snapshot, "snap-a", "Assets/Diary.prefab",
+                    "Assets/Diary.plan.json", review, approval, out string error), Is.True, error);
+            }
+            finally { File.Delete(review); }
+        }
+
+        [Test]
+        public void PlanBindingRejectsMissingReviewVersion()
+        {
+            string snapshot = "{\"fingerprint\":\"snap-a\",\"nodes\":[{\"id\":\"root\"}]}";
+            JObject planObject = JObject.Parse(BuildPlan("snap-a", "node:root", includeMetadata: true));
+            planObject.Remove("reviewVersion");
+            string plan = planObject.ToString(Formatting.None);
+            PsdWorkflowApproval approval = BuildApproval(plan, "snap-a", "Assets/Diary.prefab");
+            string review = Path.GetTempFileName();
+            try
+            {
+                File.WriteAllText(review, "review v1");
+                Assert.That(PsdWorkflowPlanBinding.TryValidate(plan, snapshot, "snap-a", "Assets/Diary.prefab",
+                    "Assets/Diary.plan.json", review, approval, out string error), Is.False);
+                Assert.That(error, Does.Contain("缺少 reviewVersion"));
+            }
+            finally { File.Delete(review); }
+        }
+
         private static PsdWorkflowApproval BuildApproval(string plan, string fingerprint, string target)
         {
             return new PsdWorkflowApproval
@@ -163,7 +275,7 @@ namespace PsdLayoutTool2
                 planSha256 = PsdWorkflowPlanBinding.Sha256(plan),
                 snapshotFingerprint = fingerprint,
                 targetPrefabPath = target,
-                reviewVersion = "1",
+                reviewVersion = "review-a",
             };
         }
 
@@ -174,7 +286,7 @@ namespace PsdLayoutTool2
                 ["version"] = 2,
                 ["snapshotFingerprint"] = fingerprint,
                 ["prefabAssetPath"] = "Assets/Diary.prefab",
-                ["reviewVersion"] = "1",
+                ["reviewVersion"] = "review-a",
                 ["selectionNodeIds"] = new JArray(node),
                 ["operationScope"] = "selected hierarchy",
                 ["expectedNodeCount"] = 1,

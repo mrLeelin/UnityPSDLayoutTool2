@@ -41,10 +41,12 @@
 - ✅ `TryBuildLocalPrefabOrganizationPlanWithVisualAsync()` - 异步分析入口
 - ⚠️ `PerformVisualAnalysisAsync()` - **当前使用模拟数据**
 
-### 6. UI 集成
-**文件**: `PsdHierarchyLocalRepairWindow.cs`
-- ✅ 修改 `AnalyzeLocalRepair()` 为异步方法
-- ✅ `BuildPlanDetailsWithVisualScores()` - 显示评分详情
+### 6. 终端会话集成
+**文件**: `PsdHierarchyOrganizerEntry.cs` / `PsdHierarchyTerminalApplyWatcher.cs`
+- ✅ 局部整理从当前 Prefab Stage 的 Unity 原生 Selection 创建锁定范围
+- ✅ 局部整理复用 PowerShell AI 终端会话，不再创建 EditorWindow
+- ✅ Apply 前重新绑定当前快照与局部范围，范围外节点保持不可编辑
+- ✅ `BuildPlanDetailsWithVisualScores()` - 终端 review 可显示评分详情
   - 实例序号 + 评分百分比
   - 评分图标（✓✓/✓/?/✗）
   - 评分原因说明
@@ -239,7 +241,8 @@
 ### 修改文件
 - ✅ `Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyLocalRepairScope.cs`
 - ✅ `Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyChatCleanupExecution.cs`
-- ✅ `Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyLocalRepairWindow.cs`
+- ✅ `Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyOrganizerEntry.cs`
+- ✅ `Assets/PSDLayoutTool2/Editor/PsdPrefab/Hierarchy/PsdHierarchyTerminalApplyWatcher.cs`
 
 ---
 
@@ -260,5 +263,6 @@
 ## 参考资料
 
 - `PsdHierarchyChatClient.cs` - 现有 AI 调用接口
-- `PsdHierarchyLocalRepairWindow.cs` - UI 窗口实现
+- `PsdHierarchyOrganizerEntry.cs` - 全量与局部终端会话入口
+- `PsdHierarchyTerminalApplyWatcher.cs` - 局部范围绑定与 NativeUnity Apply
 - `PsdHierarchyLocalRepairScope.cs` - 选区和验证逻辑

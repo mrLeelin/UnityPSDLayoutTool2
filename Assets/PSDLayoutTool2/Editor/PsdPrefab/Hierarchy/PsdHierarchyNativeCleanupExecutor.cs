@@ -352,18 +352,10 @@ namespace PsdLayoutTool2
                     if (parsed[property] != null && (!(parsed[property] is JArray values) || values.Count > 0))
                         errors.Add(property + " is not supported by the version 2 basic cleanup executor.");
                 }
-                var knownArrays = new HashSet<string>(StringComparer.Ordinal)
-                {
-                    "wrappers", "moves", "renames", "emptyContainerRemovals", "tightBounds",
-                    "textureRenames", "spriteAtlasRenames", "componentFamilyDecisions",
-                    "containmentResolutions", "flatSiblingResolutions", "componentExtractions",
-                    "stateComponentExtractions", "variantComponentExtractions", "statefulComponentExtractions",
-                    "selectedPrefabExtractions", "crossParentPrefabExtractions", "postGroupingExtractionIntents",
-                    "requiredComponentFamilies", "containmentFindings", "flatSiblingFindings",
-                };
                 foreach (JProperty property in parsed.Properties())
                 {
-                    if (property.Value is JArray values && values.Count > 0 && !knownArrays.Contains(property.Name))
+                    if (property.Value is JArray values && values.Count > 0 &&
+                        !PsdHierarchyChatCleanupExecution.IsKnownPlanArray(property.Name))
                         errors.Add("Unknown operation array is not executable: " + property.Name + ".");
                 }
 

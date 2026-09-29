@@ -65,6 +65,7 @@ namespace PsdLayoutTool2.Tests
             var plan = new JObject
             {
                 ["version"] = 2, ["snapshotFingerprint"] = context.hierarchySnapshotFingerprint,
+                ["reviewVersion"] = "fixture-review",
                 ["prefabName"] = "ExampleView", ["prefabAssetPath"] = AssetPath,
                 ["output"] = new JObject { ["mode"] = "in_place", ["assetPath"] = AssetPath },
                 ["verify"] = new JObject()
@@ -94,6 +95,24 @@ namespace PsdLayoutTool2.Tests
             var saved = PrefabUtility.LoadPrefabContents(AssetPath);
             try { Assert.That(saved.transform.GetChild(0).name, Is.EqualTo("Icon")); }
             finally { PrefabUtility.UnloadPrefabContents(saved); }
+        }
+
+        [Test]
+        public async Task ReviewMetadataArraysAreAcceptedByNativePreflight()
+        {
+            JObject plan = Plan();
+            plan["selectionNodeIds"] = new JArray("node:n0", "node:n1");
+            plan["expectedHierarchy"] = new JArray(
+                new JObject { ["id"] = "node:n0", ["path"] = "ExampleView" },
+                new JObject { ["id"] = "node:n1", ["path"] = "ExampleView/Item" });
+            plan["directChildren"] = new JArray(
+                new JObject { ["parent"] = "node:n0", ["child"] = "node:n1" });
+            plan["absentPaths"] = new JArray("ExampleView/Removed");
+
+            var result = await PsdHierarchyNativeCleanupExecutor.ValidateAsync(context, plan.ToString());
+
+            Assert.That(result.success, Is.True, result.message);
+            Assert.That(result.stage, Is.EqualTo("preflight"));
         }
 
         [TestCase(false)]

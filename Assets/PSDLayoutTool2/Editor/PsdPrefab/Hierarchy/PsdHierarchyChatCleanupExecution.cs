@@ -232,6 +232,24 @@ namespace PsdLayoutTool2
                 }),
                 StringComparer.Ordinal);
 
+        // Single source of truth for root arrays that describe the reviewed
+        // document but are not executable operations. The native executor
+        // must accept these fields while still rejecting unknown operations.
+        internal static readonly ISet<string> ReviewMetadataArrayProperties =
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                "selectionNodeIds",
+                "expectedHierarchy",
+                "directChildren",
+                "absentPaths",
+            };
+
+        internal static bool IsKnownPlanArray(string propertyName)
+        {
+            return SupportedRootArrayProperties.Contains(propertyName) ||
+                   ReviewMetadataArrayProperties.Contains(propertyName);
+        }
+
         internal static bool IsExplicitConfirmation(string input)
         {
             return PsdWorkflowPlanBinding.IsExplicitApproval(input);
@@ -269,6 +287,7 @@ namespace PsdLayoutTool2
             {
                 ["version"] = 2,
                 ["snapshotFingerprint"] = context.hierarchySnapshotFingerprint,
+                ["reviewVersion"] = Guid.NewGuid().ToString("N"),
                 ["prefabAssetPath"] = context.targetPrefabAssetPath,
                 ["output"] = new JObject
                 {
@@ -423,6 +442,7 @@ namespace PsdLayoutTool2
             {
                 ["version"] = 2,
                 ["snapshotFingerprint"] = context.hierarchySnapshotFingerprint,
+                ["reviewVersion"] = Guid.NewGuid().ToString("N"),
                 ["prefabAssetPath"] = context.targetPrefabAssetPath,
                 ["output"] = new JObject
                 {

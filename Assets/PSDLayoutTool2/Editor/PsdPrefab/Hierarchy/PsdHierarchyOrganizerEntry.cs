@@ -6,6 +6,7 @@ namespace PsdLayoutTool2
     using System.Globalization;
     using System.IO;
     using System.Text;
+    using Newtonsoft.Json.Linq;
     using UnityEditor;
     using UnityEngine;
 
@@ -27,7 +28,8 @@ namespace PsdLayoutTool2
             string planFullPath,
             string reviewFullPath,
             string snapshotFingerprint = "",
-            string reviewVersion = "1")
+            string reviewVersion = "",
+            PsdHierarchyLocalRepairScope localRepairScope = null)
         {
             string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
             if (string.IsNullOrEmpty(projectRoot))
@@ -46,7 +48,10 @@ namespace PsdLayoutTool2
                 planPath = planFullPath,
                 reviewPath = reviewFullPath,
                 snapshotFingerprint = snapshotFingerprint ?? string.Empty,
-                reviewVersion = reviewVersion ?? "1",
+                reviewVersion = reviewVersion ?? string.Empty,
+                localRepair = localRepairScope != null,
+                localRepairScopeMode = localRepairScope?.mode.ToString() ?? string.Empty,
+                localRepairSelectedPaths = localRepairScope?.selectedPaths ?? Array.Empty<string>(),
             };
             File.WriteAllText(
                 Path.Combine(directory, sessionId + ".session.json"),
@@ -78,10 +83,15 @@ namespace PsdLayoutTool2
             string planPath,
             string reviewPath,
             string applyPath,
-            string applyResultPath)
+            string applyResultPath,
+            bool localRepair = false)
         {
+            string scopeContract = localRepair
+                ? "This is a LOCAL REPAIR session. The locked Unity selection is authoritative. Review and plan only the selected scope; leave every operation outside that scope unchanged. Do not perform a full Prefab reorganization.\n"
+                : string.Empty;
             return
                 "\n\n===== TERMINAL SESSION CONTRACT =====\n" +
+                scopeContract +
                 "This is an analysis and plan session. Do not claim that Unity assets were changed.\n" +
                 "Write the complete executable JSON plan (and no partial patch) to: " + planPath.Replace('\\', '/') + "\n" +
                 "The plan must be version 2 using node:<id> references from the snapshot. It must also include snapshotFingerprint, targetPrefabAssetPath, selectionNodeIds, operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion.\n" +
@@ -97,7 +107,9 @@ namespace PsdLayoutTool2
                 "For variantComponentExtractions use {id, template: node:<id>, assetPath, commonName, statesName, defaultState, states: [{id, source: node:<id>, name}], instances: [{source: node:<id>, name, state}]} for rows visible at different list positions; every state representative must also appear once in instances, and each instance's structure must match its selected state source. " +
                 "For statefulComponentExtractions use {id, template: node:<id>, assetPath, common: {source, members: [{sourceName, name}]}, states: [{id, source, name, members: [...]}], defaultState, instances: [{source, name, state, commonSourceNames, stateSourceNames}]} when repeated items share real content plus a few states; every direct child of an instance source must be mapped exactly once by commonSourceNames + stateSourceNames. " +
                 "For textureRenames / spriteAtlasRenames use {from, toName, expectedGuid}: toName has no extension, every Texture toName must start with \"<prefabName>_\", every SpriteAtlas toName must equal prefabName, each from must be a private asset of the target Prefab, and the target must not exist yet. " +
-                "containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions MUST stay empty arrays: Unity refuses a non-empty unsupported array before any write. " +
+                (localRepair
+                    ? "For local component extraction, selectedPrefabExtractions may contain exactly one item whose sources match the locked selection. Keep unsupported operation arrays empty. "
+                    : "containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions MUST stay empty arrays: Unity refuses a non-empty unsupported array before any write. ") +
                 "postGroupingExtractionIntents IS executable as an automatic second stage: each entry is {id, mode: component|state|variant|stateful, assetPath, templatePath, commonMembers, states, defaultState, instances: [{path, state, commonSourceNames, stateSourceNames}]}, where templatePath and every instances[].path are POST-grouping hierarchy paths (not node:<id>) resolved against a refreshed snapshot after Unity saves the grouping. mode=component uses empty states and an empty defaultState; every other mode declares states (id/name/sourcePath/members) plus a defaultState id. A mandatory candidate deferred to this stage must reference exactly one same-mode intent, and the rebuilt extraction sources must fully cover the refreshed candidate sources. " +
                 "Report containment or flat-sibling suggestions in the review text only; never encode them in the executable JSON.\n" +
                 "Every wrappers[].parent, moves[].source, moves[].destination, renames[].target, tightBounds[].target and emptyContainerRemovals[].source must copy an exact " +
@@ -107,14 +119,14 @@ namespace PsdLayoutTool2
                 "Only a later Unity validation triggered by the APPLY sentinel can modify the Prefab. Unity renames .apply to .applying while it works; never write .apply twice for one request.\n" +
                 "After the human reviewer explicitly approves with the exact phrase '" + PsdWorkflowPlanBinding.ExplicitApprovalPhrase + "', write a JSON approval record (not an empty file) at: " +
                 applyPath.Replace('\\', '/') + "\n" +
-                "The approval JSON must contain version, approvalText, planPath, planSha256, snapshotFingerprint, reviewVersion, targetPrefabPath, and approvedAtUtc. planSha256 is SHA-256 of the exact UTF-8 plan file.\n" +
+                "The approval JSON must contain version=" + PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion + ", approvalText, planPath, planSha256, snapshotFingerprint, reviewVersion, targetPrefabPath, and approvedAtUtc. planSha256 is SHA-256 of the exact UTF-8 plan file.\n" +
                 "That .apply file is the only signal Unity needs. Do not write it before human approval.\n" +
                 "After writing .apply, poll this result file (about every 2s, up to ~3 minutes): " +
                 applyResultPath.Replace('\\', '/') + "\n" +
                 "The result JSON has success, status, stage and message; status is one of applied, rejected, partial, uncertain.\n" +
                 "- applied: Unity saved the Prefab and verified it. Report that to the human.\n" +
-                "- rejected: the plan was refused BEFORE any write, so nothing changed. Do NOT rewrite the approved plan or write another .apply for this request. " +
-                "Quote the FULL message to the human and stop. Any corrected plan is a new request that requires a complete new review and explicit human approval before its own .apply is written.\n" +
+                "- rejected: the plan was refused BEFORE any write, so nothing changed. JSON may be edited before approval. If stage=approval, only the approval record was invalid; recreate that record and reuse the same plan. If the plan or review is edited after approval, or if stage=binding, naming, preflight, partial, or uncertain, create a new complete review/plan and new approval session; do not reuse the old session. " +
+                "Quote the FULL message to the human and stop.\n" +
                 "- partial or uncertain: Unity may already have written to the Prefab. Do NOT write another .apply and do NOT claim success. " +
                 "Quote the full message, tell the human the on-disk Prefab must be verified, and ask for a new review before any further apply.\n" +
                 "Do not claim Unity assets changed until the result file has success=true and status applied.\n";
@@ -177,6 +189,11 @@ namespace PsdLayoutTool2
 
         public static bool TryOpenChat(string sourcePsdAssetPath, out string error)
         {
+            return TryOpenTerminal(sourcePsdAssetPath, false, out error);
+        }
+
+        private static bool TryOpenTerminal(string sourcePsdAssetPath, bool localRepair, out string error)
+        {
             PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
             string targetPrefabPath;
             string availabilityError;
@@ -195,6 +212,13 @@ namespace PsdLayoutTool2
 
             if (!PsdHierarchyChatContextBuilder.TryCreate(sourcePsdAssetPath, targetPrefabPath,
                     out PsdHierarchyChatContext context, out error)) return false;
+            PsdHierarchyLocalRepairScope localRepairScope = null;
+            if (localRepair && !PsdHierarchyLocalRepairScope.TryCaptureCurrentSelection(
+                    context,
+                    PsdHierarchyLocalRepairScopeMode.SelectedNodes,
+                    out localRepairScope,
+                    out error)) return false;
+            context.localRepairScope = localRepairScope;
             PsdHierarchyAiSettingsSnapshot settings = PsdLayoutProjectSettings.instance.ResolveHierarchyAiSettings();
             // 未选择 AI 模型时直接说清楚该去哪儿选，而不是抛一句「CLI 不可用」让人猜。
             if (!settings.isConfigured)
@@ -226,25 +250,67 @@ namespace PsdLayoutTool2
                 // cmd shim quoting. Each terminal owns a separate, persistent prompt file.
                 string promptDirectory = Path.Combine(context.projectRoot, "Library", "PsdHierarchyTerminal");
                 Directory.CreateDirectory(promptDirectory);
-                string sessionId = Guid.NewGuid().ToString("N");
+                string sessionId = string.Empty;
+                string existingSnapshotFingerprint = string.Empty;
+                bool resumed = !localRepair && TryFindResumableTerminalSession(
+                    context.projectRoot,
+                    sourcePsdAssetPath,
+                    targetPrefabPath,
+                    out sessionId,
+                    out _,
+                    out _,
+                    out _,
+                    out existingSnapshotFingerprint);
+                if (resumed && !string.Equals(
+                        existingSnapshotFingerprint,
+                        context.hierarchySnapshotFingerprint,
+                        StringComparison.Ordinal))
+                {
+                    // The old files remain useful as evidence, but their node IDs are stale.
+                    // Start a new session rather than allowing a resumed terminal to apply it.
+                    resumed = false;
+                }
+                if (!resumed)
+                {
+                    sessionId = Guid.NewGuid().ToString("N");
+                }
                 string promptPath = Path.Combine(promptDirectory, sessionId + ".md");
                 string planPath = Path.Combine(promptDirectory, sessionId + ".plan.json");
                 string reviewPath = Path.Combine(promptDirectory, sessionId + ".review.md");
                 string applyPath = BuildApplySentinelPath(planPath);
                 string applyResultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
-                WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planPath, reviewPath,
-                    context.hierarchySnapshotFingerprint);
+                if (!resumed)
+                {
+                    WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planPath, reviewPath,
+                        context.hierarchySnapshotFingerprint, localRepairScope: localRepairScope);
+                }
                 string taskPrompt = PsdHierarchyChatClient.BuildPortablePrompt(context) +
-                    BuildTerminalSessionContract(planPath, reviewPath, applyPath, applyResultPath);
+                    BuildTerminalSessionContract(planPath, reviewPath, applyPath, applyResultPath, localRepair);
+                if (resumed)
+                {
+                    taskPrompt += "\n\n===== RESUMED TERMINAL SESSION =====\n" +
+                        "This session was reopened after its terminal was closed. Read the existing review and plan files first: " +
+                        reviewPath.Replace('\\', '/') + " and " + planPath.Replace('\\', '/') +
+                        ". Preserve valid prior analysis and continue from the saved artifacts. Do not start over or overwrite a valid approved plan without explaining the change.\n";
+                }
                 File.WriteAllText(promptPath, taskPrompt, new UTF8Encoding(false));
-                string initialPrompt = "Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
-                    ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file. After I explicitly approve, write .apply and poll .apply-result.json. If Unity rejects the plan before writing, show me the full error reason and stop; any correction must be presented as a new review request and explicitly approved before another apply. If the result is partial or uncertain, stop and tell me to verify the Prefab instead.";
+                string initialPrompt = resumed
+                    ? "Resume the existing PSD hierarchy review. Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
+                      " and then read the existing review and plan files it names before continuing. Preserve the saved context and wait for explicit approval before writing .apply."
+                    : "Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
+                      (localRepair
+                          ? ". Review only the locked Unity selection against the current Prefab snapshot, then save a scoped review and complete JSON plan to the paths in that file. Wait for explicit approval before writing .apply."
+                          : ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file. JSON may be edited before approval. After I explicitly approve, write .apply and poll .apply-result.json. If Unity rejects at approval only, repair the approval record and reuse the same plan. If the plan or review is edited after approval, or if the rejection is binding, naming, preflight, partial, or uncertain, require a new complete review/plan and new approval session; do not reuse the old session. If the result is partial or uncertain, stop and tell me to verify the Prefab instead.");
                 string cliPath = cli.executablePath.Replace("'", "''");
                 // 模型与思考程度都留空时不生成任何参数，直接使用 CLI 自身的配置。
                 string optionArguments = PsdHierarchyChatClient.BuildModelAndEffortArguments(
                     connection,
                     value => "'" + value.Replace("'", "''") + "'");
-                string command = "Set-Location -LiteralPath '" + context.projectRoot.Replace("'", "''") +
+                string command = "[Console]::InputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
+                    "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
+                    "$OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
+                    "chcp 65001 | Out-Null; " +
+                    "Set-Location -LiteralPath '" + context.projectRoot.Replace("'", "''") +
                     "'; & '" + cliPath + "'" + optionArguments + " '" + initialPrompt.Replace("'", "''") + "'";
                 string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
                 Process.Start(new ProcessStartInfo {
@@ -263,26 +329,83 @@ namespace PsdLayoutTool2
             }
         }
 
-        public static bool TryOpenLocalRepair(string sourcePsdAssetPath, out string error)
+        internal static bool TryFindResumableTerminalSession(
+            string projectRoot,
+            string sourcePsdAssetPath,
+            string targetPrefabPath,
+            out string sessionId,
+            out string promptPath,
+            out string planPath,
+            out string reviewPath,
+            out string snapshotFingerprint)
         {
-            PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
-            if (!TryResolvePrefabAvailability(
-                    sourcePsdAssetPath,
-                    PsdImporter.OutputMode,
-                    PsdImporter.OutputFolderName,
-                    PsdImporter.PrefabMode,
-                    path => AssetDatabase.LoadAssetAtPath<GameObject>(path) != null,
-                    out string targetPrefabPath,
-                    out string availabilityError))
+            sessionId = string.Empty;
+            promptPath = string.Empty;
+            planPath = string.Empty;
+            reviewPath = string.Empty;
+            snapshotFingerprint = string.Empty;
+            string directory = Path.Combine(projectRoot ?? string.Empty, "Library", "PsdHierarchyTerminal");
+            if (!Directory.Exists(directory)) return false;
+            string bestPath = string.Empty;
+            DateTime bestWrite = DateTime.MinValue;
+            foreach (string sessionPath in Directory.GetFiles(directory, "*.session.json"))
             {
-                error = availabilityError;
+                try
+                {
+                    PsdHierarchyTerminalApplyWatcher.SessionRecord record =
+                        Newtonsoft.Json.JsonConvert.DeserializeObject<PsdHierarchyTerminalApplyWatcher.SessionRecord>(
+                            File.ReadAllText(sessionPath, Encoding.UTF8));
+                    if (record == null || record.version != PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion ||
+                        !string.Equals(record.sourcePsdAssetPath, sourcePsdAssetPath, StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(record.targetPrefabPath, targetPrefabPath, StringComparison.OrdinalIgnoreCase) ||
+                        string.IsNullOrWhiteSpace(record.sessionId) || string.IsNullOrWhiteSpace(record.planPath) ||
+                        string.IsNullOrWhiteSpace(record.reviewPath) || !File.Exists(record.planPath) || !File.Exists(record.reviewPath))
+                        continue;
+                    string applyPath = BuildApplySentinelPath(record.planPath);
+                    string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
+                    bool resultExists = File.Exists(resultPath);
+                    bool resumablePrewriteRejection = IsResumablePrewriteRejection(resultPath);
+                    bool failedPathExists = File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-failed");
+                    if (File.Exists(applyPath) || File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".applying") ||
+                        (failedPathExists && !resumablePrewriteRejection) ||
+                        File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-uncertain") ||
+                        (resultExists && !resumablePrewriteRejection))
+                        continue;
+                    DateTime write = File.GetLastWriteTimeUtc(sessionPath);
+                    if (write <= bestWrite) continue;
+                    bestWrite = write;
+                    bestPath = sessionPath;
+                    sessionId = record.sessionId;
+                    promptPath = Path.Combine(directory, record.sessionId + ".md");
+                    planPath = record.planPath;
+                    reviewPath = record.reviewPath;
+                    snapshotFingerprint = record.snapshotFingerprint ?? string.Empty;
+                }
+                catch { }
+            }
+            return !string.IsNullOrEmpty(bestPath);
+        }
+
+        private static bool IsResumablePrewriteRejection(string resultPath)
+        {
+            try
+            {
+                if (!File.Exists(resultPath)) return false;
+                JObject result = JObject.Parse(File.ReadAllText(resultPath, Encoding.UTF8));
+                if (!string.Equals((string)result["status"], PsdHierarchyTerminalApplyWatcher.StatusRejected, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                string stage = (string)result["stage"];
+                return string.Equals(stage, "approval", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
                 return false;
             }
+        }
 
-            return PsdHierarchyLocalRepairWindow.TryOpen(
-                sourcePsdAssetPath,
-                targetPrefabPath,
-                out error);
+        public static bool TryOpenLocalRepair(string sourcePsdAssetPath, out string error)
+        {
+            return TryOpenTerminal(sourcePsdAssetPath, true, out error);
         }
 
         /// <summary>

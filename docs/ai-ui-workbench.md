@@ -8,7 +8,7 @@
 4. 修订会带上当前完整方案，并产生新版本。点击历史版本可恢复方案，Unity 会重新生成该版本预览。
 5. 点击「采用当前版本」保存真实 UI 和公共 Prefab，同时更新源编辑树。采用结束后，请从编辑树打开新会话。
 
-原生整理窗口仍可通过 `Tools/PSD2UIForm/AI 整理 UI（原生窗口）` 打开。
+当前 PSD 层级整理统一通过 Inspector 的 PowerShell AI 终端入口打开；旧的 Unity EditorWindow 入口已移除。
 
 ## 执行与状态
 

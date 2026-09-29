@@ -94,7 +94,7 @@ Before validation or preflight, the Unity window verifies the snapshot fingerpri
 
 The snapshot fingerprint is the hash of the Prefab file. Every successful apply changes it, so always read the current snapshot again before authoring the next plan; a plan carrying an old `snapshotFingerprint` is rejected.
 
-Approval binds the complete reviewed JSON. If Unity returns `rejected`, nothing was written, but the approved request is finished: do not edit its plan or write another `.apply`. Any correction is a complete new plan and review under a new request and requires fresh explicit human approval. A `partial` or `uncertain` result also requires verification of the on-disk Prefab before a new review.
+Approval binds the complete reviewed JSON. You may edit the JSON before approval. After approval, changing the JSON or review ends that request; make a complete new review/plan under a new session and obtain fresh explicit approval. A `rejected` result ends the request except when `stage=approval` and only the approval record was malformed; in that case, keep the same plan and recreate its approval record. A `partial` or `uncertain` result also requires verification of the on-disk Prefab before a new review.
 
 ### Post-Grouping Extraction Intent
 

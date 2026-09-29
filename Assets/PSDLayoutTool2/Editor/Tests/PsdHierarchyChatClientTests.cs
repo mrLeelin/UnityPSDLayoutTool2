@@ -605,7 +605,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Contain("must match the actual extraction list or postGroupingExtractionIntents entry"));
             Assert.That(
                 prompt,
-                Does.Contain("Any corrected plan is a new request that requires a complete new review and explicit human approval"));
+                Does.Contain("JSON may be edited before approval"));
             Assert.That(prompt, Does.Not.Contain("no extra human approval"));
             Assert.That(prompt, Does.Not.Contain("fix-and-reapply"));
             Assert.That(prompt, Does.Contain("node:<id>"));
@@ -1021,29 +1021,6 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void InteractiveClaudeInvocationResumesTheSameSession()
-        {
-            var connection = new PsdHierarchyChatConnection(
-                PsdHierarchyAiProvider.Claude,
-                PsdHierarchyAiConnectionMode.LocalCli,
-                @"C:\\Tools\\claude.cmd",
-                string.Empty,
-                string.Empty,
-                string.Empty);
-
-            PsdHierarchyCliInvocation invocation = PsdHierarchyChatClient.CreateInteractiveCliInvocation(
-                connection,
-                @"E:\\Project\\Demo\\monsterhunter",
-                "2f9f4162-1029-4c4b-9e9e-0e9627063a4b");
-
-            Assert.That(invocation.executablePath, Does.EndWith("cmd.exe").IgnoreCase);
-            Assert.That(invocation.arguments, Does.Contain("/k"));
-            Assert.That(invocation.arguments, Does.Contain("--resume"));
-            Assert.That(invocation.arguments, Does.Contain("2f9f4162-1029-4c4b-9e9e-0e9627063a4b"));
-            Assert.That(invocation.arguments, Does.Contain("--permission-mode plan"));
-        }
-
-        [Test]
         public void ClaudeDirectInvocationStreamsRepairPromptThroughStandardInput()
         {
             var connection = new PsdHierarchyChatConnection(
@@ -1103,29 +1080,6 @@ namespace PsdLayoutTool2.Tests
             {
                 File.Delete(cliPath);
             }
-        }
-
-        [Test]
-        public void CodexResumedInvocationUsesTheRecordedSessionId()
-        {
-            var connection = new PsdHierarchyChatConnection(
-                PsdHierarchyAiProvider.Codex,
-                PsdHierarchyAiConnectionMode.LocalCli,
-                @"C:\\Tools\\codex.cmd",
-                string.Empty,
-                string.Empty,
-                string.Empty);
-
-            PsdHierarchyCliInvocation invocation = PsdHierarchyChatClient.CreateCliInvocation(
-                connection,
-                @"E:\\Project\\Demo\\monsterhunter",
-                "继续分析",
-                "2f9f4162-1029-4c4b-9e9e-0e9627063a4b",
-                true);
-
-            Assert.That(invocation.arguments, Does.Contain("exec resume --json"));
-            Assert.That(invocation.arguments, Does.Contain("2f9f4162-1029-4c4b-9e9e-0e9627063a4b"));
-            Assert.That(invocation.writePromptToStandardInput, Is.True);
         }
 
         private sealed class FakeCliTransport : IPsdHierarchyCliChatTransport

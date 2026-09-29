@@ -2307,53 +2307,6 @@ namespace PsdLayoutTool2
             return string.IsNullOrEmpty(effort) ? model : model + " · 思考 " + effort;
         }
 
-        internal static bool TryOpenInteractiveCli(
-            PsdHierarchyChatConnection connection,
-            string projectRoot,
-            string cliSessionId,
-            out string error)
-        {
-            if (connection.connectionMode != PsdHierarchyAiConnectionMode.LocalCli)
-            {
-                error = "当前会话使用自定义 API，不能打开本地 CLI。";
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(cliSessionId))
-            {
-                error = "当前对话尚未收到可恢复的 CLI 会话 ID。";
-                return false;
-            }
-
-            if (!connection.TryValidate(out error))
-            {
-                return false;
-            }
-
-            try
-            {
-                PsdHierarchyCliInvocation invocation = CreateInteractiveCliInvocation(
-                    connection,
-                    projectRoot,
-                    cliSessionId);
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = invocation.executablePath,
-                    Arguments = invocation.arguments,
-                    WorkingDirectory = invocation.workingDirectory,
-                    UseShellExecute = true,
-                });
-            }
-            catch (Exception exception)
-            {
-                error = "打开本次对话的 CLI 失败：" + exception.Message;
-                return false;
-            }
-
-            error = string.Empty;
-            return true;
-        }
-
         internal static PsdHierarchyCliInvocation CreateCliInvocation(
             PsdHierarchyChatConnection connection,
             string workingDirectory)
@@ -2612,54 +2565,6 @@ namespace PsdLayoutTool2
             return new PsdHierarchyCliInvocation(cliPath, arguments, workingDirectory, writePromptToStandardInput);
         }
 
-        internal static PsdHierarchyCliInvocation CreateInteractiveCliInvocation(
-            PsdHierarchyChatConnection connection,
-            string workingDirectory,
-            string cliSessionId)
-        {
-            if (connection.connectionMode != PsdHierarchyAiConnectionMode.LocalCli)
-            {
-                throw new ArgumentException("仅本地 CLI 连接可以打开交互式会话。", nameof(connection));
-            }
-
-            if (string.IsNullOrWhiteSpace(cliSessionId))
-            {
-                throw new ArgumentException("恢复 CLI 会话时必须提供会话 ID。", nameof(cliSessionId));
-            }
-
-            string arguments;
-            switch (connection.provider)
-            {
-                case PsdHierarchyAiProvider.Claude:
-                    arguments = "--resume " + QuoteProcessArgument(cliSessionId) +
-                        " --permission-mode plan --safe-mode --add-dir " + QuoteProcessArgument(workingDirectory);
-                    break;
-                case PsdHierarchyAiProvider.Grok:
-                    arguments = "--resume " + QuoteProcessArgument(cliSessionId) +
-                        " --permission-mode plan";
-                    break;
-                case PsdHierarchyAiProvider.Pi:
-                    arguments = "--session " + QuoteProcessArgument(cliSessionId);
-                    break;
-                default:
-                    arguments = "-s read-only resume " + QuoteProcessArgument(cliSessionId);
-                    break;
-            }
-
-            string commandProcessor = Environment.GetEnvironmentVariable("ComSpec");
-            if (string.IsNullOrWhiteSpace(commandProcessor))
-            {
-                commandProcessor = "cmd.exe";
-            }
-
-            return new PsdHierarchyCliInvocation(
-                commandProcessor,
-                "/d /s /k \"\"" + connection.cliExecutablePath.Replace("\"", "\"\"") +
-                "\" " + arguments + "\"",
-                workingDirectory,
-                false);
-        }
-
         private static string ResolveClaudeDirectExecutable(string cliExecutablePath)
         {
             if (string.IsNullOrWhiteSpace(cliExecutablePath))
@@ -2847,12 +2752,13 @@ namespace PsdLayoutTool2
             builder.AppendLine("Write the human-readable Chinese review to: " + ToPortableFullPath(reviewFullPath));
             builder.AppendLine("After every revision, replace both files atomically or rewrite them completely.");
             builder.AppendLine("Only Unity applying an APPROVED plan may modify the target Prefab. Unity renames .apply to .applying while it works; never write .apply twice for one request.");
-            builder.AppendLine("After the human reviewer explicitly approves in this conversation, write an empty file at: " + ToPortableFullPath(applyFullPath));
+            builder.AppendLine("After the human reviewer explicitly approves in this conversation, write a JSON approval record (not an empty file) at: " + ToPortableFullPath(applyFullPath));
+            builder.AppendLine("The approval JSON must contain version=" + PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion + ", approvalText containing the exact phrase '" + PsdWorkflowPlanBinding.ExplicitApprovalPhrase + "', planPath, planSha256 (SHA-256 of the exact UTF-8 plan file), snapshotFingerprint, reviewVersion, targetPrefabPath, and approvedAtUtc. reviewVersion identifies the current plan revision: keep it when only the approval record is recreated; generate a new value whenever the review or plan content is revised, and copy it exactly into the plan and approval record.");
             builder.AppendLine("That .apply file is the only signal Unity needs to validate and apply the plan automatically. Do not write it before human approval.");
             builder.AppendLine("After writing .apply, poll this result file (about every 2s, up to ~3 minutes): " + ToPortableFullPath(applyResultFullPath));
             builder.AppendLine("The result JSON has success, status, stage and message; status is one of applied, rejected, partial, uncertain.");
             builder.AppendLine("- applied: Unity saved the Prefab and verified it. Report that to the human.");
-            builder.AppendLine("- rejected: the plan was refused BEFORE any write, so nothing changed. Do NOT rewrite the approved plan or write another .apply for this request. Quote the FULL message and stop. Any corrected plan is a new request that requires a complete new review and explicit human approval before its own .apply is written.");
+            builder.AppendLine("- rejected: the plan was refused BEFORE any write, so nothing changed. JSON may be edited before approval. If stage=approval, only the approval record was invalid; recreate that record and reuse the same plan. If the plan or review is edited after approval, or if stage=binding, naming, preflight, partial, or uncertain, create a new complete review/plan and new approval session; do not reuse the old session.");
             builder.AppendLine("- partial or uncertain: Unity may already have written to the Prefab. Do NOT write another .apply and do NOT claim success. Quote the full message, tell the human the on-disk Prefab must be verified, and ask for a new review before any further apply.");
             builder.AppendLine("Do not claim Unity assets changed until the result file has success=true and status applied.");
             return builder.ToString();

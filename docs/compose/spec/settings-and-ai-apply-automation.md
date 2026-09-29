@@ -44,9 +44,10 @@ commits: e81265f4d47a4c764c60ba2cb7d6ec4b61220bdc..uncommitted
 ### S2.3 Apply sentinel + result feedback
 
 - 开终端/复制提示词时写 `*.session.json`（psd/prefab/plan/review 路径）。
+- 点击「AI整理」时优先恢复同一 PSD/Prefab 最近一个未完成的终端会话；恢复会复用原 session、review 和 plan 文件。若已有 apply/回执，或 Prefab fingerprint 已变化，则不恢复旧计划并创建新会话。
 - 人工审核后 AI 写 `*.apply`。
 - Watcher 轮询 `Library/PsdHierarchyTerminal/*.apply`，`ApplyConfirmedAsync`，写 `*.apply-result.json`（success/status/message）。
-- 哨兵改名 `.applied` / `.apply-failed`；契约要求 AI 轮询 result 并在失败时按 message 用 `node:<id>` 修订。
+- 哨兵改名 `.applied` / `.apply-failed`；契约要求 AI 轮询 result 并在失败时按 message 修订。若 `status=rejected` 且 `stage=approval`，只表示审批凭证（例如终端编码）无效；同一 review/plan 可以重新生成审批凭证，不需要重新分析。若需要修改 plan，只要当前 snapshot 仍有效，就在同一 session 更新 plan、`planSha256` 和 `reviewVersion` 后重新审批。只有 snapshot 已变化、已发生写入、或结果为 `partial/uncertain` 时才必须新建 review/plan。
 - Inspector 移除「应用AI计划」；保留「AI整理」+「AI提示词复制」。
 
 ## [S3] Out of Scope
@@ -54,7 +55,7 @@ commits: e81265f4d47a4c764c60ba2cb7d6ec4b61220bdc..uncommitted
 - 不改共享字段进 JSON。
 - 不改 API Key 存储。
 - 不自动改使用方工程 `.gitignore`。
-- 不把「AI整理」改回内置 ChatWindow。
+- 「AI整理」只使用 PowerShell 终端会话，不恢复或保留旧的 Unity EditorWindow ChatWindow 入口。
 - 不做 HTTP Apply 接口。
 
 ## Tasks

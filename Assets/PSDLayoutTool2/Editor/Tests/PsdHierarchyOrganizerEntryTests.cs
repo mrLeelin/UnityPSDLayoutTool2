@@ -117,8 +117,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(contract, Does.Contain("status is one of applied, rejected, partial, uncertain"));
             Assert.That(
                 contract,
-                Does.Contain("Any corrected plan is a new request that requires a complete new review and explicit human approval"));
-            Assert.That(contract, Does.Contain("Do NOT rewrite the approved plan or write another .apply for this request"));
+                Does.Contain("JSON may be edited before approval"));
+            Assert.That(contract, Does.Contain("If the plan or review is edited after approval"));
             Assert.That(contract, Does.Not.Contain("no extra human approval"));
             Assert.That(contract, Does.Not.Contain("Max 3 fix-and-reapply cycles"));
             Assert.That(contract, Does.Contain("partial or uncertain"));
@@ -130,6 +130,90 @@ namespace PsdLayoutTool2.Tests
             Assert.That(contract, Does.Not.Contain("componentFamilyDecisions must use mode=component"));
             Assert.That(contract, Does.Contain("textureRenames"));
             // 旧写入脚本不得再被提示词要求执行。
+        }
+
+        [Test]
+        public void ResumableSessionLookupRequiresTheSavedReviewAndPlan()
+        {
+            string resumableId = "resume-" + Guid.NewGuid().ToString("N");
+            string plan = Path.Combine(terminalDirectory, resumableId + ".plan.json");
+            string review = Path.Combine(terminalDirectory, resumableId + ".review.md");
+            File.WriteAllText(plan, "{}", new UTF8Encoding(false));
+            File.WriteAllText(review, "saved review", new UTF8Encoding(false));
+            PsdHierarchyOrganizerEntry.WriteTerminalSession(
+                resumableId, SourceAssetPath, targetPrefabPath, plan, review, "snapshot-a");
+            sessionId = resumableId;
+
+            Assert.That(PsdHierarchyOrganizerEntry.TryFindResumableTerminalSession(
+                Path.GetFullPath(Path.Combine(Application.dataPath, "..")), SourceAssetPath, targetPrefabPath,
+                out string foundId, out _, out string foundPlan, out string foundReview, out string foundFingerprint), Is.True);
+            Assert.That(foundId, Is.EqualTo(resumableId));
+            Assert.That(foundPlan, Is.EqualTo(plan));
+            Assert.That(foundReview, Is.EqualTo(review));
+            Assert.That(foundFingerprint, Is.EqualTo("snapshot-a"));
+        }
+
+        [Test]
+        public void FindsLatestUnfinishedSessionForTheSamePrefab()
+        {
+            string resumableId = "resume-" + Guid.NewGuid().ToString("N");
+            string plan = Path.Combine(terminalDirectory, resumableId + ".plan.json");
+            string review = Path.Combine(terminalDirectory, resumableId + ".review.md");
+            File.WriteAllText(plan, "{}", new UTF8Encoding(false));
+            File.WriteAllText(review, "saved review", new UTF8Encoding(false));
+            PsdHierarchyOrganizerEntry.WriteTerminalSession(
+                resumableId,
+                SourceAssetPath,
+                targetPrefabPath,
+                plan,
+                review,
+                "snapshot-a");
+            sessionId = resumableId;
+
+            Assert.That(
+                PsdHierarchyOrganizerEntry.TryFindResumableTerminalSession(
+                    Path.GetFullPath(Path.Combine(Application.dataPath, "..")),
+                    SourceAssetPath,
+                    targetPrefabPath,
+                    out string foundId,
+                    out _, out string foundPlan, out string foundReview, out string foundFingerprint),
+                Is.True);
+            Assert.That(foundId, Is.EqualTo(resumableId));
+            Assert.That(foundPlan, Is.EqualTo(plan));
+            Assert.That(foundReview, Is.EqualTo(review));
+            Assert.That(foundFingerprint, Is.EqualTo("snapshot-a"));
+        }
+
+        [Test]
+        public void ApprovalOnlyRejectionKeepsTheExistingPlanResumable()
+        {
+            string resumableId = "approval-retry-" + Guid.NewGuid().ToString("N");
+            string plan = Path.Combine(terminalDirectory, resumableId + ".plan.json");
+            string review = Path.Combine(terminalDirectory, resumableId + ".review.md");
+            File.WriteAllText(plan, "{}", new UTF8Encoding(false));
+            File.WriteAllText(review, "saved review", new UTF8Encoding(false));
+            PsdHierarchyOrganizerEntry.WriteTerminalSession(
+                resumableId, SourceAssetPath, targetPrefabPath, plan, review, "snapshot-a");
+            sessionId = resumableId;
+            string applyPath = PsdHierarchyOrganizerEntry.BuildApplySentinelPath(plan);
+            File.WriteAllText(
+                applyPath + ".apply-failed",
+                "{}",
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath),
+                new JObject { ["status"] = "rejected", ["stage"] = "approval" }.ToString(),
+                new UTF8Encoding(false));
+
+            Assert.That(
+                PsdHierarchyOrganizerEntry.TryFindResumableTerminalSession(
+                    Path.GetFullPath(Path.Combine(Application.dataPath, "..")),
+                    SourceAssetPath,
+                    targetPrefabPath,
+                    out string foundId,
+                    out _, out _, out _, out _),
+                Is.True);
+            Assert.That(foundId, Is.EqualTo(resumableId));
         }
 
         [Test]
@@ -147,7 +231,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt.text, Does.Contain(Path.GetFileName(prompt.applyFullPath)));
             Assert.That(
                 prompt.text,
-                Does.Contain("Any corrected plan is a new request that requires a complete new review and explicit human approval"));
+                Does.Contain("If the plan or review is edited after approval"));
             Assert.That(prompt.text, Does.Not.Contain("re-apply automatically"));
             Assert.That(File.Exists(prompt.promptFullPath), Is.True, "提示词必须落盘留档。");
 

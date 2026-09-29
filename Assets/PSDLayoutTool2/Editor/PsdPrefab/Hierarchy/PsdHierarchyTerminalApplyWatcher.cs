@@ -58,7 +58,10 @@ namespace PsdLayoutTool2
             public string planPath = string.Empty;
             public string reviewPath = string.Empty;
             public string snapshotFingerprint = string.Empty;
-            public string reviewVersion = "1";
+            public string reviewVersion = string.Empty;
+            public bool localRepair;
+            public string localRepairScopeMode = string.Empty;
+            public string[] localRepairSelectedPaths = Array.Empty<string>();
         }
 
         /// <summary>抢占记录：写入计划内容哈希与执行标识，重载后据此判断不确定请求。</summary>
@@ -506,6 +509,32 @@ namespace PsdLayoutTool2
                     FailApply(applyPath, claimPath, session, claim, StatusRejected, "context",
                         "无法创建整理上下文：" + error);
                     return;
+                }
+
+                if (session.localRepair)
+                {
+                    string localScopeError = string.Empty;
+                    PsdHierarchyLocalRepairScope localScope = null;
+                    bool scopeModeValid = Enum.TryParse(
+                        session.localRepairScopeMode,
+                        ignoreCase: true,
+                        out PsdHierarchyLocalRepairScopeMode scopeMode);
+                    bool scopeValid = scopeModeValid &&
+                        PsdHierarchyLocalRepairScope.TryCreateFromSelectedPaths(
+                            context,
+                            session.localRepairSelectedPaths,
+                            scopeMode,
+                            out localScope,
+                            out localScopeError);
+                    if (!scopeValid)
+                    {
+                        FailApply(applyPath, claimPath, session, claim, StatusRejected, "context",
+                            "局部修正选区无法绑定当前 Prefab 快照：" +
+                            (string.IsNullOrWhiteSpace(localScopeError) ? "scopeMode 无效。" : localScopeError));
+                        return;
+                    }
+
+                    context.localRepairScope = localScope;
                 }
 
                 if (!string.IsNullOrWhiteSpace(session.snapshotFingerprint) &&

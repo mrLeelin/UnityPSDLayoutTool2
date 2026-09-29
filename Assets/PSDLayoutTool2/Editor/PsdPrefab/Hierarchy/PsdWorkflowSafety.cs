@@ -65,7 +65,8 @@ namespace PsdLayoutTool2
     [Serializable]
     internal sealed class PsdWorkflowApproval
     {
-        public int version = 1;
+        // Keep approval records on the same protocol version as session and result records.
+        public int version = PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion;
         public string approvalText = string.Empty;
         public string planPath = string.Empty;
         public string planSha256 = string.Empty;
@@ -126,7 +127,14 @@ namespace PsdLayoutTool2
                     approval = null;
                     return false;
                 }
-                if (approval.version != 1 || string.IsNullOrWhiteSpace(approval.planPath) ||
+                if (approval.version != PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion)
+                {
+                    error = "审批凭证协议版本不匹配；当前要求 version=" +
+                            PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion + "。";
+                    approval = null;
+                    return false;
+                }
+                if (string.IsNullOrWhiteSpace(approval.planPath) ||
                     string.IsNullOrWhiteSpace(approval.planSha256) ||
                     string.IsNullOrWhiteSpace(approval.snapshotFingerprint) ||
                     string.IsNullOrWhiteSpace(approval.targetPrefabPath))
@@ -171,15 +179,33 @@ namespace PsdLayoutTool2
                 error = "创建 .apply 需要完整的当前计划、快照和目标 Prefab 绑定。";
                 return false;
             }
+            if (HasTerminalAttempted(applyPath, out string terminalStateError))
+            {
+                error = terminalStateError;
+                return false;
+            }
             try
             {
+                JObject plan = JObject.Parse(planJson);
+                string planReviewVersion = ReadStringField(plan, "reviewVersion");
+                if (string.IsNullOrWhiteSpace(planReviewVersion))
+                {
+                    error = "当前计划缺少 reviewVersion，不能创建审批凭证。";
+                    return false;
+                }
+                if (!string.IsNullOrWhiteSpace(reviewVersion) &&
+                    !string.Equals(reviewVersion, planReviewVersion, StringComparison.Ordinal))
+                {
+                    error = "传入的 reviewVersion 与当前计划不匹配。";
+                    return false;
+                }
                 var approval = new PsdWorkflowApproval
                 {
                     approvalText = approvalText,
                     planPath = planPath,
                     planSha256 = Sha256(planJson),
                     snapshotFingerprint = snapshotFingerprint,
-                    reviewVersion = reviewVersion ?? string.Empty,
+                    reviewVersion = planReviewVersion,
                     targetPrefabPath = targetPrefabPath,
                     approvedAtUtc = DateTime.UtcNow.ToString("o"),
                 };
@@ -211,12 +237,28 @@ namespace PsdLayoutTool2
                 error = "缺少审批凭证。";
                 return false;
             }
-            if (!string.Equals(approval.planPath, planPath, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(approval.planSha256, Sha256(planJson), StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(approval.snapshotFingerprint, snapshotFingerprint, StringComparison.Ordinal) ||
-                !string.Equals(approval.targetPrefabPath, targetPrefabPath, StringComparison.Ordinal))
+            var bindingMismatches = new List<string>();
+            if (!string.Equals(approval.planPath, planPath, StringComparison.OrdinalIgnoreCase))
             {
-                error = "审批凭证与当前计划、快照或目标 Prefab 不匹配。";
+                bindingMismatches.Add("planPath");
+            }
+            if (!string.Equals(approval.planSha256, Sha256(planJson), StringComparison.OrdinalIgnoreCase))
+            {
+                bindingMismatches.Add("planSha256");
+            }
+            if (!string.Equals(approval.snapshotFingerprint, snapshotFingerprint, StringComparison.Ordinal))
+            {
+                bindingMismatches.Add("snapshotFingerprint");
+            }
+            if (!string.Equals(approval.targetPrefabPath, targetPrefabPath, StringComparison.Ordinal))
+            {
+                bindingMismatches.Add("targetPrefabPath");
+            }
+            if (bindingMismatches.Count > 0)
+            {
+                error = bindingMismatches.Contains("planSha256")
+                    ? "审批后的 JSON 计划内容已改变（planSha256 不匹配）；当前请求必须重新生成 review/plan 和新的审批会话。"
+                    : "审批凭证绑定不匹配：" + string.Join("、", bindingMismatches) + "。";
                 return false;
             }
             if (string.IsNullOrWhiteSpace(reviewPath) || !File.Exists(reviewPath))
@@ -228,8 +270,8 @@ namespace PsdLayoutTool2
             try
             {
                 JObject plan = JObject.Parse(planJson ?? string.Empty);
-                string planFingerprint = plan.Value<string>("snapshotFingerprint");
-                string planTarget = plan.Value<string>("targetPrefabAssetPath") ?? plan.Value<string>("prefabAssetPath");
+                string planFingerprint = ReadStringField(plan, "snapshotFingerprint");
+                string planTarget = ReadStringField(plan, "targetPrefabAssetPath") ?? ReadStringField(plan, "prefabAssetPath");
                 if (!string.Equals(planFingerprint, snapshotFingerprint, StringComparison.Ordinal))
                 {
                     error = "计划 snapshot fingerprint 已变化，必须重新生成 review/plan。";
@@ -240,7 +282,12 @@ namespace PsdLayoutTool2
                     error = "计划目标 Prefab 路径与当前会话不匹配。";
                     return false;
                 }
-                string reviewVersion = plan.Value<string>("reviewVersion");
+                string reviewVersion = ReadStringField(plan, "reviewVersion");
+                if (string.IsNullOrWhiteSpace(reviewVersion))
+                {
+                    error = "计划缺少 reviewVersion，必须重新生成并审核计划。";
+                    return false;
+                }
                 if (!string.IsNullOrWhiteSpace(approval.reviewVersion) &&
                     !string.Equals(approval.reviewVersion, reviewVersion, StringComparison.Ordinal))
                 {
@@ -264,10 +311,11 @@ namespace PsdLayoutTool2
                         return false;
                     }
                 }
-                if (plan.Value<int?>("expectedNodeCount") == null ||
+                JToken operationScope = plan["operationScope"];
+                if (plan["expectedNodeCount"] == null || plan["expectedNodeCount"].Type != JTokenType.Integer ||
                     plan["expectedHierarchy"] == null || plan["directChildren"] == null ||
                     plan["absentPaths"] == null || plan["preserveRequirements"] == null ||
-                    string.IsNullOrWhiteSpace(plan.Value<string>("operationScope")))
+                    !HasStructuredValue(operationScope))
                 {
                     error = "计划缺少 operationScope、expectedNodeCount、expectedHierarchy、directChildren、absentPaths 或 preserveRequirements。";
                     return false;
@@ -287,10 +335,58 @@ namespace PsdLayoutTool2
             JObject snapshot = JObject.Parse(snapshotJson ?? string.Empty);
             foreach (JToken token in snapshot["nodes"] as JArray ?? new JArray())
             {
-                string id = token.Value<string>("id") ?? token.Value<string>("stableId");
+                JObject node = token as JObject;
+                string id = node?["id"]?.Type == JTokenType.String ? node["id"].Value<string>() :
+                    (node?["stableId"]?.Type == JTokenType.String ? node["stableId"].Value<string>() : null);
                 if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
             }
             return ids;
+        }
+
+        private static bool HasStructuredValue(JToken token)
+        {
+            if (token == null || token.Type == JTokenType.Null || token.Type == JTokenType.Undefined)
+                return false;
+            if (token.Type == JTokenType.String)
+                return !string.IsNullOrWhiteSpace(token.Value<string>());
+            if (token.Type == JTokenType.Object)
+                return token.HasValues;
+            return token.Type == JTokenType.Array && token.HasValues;
+        }
+
+        private static string ReadStringField(JObject owner, string field)
+        {
+            JToken token = owner[field];
+            if (token == null || token.Type == JTokenType.Null || token.Type == JTokenType.Undefined)
+                return null;
+            if (token.Type != JTokenType.String)
+                throw new InvalidDataException("计划字段 " + field + " 必须是字符串，实际类型为 " + token.Type + "。");
+            return token.Value<string>();
+        }
+
+        private static bool HasTerminalAttempted(string applyPath, out string error)
+        {
+            error = string.Empty;
+            string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
+            if (!File.Exists(resultPath)) return false;
+
+            try
+            {
+                JObject result = JObject.Parse(File.ReadAllText(resultPath, Encoding.UTF8));
+                string status = result.Value<string>("status") ?? string.Empty;
+                string stage = result.Value<string>("stage") ?? string.Empty;
+                bool approvalOnly = string.Equals(status, PsdHierarchyTerminalApplyWatcher.StatusRejected, StringComparison.OrdinalIgnoreCase) &&
+                                    string.Equals(stage, "approval", StringComparison.OrdinalIgnoreCase);
+                if (approvalOnly) return false;
+
+                error = "当前 Apply 会话已经结束（" + status + "/" + stage + "）；计划或 JSON 发生变化后必须重新生成 review/plan，并创建新的审批会话。";
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = "当前 Apply 会话已有不可读的终态回执，必须重新生成 review/plan 和新的审批会话：" + exception.Message;
+                return true;
+            }
         }
     }
 
