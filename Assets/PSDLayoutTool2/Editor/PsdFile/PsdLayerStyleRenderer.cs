@@ -20,16 +20,19 @@ namespace PhotoshopFile
                 return;
             }
 
+            bool rebuiltShape = false;
             if (style.HasVectorMask && IsFullyTransparent(colors))
             {
                 RebuildShape(layer, style, colors);
-                return;
+                rebuiltShape = true;
             }
 
-            if (style.ColorOverlayEnabled)
+            if (style.ColorOverlayEnabled && !rebuiltShape)
             {
                 ApplyColorOverlay(style, colors);
             }
+
+            ApplyRasterEffects(style, colors, (int)layer.Rect.width, (int)layer.Rect.height);
         }
 
         /// <summary>
@@ -139,6 +142,67 @@ namespace PhotoshopFile
                 result.a = source.a;
                 colors[index] = result;
             }
+        }
+
+        private static void ApplyRasterEffects(PsdLayerShapeStyle style, Color32[] colors, int width, int height)
+        {
+            if (width <= 0 || height <= 0) return;
+            byte[] alpha = new byte[colors.Length];
+            for (int i = 0; i < colors.Length; i++) alpha[i] = colors[i].a;
+            if (style.StrokeEnabled && style.StrokeWidth > 0f)
+            {
+                byte[] expanded = Dilate(alpha, width, height, Mathf.CeilToInt(style.StrokeWidth));
+                CompositeMask(colors, Subtract(expanded, alpha, width, height), style.StrokeColor, style.StrokeOpacity, alpha, false);
+            }
+            if (style.DropShadowEnabled)
+            {
+                byte[] shadow = OffsetBlur(alpha, width, height, style.DropShadowDistance, style.DropShadowAngle, style.DropShadowBlur);
+                CompositeMask(colors, shadow, style.DropShadowColor, 1f, alpha, true);
+            }
+            if (style.InnerShadowEnabled)
+            {
+                byte[] edge = Subtract(alpha, Erode(alpha, width, height, Mathf.Max(1, Mathf.CeilToInt(style.InnerShadowDistance + style.InnerShadowBlur))), width, height);
+                CompositeMask(colors, edge, style.InnerShadowColor, 1f, alpha, false);
+            }
+            if (style.InnerGlowEnabled)
+            {
+                byte[] edge = Subtract(alpha, Erode(alpha, width, height, Mathf.Max(1, Mathf.CeilToInt(style.InnerGlowSize))), width, height);
+                CompositeMask(colors, edge, style.InnerGlowColor, 1f, alpha, false);
+            }
+        }
+
+        private static byte[] Dilate(byte[] source, int width, int height, int radius)
+        {
+            var result = new byte[source.Length];
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+            { byte max = 0; for (int yy = -radius; yy <= radius; yy++) for (int xx = -radius; xx <= radius; xx++) { int px = x + xx, py = y + yy; if (px >= 0 && px < width && py >= 0 && py < height) max = (byte)Mathf.Max(max, source[py * width + px]); } result[y * width + x] = max; }
+            return result;
+        }
+
+        private static byte[] Erode(byte[] source, int width, int height, int radius)
+        {
+            var result = new byte[source.Length];
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+            { byte min = byte.MaxValue; for (int yy = -radius; yy <= radius; yy++) for (int xx = -radius; xx <= radius; xx++) { int px = x + xx, py = y + yy; min = (byte)Mathf.Min(min, px >= 0 && px < width && py >= 0 && py < height ? source[py * width + px] : 0); } result[y * width + x] = min; }
+            return result;
+        }
+
+        private static byte[] Subtract(byte[] outer, byte[] inner, int width, int height)
+        { var result = new byte[outer.Length]; for (int i = 0; i < result.Length; i++) result[i] = (byte)Mathf.Max(0, outer[i] - inner[i]); return result; }
+
+        private static byte[] OffsetBlur(byte[] source, int width, int height, float distance, float angle, float blur)
+        {
+            int dx = Mathf.RoundToInt(Mathf.Cos(angle * Mathf.Deg2Rad) * distance);
+            int dy = Mathf.RoundToInt(Mathf.Sin(angle * Mathf.Deg2Rad) * distance);
+            int radius = Mathf.Clamp(Mathf.CeilToInt(blur), 0, 32);
+            var result = new byte[source.Length];
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) { int sum = 0, count = 0; for (int yy = -radius; yy <= radius; yy++) for (int xx = -radius; xx <= radius; xx++) { int px = x - dx + xx, py = y - dy + yy; if (px >= 0 && px < width && py >= 0 && py < height) { sum += source[py * width + px]; count++; } } result[y * width + x] = (byte)(count == 0 ? 0 : sum / count); }
+            return result;
+        }
+
+        private static void CompositeMask(Color32[] colors, byte[] mask, Color color, float opacity, byte[] originalAlpha, bool outsideOnly)
+        {
+            for (int i = 0; i < colors.Length; i++) { if (outsideOnly && originalAlpha[i] > 0) continue; float a = mask[i] / 255f * Mathf.Clamp01(opacity) * color.a; if (a <= 0f) continue; Color dst = colors[i]; Color blended = Color.Lerp(new Color(dst.r / 255f, dst.g / 255f, dst.b / 255f, 1f), color, a); colors[i] = new Color32((byte)Mathf.RoundToInt(blended.r * 255f), (byte)Mathf.RoundToInt(blended.g * 255f), (byte)Mathf.RoundToInt(blended.b * 255f), (byte)Mathf.Max(dst.a, Mathf.RoundToInt(a * 255f))); }
         }
 
         private static bool IsFullyTransparent(Color32[] colors)

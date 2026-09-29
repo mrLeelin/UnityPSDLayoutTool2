@@ -13,13 +13,6 @@ namespace PhotoshopFile
     {
         private static readonly KeyValuePair<string, string>[] UnrenderedEffectKeys =
         {
-            new KeyValuePair<string, string>("DrSh", "投影"),
-            new KeyValuePair<string, string>("dropShadowMulti", "投影"),
-            new KeyValuePair<string, string>("IrSh", "内阴影"),
-            new KeyValuePair<string, string>("innerShadowMulti", "内阴影"),
-            new KeyValuePair<string, string>("FrFX", "描边"),
-            new KeyValuePair<string, string>("frameFXMulti", "描边"),
-            new KeyValuePair<string, string>("IrGl", "内发光"),
             new KeyValuePair<string, string>("OrGl", "外发光"),
             new KeyValuePair<string, string>("ebbl", "斜面和浮雕"),
             new KeyValuePair<string, string>("ChFX", "光泽"),
@@ -58,6 +51,24 @@ namespace PhotoshopFile
         /// <summary>颜色叠加不透明度，取值 0..1。</summary>
         internal float ColorOverlayOpacity { get; private set; }
 
+        internal bool StrokeEnabled { get; private set; }
+        internal float StrokeWidth { get; private set; }
+        internal Color StrokeColor { get; private set; }
+        internal float StrokeOpacity { get; private set; } = 1f;
+        internal bool DropShadowEnabled { get; private set; }
+        internal float DropShadowDistance { get; private set; }
+        internal float DropShadowAngle { get; private set; } = 120f;
+        internal float DropShadowBlur { get; private set; }
+        internal Color DropShadowColor { get; private set; } = Color.black;
+        internal bool InnerShadowEnabled { get; private set; }
+        internal float InnerShadowDistance { get; private set; }
+        internal float InnerShadowAngle { get; private set; } = 120f;
+        internal float InnerShadowBlur { get; private set; }
+        internal Color InnerShadowColor { get; private set; } = Color.black;
+        internal bool InnerGlowEnabled { get; private set; }
+        internal float InnerGlowSize { get; private set; }
+        internal Color InnerGlowColor { get; private set; } = Color.white;
+
         /// <summary>已启用、但导出纹理时不会渲染的图层样式（中文名，去重）。</summary>
         internal IReadOnlyList<string> UnrenderedEffects => unrenderedEffects;
 
@@ -78,7 +89,11 @@ namespace PhotoshopFile
 
                         break;
                     case "vscg":
-                        style.ReadFillContent(data, data != null && data.Length >= 4 ? System.Text.Encoding.ASCII.GetString(data, 0, 4) : string.Empty);
+                        // vscg is the vector shape's fill-content record. Its
+                        // payload starts with a version/descriptor, not an
+                        // ASCII fill-kind tag, so treat it as the solid-color
+                        // shape record and look for its Clr  value directly.
+                        style.ReadFillContent(data, "SoCo");
                         break;
                     case "SoCo":
                     case "GdFl":
@@ -168,6 +183,13 @@ namespace PhotoshopFile
                 }
             }
 
+            ReadStroke(data);
+            ReadShadow(data, "DrSh", false);
+            ReadShadow(data, "dsdw", false);
+            ReadShadow(data, "IrSh", true);
+            ReadShadow(data, "innerShadowMulti", true);
+            ReadInnerGlow(data);
+
             foreach (KeyValuePair<string, string> effect in UnrenderedEffectKeys)
             {
                 if (Layer.TryReadEffectEnabled(data, effect.Key, out enabled, out start, true) && enabled)
@@ -175,6 +197,52 @@ namespace PhotoshopFile
                     AddUnrendered(effect.Value);
                 }
             }
+        }
+
+        private void ReadStroke(byte[] data)
+        {
+            bool enabled; int start;
+            if (!Layer.TryReadEffectEnabled(data, "FrFX", out enabled, out start, true) &&
+                !Layer.TryReadEffectEnabled(data, "frameFXMulti", out enabled, out start, true)) return;
+            StrokeEnabled = true;
+            double value;
+            StrokeWidth = Layer.TryReadUnitValue(data, "Sz  ", start, out value) ? Mathf.Max(0f, (float)value) : 1f;
+            StrokeOpacity = Layer.TryReadUnitValue(data, "Opct", start, out value) ? Mathf.Clamp01((float)value / 100f) : 1f;
+            Color color;
+            if (Layer.TryReadColor(data, "Clr ", start, out color)) StrokeColor = color;
+        }
+
+        private void ReadShadow(byte[] data, string key, bool inner)
+        {
+            bool enabled; int start;
+            if (!Layer.TryReadEffectEnabled(data, key, out enabled, out start, true)) return;
+            double value;
+            float distance = Layer.TryReadUnitValue(data, "Dstn", start, out value) ? Mathf.Max(0f, (float)value) : 0f;
+            float angle = Layer.TryReadUnitValue(data, "lagl", start, out value) ? (float)value : 120f;
+            float blur = Layer.TryReadUnitValue(data, "blur", start, out value) ? Mathf.Max(0f, (float)value) : 0f;
+            float opacity = Layer.TryReadUnitValue(data, "Opct", start, out value) ? Mathf.Clamp01((float)value / 100f) : 1f;
+            Color color;
+            if (!Layer.TryReadColor(data, "Clr ", start, out color)) color = Color.black;
+            color.a *= opacity;
+            if (inner) { InnerShadowEnabled = true; InnerShadowDistance = distance; InnerShadowAngle = angle; InnerShadowBlur = blur; InnerShadowColor = color; }
+            else { DropShadowEnabled = true; DropShadowDistance = distance; DropShadowAngle = angle; DropShadowBlur = blur; DropShadowColor = color; }
+        }
+
+        private void ReadInnerGlow(byte[] data)
+        {
+            bool enabled; int start;
+            if (!Layer.TryReadEffectEnabled(data, "IrGl", out enabled, out start, true)) return;
+            double value;
+            InnerGlowEnabled = true;
+            InnerGlowSize = Layer.TryReadUnitValue(data, "blur", start, out value) ? Mathf.Max(0f, (float)value) : 0f;
+            if (Layer.TryReadUnitValue(data, "Opct", start, out value))
+            {
+                Color innerGlowColor = InnerGlowColor;
+                innerGlowColor.a = Mathf.Clamp01((float)value / 100f);
+                InnerGlowColor = innerGlowColor;
+            }
+            Color color;
+            if (Layer.TryReadColor(data, "Clr ", start, out color)) { color.a = InnerGlowColor.a; InnerGlowColor = color; }
         }
 
         private void AddUnrendered(string name)

@@ -6,6 +6,8 @@ All notable changes to this package are documented in this file.
 
 ### Fixed
 
+- Added first-pass raster rendering for solid-color strokes, drop shadows, inner shadows, and inner glows on non-text layers. Blur and edge behavior are approximations; unsupported gradient, pattern, bevel, and outer-glow styles remain reported.
+- Fixed vector shape fill reconstruction by reading `vscg` records as solid-color content instead of treating their descriptor bytes as a fill-kind tag.
 - Fixed PSD text-layer effect parsing for newer adjustment records (`lmfx` and `lfxs`) in addition to the existing formats.
 - Fixed text color overlay handling so enabled `SoFi` effects contribute the visible fill color while preserving the source alpha.
 - Fixed stroke parsing to skip disabled `FrFX` records and correctly read enabled stroke settings, including width and color.

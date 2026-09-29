@@ -21,6 +21,12 @@
 - 新增或修改 C# 文件时保留 `PsdLayoutTool2` 命名空间，并遵循相邻文件的命名和结构风格。
 - 中文或其他非 ASCII 文本写入后，重新打开文件检查是否出现 `???`、乱码、意外 BOM 或错误转义。
 
+## Unity 当前选区读取
+
+- 当任务需要查看用户在 Unity Editor 中当前选中的 GameObject 时，只能通过 NativeUnity 读取：在目标 Editor 进程中执行 C#，使用 `UnityEditor.Selection` 获取实时选区。本仓库的入口是 `.agents/skills/prefab-hierarchy-cleanup/scripts/read_unity_selection.py --mode selection`，它通过 `unity command eval_file` 执行 `read_selection.cs`。
+- Python 可以调度上述命令和解析结果，但不能靠 Prefab 文件、缓存、日志或截图推断当前选区。不得使用 uLoop、其他第三方 MCP/插件或其他代理服务获取选区，也不得在 NativeUnity 失败时自动回退到它们。
+- NativeUnity 不可用或结果不完整时，报告读取失败及原因，不要声称已确认用户当前选择的 GameObject。
+
 ## 功能边界
 
 - PSD Smart Object 不在当前解析支持范围内；相关测试素材应先栅格化。
