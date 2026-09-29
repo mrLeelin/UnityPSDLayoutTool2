@@ -141,6 +141,10 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(
                     PsdHierarchyCleanupReplayProfile.HasConfirmedStages(SourceAssetPath, TargetPath),
                     Is.True);
+                Assert.That(PsdHierarchyOrganizerEntry.TryResolveIncrementalReview(
+                    SourceAssetPath, TargetPath, out bool incremental, out string error), Is.False);
+                Assert.That(incremental, Is.False);
+                Assert.That(error, Does.Contain("增量记录当前不可用"));
             }
             finally
             {
@@ -221,6 +225,9 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
                 SourceGuid, TargetPath, out string reason), Is.True, reason);
+            Assert.That(PsdHierarchyOrganizerEntry.TryResolveIncrementalReview(
+                SourceAssetPath, TargetPath, out bool incremental, out string modeError), Is.True, modeError);
+            Assert.That(incremental, Is.True);
         }
 
         [Test]

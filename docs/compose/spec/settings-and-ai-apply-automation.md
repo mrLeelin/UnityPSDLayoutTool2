@@ -56,6 +56,7 @@ commits: e81265f4d47a4c764c60ba2cb7d6ec4b61220bdc..uncommitted
 - 不改 API Key 存储。
 - 不自动改使用方工程 `.gitignore`。
 - 「AI整理」只使用 PowerShell 终端会话，不恢复或保留旧的 Unity EditorWindow ChatWindow 入口。
+- 对同一 PSD/Prefab 检测到可重放的已确认整理 Profile 时，「AI整理」进入增量对话：先问用户要调整什么，再基于当前 Prefab 快照只规划本轮差异；已保存结构是基线，成功 Apply 后再次点击会创建绑定新快照的增量会话。
 - 不做 HTTP Apply 接口。
 
 ## Tasks

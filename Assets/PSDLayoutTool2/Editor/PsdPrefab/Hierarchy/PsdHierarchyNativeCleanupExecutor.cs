@@ -70,6 +70,9 @@ namespace PsdLayoutTool2
                     "重放无法为重新生成的结果建立权威快照：" + contextError));
             }
 
+            context.incrementalReview = plan["operationScope"] is JObject operationScope &&
+                string.Equals(operationScope.Value<string>("kind"), "incremental_adjustment", StringComparison.Ordinal);
+
             return Task.FromResult(ExecuteV2(
                 context,
                 planJson,
@@ -224,6 +227,8 @@ namespace PsdLayoutTool2
                 return Result(PsdHierarchyCleanupExecutionState.Partial, "post-grouping",
                     "Stage 1 was applied and saved, but the authoritative snapshot could not be refreshed: " + refreshedError);
             }
+
+            refreshed.incrementalReview = context.incrementalReview;
 
             JObject stageTwoPlan = PsdHierarchyPostGroupingExtraction.BuildStageTwoPlan(
                 refreshed, postGroupingIntents, prefabPath, out string stageTwoError);

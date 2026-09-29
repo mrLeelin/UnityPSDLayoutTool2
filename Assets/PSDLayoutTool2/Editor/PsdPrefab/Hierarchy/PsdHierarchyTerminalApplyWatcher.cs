@@ -60,6 +60,7 @@ namespace PsdLayoutTool2
             public string snapshotFingerprint = string.Empty;
             public string reviewVersion = string.Empty;
             public bool localRepair;
+            public bool incrementalReview;
             public string localRepairScopeMode = string.Empty;
             public string[] localRepairSelectedPaths = Array.Empty<string>();
         }
@@ -511,6 +512,33 @@ namespace PsdLayoutTool2
                     return;
                 }
 
+                if (session.incrementalReview)
+                {
+                    if (session.localRepair)
+                    {
+                        FailApply(applyPath, claimPath, session, claim, StatusRejected, "context",
+                            "增量整理与锁定选区的局部修正不能在同一会话中混用。");
+                        return;
+                    }
+
+                    if (!PsdHierarchyOrganizerEntry.TryResolveIncrementalReview(
+                            session.sourcePsdAssetPath, session.targetPrefabPath,
+                            out bool stillIncremental, out string profileError) || !stillIncremental)
+                    {
+                        FailApply(applyPath, claimPath, session, claim, StatusRejected, "context",
+                            "已整理 Prefab 的增量记录在审批后失效：" + profileError);
+                        return;
+                    }
+
+                    if (!PsdHierarchyOrganizerEntry.TryValidateIncrementalPlan(planJson, out string scopeError))
+                    {
+                        FailApply(applyPath, claimPath, session, claim, StatusRejected, "scope", scopeError);
+                        return;
+                    }
+
+                    context.incrementalReview = true;
+                }
+
                 if (session.localRepair)
                 {
                     string localScopeError = string.Empty;
@@ -560,7 +588,8 @@ namespace PsdLayoutTool2
                 }
 
                 // 与聊天窗口相同的命名完整性闸门：写入前拒绝，不改动 Prefab。
-                if (!PsdHierarchyChatCleanupExecution.TryValidateSemanticNames(context, planJson, out string namingError))
+                if (!session.incrementalReview &&
+                    !PsdHierarchyChatCleanupExecution.TryValidateSemanticNames(context, planJson, out string namingError))
                 {
                     FailApply(applyPath, claimPath, session, claim, StatusRejected, "naming", namingError);
                     return;

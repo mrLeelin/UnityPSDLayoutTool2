@@ -133,6 +133,87 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void FreshPrefabStartsFullReviewAndIncrementalPromptAsksBeforePlanning()
+        {
+            Assert.That(PsdHierarchyOrganizerEntry.TryResolveIncrementalReview(
+                SourceAssetPath, targetPrefabPath, out bool incremental, out string error), Is.True, error);
+            Assert.That(incremental, Is.False);
+
+            var context = new PsdHierarchyChatContext(
+                "C:/Project", SourceAssetPath, targetPrefabPath,
+                "C:/Project/Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/SKILL.md",
+                string.Empty, string.Empty,
+                hierarchySnapshotFullPath: "C:/Project/Library/current.snapshot.json");
+            string prompt = PsdHierarchyOrganizerEntry.BuildIncrementalConversationPrompt(context);
+            string contract = PsdHierarchyOrganizerEntry.BuildTerminalSessionContract(
+                "plan.json", "review.md", "request.apply", "result.json",
+                incrementalReview: true);
+
+            Assert.That(prompt, Does.Contain("先只问用户"));
+            Assert.That(prompt, Does.Contain("只包含本轮差异"));
+            Assert.That(prompt, Does.Contain("operationScope.kind 必须是 incremental_adjustment"));
+            Assert.That(contract, Does.Contain("First ask the user what to adjust"));
+            Assert.That(contract, Does.Contain("Do not repeat the initial full cleanup"));
+        }
+
+        [Test]
+        public void IncrementalPlanRequiresARequestedChangeAndRealOperations()
+        {
+            var plan = new JObject
+            {
+                ["operationScope"] = new JObject
+                {
+                    ["kind"] = "incremental_adjustment",
+                    ["requestedChange"] = "Rename the selected diary icon",
+                },
+                ["selectionNodeIds"] = new JArray("node:n000001"),
+                ["renames"] = new JArray(new JObject
+                {
+                    ["target"] = "node:n000001",
+                    ["name"] = "DiaryIcon",
+                }),
+            };
+
+            Assert.That(PsdHierarchyOrganizerEntry.TryValidateIncrementalPlan(
+                plan.ToString(), out string validError), Is.True, validError);
+            plan["selectionNodeIds"] = new JArray("node:n000002");
+            Assert.That(PsdHierarchyOrganizerEntry.TryValidateIncrementalPlan(
+                plan.ToString(), out string outsideScopeError), Is.False);
+            Assert.That(outsideScopeError, Does.Contain("未列入 selectionNodeIds"));
+            plan["selectionNodeIds"] = new JArray("node:n000001");
+            plan["operationScope"]["requestedChange"] = string.Empty;
+            Assert.That(PsdHierarchyOrganizerEntry.TryValidateIncrementalPlan(
+                plan.ToString(), out _), Is.False);
+            plan["operationScope"]["requestedChange"] = "Rename the selected diary icon";
+            plan["renames"] = new JArray();
+            Assert.That(PsdHierarchyOrganizerEntry.TryValidateIncrementalPlan(
+                plan.ToString(), out _), Is.False);
+        }
+
+        [Test]
+        public void ResumableLookupDoesNotMixFullAndIncrementalSessions()
+        {
+            string incrementalId = "incremental-" + Guid.NewGuid().ToString("N");
+            string plan = Path.Combine(terminalDirectory, incrementalId + ".plan.json");
+            string review = Path.Combine(terminalDirectory, incrementalId + ".review.md");
+            File.WriteAllText(plan, "{}", new UTF8Encoding(false));
+            File.WriteAllText(review, "saved review", new UTF8Encoding(false));
+            PsdHierarchyOrganizerEntry.WriteTerminalSession(
+                incrementalId, SourceAssetPath, targetPrefabPath, plan, review,
+                "snapshot-a", incrementalReview: true);
+            sessionId = incrementalId;
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+
+            Assert.That(PsdHierarchyOrganizerEntry.TryFindResumableTerminalSession(
+                projectRoot, SourceAssetPath, targetPrefabPath,
+                out string foundId, out _, out _, out _, out _, incrementalReview: true), Is.True);
+            Assert.That(foundId, Is.EqualTo(incrementalId));
+            Assert.That(PsdHierarchyOrganizerEntry.TryFindResumableTerminalSession(
+                projectRoot, SourceAssetPath, targetPrefabPath,
+                out _, out _, out _, out _, out _), Is.False);
+        }
+
+        [Test]
         public void ResumableSessionLookupRequiresTheSavedReviewAndPlan()
         {
             string resumableId = "resume-" + Guid.NewGuid().ToString("N");

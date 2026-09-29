@@ -7,6 +7,10 @@ description: Safely organize one existing Unity Prefab in place into a complete 
 
 Organize existing Unity Prefabs by transferring the *discipline* of Figma hierarchy cleanup, not Figma's node model or tooling. Treat Unity components, serialized bindings, RectTransforms, asset references, prefab overrides, and sibling order as source-of-truth data.
 
+## Already-organized Prefabs
+
+When the Unity terminal task declares `INCREMENTAL ADJUSTMENT`, the existing saved Prefab and its fresh authoritative snapshot are the baseline. The first response asks the user what to adjust and waits for the answer. Discuss unclear scope before planning. The review covers only the requested change and its necessary dependencies; the v2 JSON document remains complete, but its executable arrays contain only this round's operations. Record the user's request in `operationScope.requestedChange`, set `operationScope.kind` to `incremental_adjustment`, and list affected current nodes in `selectionNodeIds`. Preserve unrelated hierarchy, names, assets, bindings and child Prefabs. Existing unrelated `requiresExtraction` candidates do not expand the request. After a successful Apply, refresh the snapshot in a new AI整理 terminal session before another adjustment.
+
 > This project's engine has behaviors that have already caused real failures (no automatic
 > tightening, extraction-stage counts, a rename-locked Prefab root). Read
 > **Project-verified engine realities** at the end of this file before authoring a plan.

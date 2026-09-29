@@ -382,13 +382,6 @@ namespace PsdLayoutTool2
 
                 string candidateId = candidate.Value<string>("id") ?? "<unknown>";
                 string parent = candidate.Value<string>("parent");
-                if (string.IsNullOrWhiteSpace(parent) || !parent.StartsWith("node:", StringComparison.Ordinal))
-                {
-                    error = "The refreshed snapshot contains mandatory candidate " + candidateId +
-                            " without a node:<id> parent. Re-analyze the current Prefab.";
-                    return false;
-                }
-
                 string[] sources = (candidate["sources"] as JArray ?? new JArray())
                     .Select(value => NormalizeNodeId(value.Value<string>()))
                     .Where(value => value != null)
@@ -397,6 +390,14 @@ namespace PsdLayoutTool2
                 {
                     error = "The refreshed snapshot contains mandatory candidate " + candidateId +
                             " without any source nodes. Re-analyze the current Prefab.";
+                    return false;
+                }
+                if (refreshed.incrementalReview && !sources.Any(coveredBy.ContainsKey))
+                    continue;
+                if (string.IsNullOrWhiteSpace(parent) || !parent.StartsWith("node:", StringComparison.Ordinal))
+                {
+                    error = "The refreshed snapshot contains mandatory candidate " + candidateId +
+                            " without a node:<id> parent. Re-analyze the current Prefab.";
                     return false;
                 }
 

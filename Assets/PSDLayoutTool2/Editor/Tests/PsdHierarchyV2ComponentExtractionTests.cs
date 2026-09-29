@@ -159,6 +159,46 @@ namespace PsdLayoutTool2.Tests
             }
             finally { PrefabUtility.UnloadPrefabContents(root); }
         }
+
+        [Test]
+        public async Task ComponentExtractionUsesPathsAfterMovesAndWrappers()
+        {
+            JObject plan = Plan();
+            plan["verify"]["nodes"] = 6;
+            plan["wrappers"] = new JArray(new JObject
+            {
+                ["id"] = "cards",
+                ["parent"] = "node:root",
+                ["name"] = "[Cards]",
+                ["siblingIndex"] = 0,
+            });
+            plan["moves"] = new JArray(
+                new JObject { ["source"] = "node:first", ["destination"] = "@cards", ["siblingIndex"] = 0 },
+                new JObject { ["source"] = "node:second", ["destination"] = "@cards", ["siblingIndex"] = 1 });
+
+            var result = await PsdHierarchyNativeCleanupExecutor.ApplyAsync(context, plan.ToString());
+
+            Assert.That(result.success, Is.True, result.message);
+            GameObject root = PrefabUtility.LoadPrefabContents(Target);
+            try
+            {
+                Transform cards = root.transform.Find("[Cards]");
+                Assert.That(cards, Is.Not.Null);
+                Assert.That(cards.childCount, Is.EqualTo(2));
+                for (int index = 0; index < cards.childCount; index++)
+                {
+                    Transform instance = cards.GetChild(index);
+                    Assert.That(
+                        PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(instance.gameObject),
+                        Is.EqualTo(ComponentPath));
+                }
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
         [Test]
         public async Task ExistingExtractionTargetIsRejectedBeforeAnyWrite()
         {
@@ -269,6 +309,24 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(result.success, Is.False);
             Assert.That(result.message, Does.Contain("family_001"));
+            Assert.That(File.Exists(ComponentPath), Is.False);
+        }
+
+        [Test]
+        public async Task IncrementalReviewDoesNotExtractUnrelatedMandatoryCandidates()
+        {
+            AddMandatoryCandidate("component", "node:root", "node:first", "node:second");
+            context.incrementalReview = true;
+            JObject plan = Plan();
+            plan["renames"] = new JArray(new JObject
+            {
+                ["target"] = "node:label",
+                ["name"] = "Caption",
+            });
+
+            var result = await PsdHierarchyChatCleanupExecution.ValidatePlanAsync(context, plan.ToString());
+
+            Assert.That(result.success, Is.True, result.message);
             Assert.That(File.Exists(ComponentPath), Is.False);
         }
 

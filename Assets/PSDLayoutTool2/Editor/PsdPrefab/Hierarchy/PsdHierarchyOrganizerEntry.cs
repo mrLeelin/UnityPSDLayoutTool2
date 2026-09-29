@@ -29,7 +29,8 @@ namespace PsdLayoutTool2
             string reviewFullPath,
             string snapshotFingerprint = "",
             string reviewVersion = "",
-            PsdHierarchyLocalRepairScope localRepairScope = null)
+            PsdHierarchyLocalRepairScope localRepairScope = null,
+            bool incrementalReview = false)
         {
             string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
             if (string.IsNullOrEmpty(projectRoot))
@@ -52,6 +53,7 @@ namespace PsdLayoutTool2
                 localRepair = localRepairScope != null,
                 localRepairScopeMode = localRepairScope?.mode.ToString() ?? string.Empty,
                 localRepairSelectedPaths = localRepairScope?.selectedPaths ?? Array.Empty<string>(),
+                incrementalReview = incrementalReview,
             };
             File.WriteAllText(
                 Path.Combine(directory, sessionId + ".session.json"),
@@ -84,16 +86,27 @@ namespace PsdLayoutTool2
             string reviewPath,
             string applyPath,
             string applyResultPath,
-            bool localRepair = false)
+            bool localRepair = false,
+            bool incrementalReview = false,
+            bool resumedIncrementalReview = false)
         {
             string scopeContract = localRepair
                 ? "This is a LOCAL REPAIR session. The locked Unity selection is authoritative. Review and plan only the selected scope; leave every operation outside that scope unchanged. Do not perform a full Prefab reorganization.\n"
-                : string.Empty;
+                : incrementalReview
+                    ? "This is an INCREMENTAL ADJUSTMENT session for an already-organized Prefab. The saved Prefab and current snapshot are authoritative. " +
+                      (resumedIncrementalReview
+                          ? "Continue from the saved review and plan; ask only for missing adjustment details. "
+                          : "First ask the user what to adjust; do not produce a plan before the user answers. ") +
+                      "After discussion, plan only the requested changes. Keep unrelated hierarchy, names, child Prefabs and assets untouched. Do not repeat the initial full cleanup.\n"
+                    : string.Empty;
             return
                 "\n\n===== TERMINAL SESSION CONTRACT =====\n" +
                 scopeContract +
                 "This is an analysis and plan session. Do not claim that Unity assets were changed.\n" +
-                "Write the complete executable JSON plan (and no partial patch) to: " + planPath.Replace('\\', '/') + "\n" +
+                (incrementalReview
+                    ? "Wait until the user describes an adjustment before creating or replacing the review and plan. Then write the complete executable JSON document for only that adjustment to: "
+                    : "Write the complete executable JSON plan (and no partial patch) to: ") +
+                planPath.Replace('\\', '/') + "\n" +
                 "The plan must be version 2 using node:<id> references from the snapshot. It must also include snapshotFingerprint, targetPrefabAssetPath, selectionNodeIds, operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion.\n" +
                 "Unity validates and applies the reviewed plan itself after .apply; never run a script to modify the Prefab.\n" +
                 PsdHierarchyChatClient.PrefabRootNameContract + "\n" +
@@ -102,7 +115,9 @@ namespace PsdLayoutTool2
                 PsdHierarchyChatClient.SnapshotRefreshContract + "\n" +
                 "EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents are executable. " +
                 "For componentExtractions use {id, name, assetPath, template: node:<id>, instances: [node:<id>...]}; the template must also appear in instances, every instance must share the template's recursive component structure, and assetPath must be a NEW PascalCase .prefab under Assets/. " +
-                "Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's sources must fully cover the candidate. When a mandatory candidate only becomes extractable after the grouping you just planned, Unity revalidates the refreshed candidate before performing that extraction in the second stage. " +
+                (incrementalReview
+                    ? "For an extraction requested in this incremental adjustment, declare its complete sources and matching componentFamilyDecisions. Do not extract unrelated candidates. "
+                    : "Every requiresExtraction:true snapshot candidate must have exactly one componentFamilyDecisions entry. Its parent and sources must exactly match the candidate; recommendedMode is advisory only; mode must be component|state|variant|stateful and must match the actual extraction list or postGroupingExtractionIntents entry named by extractionId. That extraction's sources must fully cover the candidate. When a mandatory candidate only becomes extractable after the grouping you just planned, Unity revalidates the refreshed candidate before performing that extraction in the second stage. ") +
                 "For stateComponentExtractions use {id, template: node:<id>, assetPath, defaultState, states: [{id, source: node:<id>, name}]} only for mutually exclusive direct-sibling roots in one visual slot; template must be one of states[].source, and those sources must not be referenced from outside the extracted states. " +
                 "For variantComponentExtractions use {id, template: node:<id>, assetPath, commonName, statesName, defaultState, states: [{id, source: node:<id>, name}], instances: [{source: node:<id>, name, state}]} for rows visible at different list positions; every state representative must also appear once in instances, and each instance's structure must match its selected state source. " +
                 "For statefulComponentExtractions use {id, template: node:<id>, assetPath, common: {source, members: [{sourceName, name}]}, states: [{id, source, name, members: [...]}], defaultState, instances: [{source, name, state, commonSourceNames, stateSourceNames}]} when repeated items share real content plus a few states; every direct child of an instance source must be mapped exactly once by commonSourceNames + stateSourceNames. " +
@@ -192,6 +207,132 @@ namespace PsdLayoutTool2
             return TryOpenTerminal(sourcePsdAssetPath, false, out error);
         }
 
+        internal static bool TryResolveIncrementalReview(
+            string sourcePsdAssetPath,
+            string targetPrefabPath,
+            out bool incrementalReview,
+            out string error)
+        {
+            incrementalReview = false;
+            error = string.Empty;
+            string sourceGuid = AssetDatabase.AssetPathToGUID(NormalizeAssetPath(sourcePsdAssetPath));
+            if (string.IsNullOrWhiteSpace(sourceGuid)) return true;
+
+            if (PsdHierarchyCleanupReplayProfile.Load(targetPrefabPath, sourceGuid) == null)
+                return true;
+
+            if (!PsdHierarchyCleanupReplayProfile.CanReplayIncrementalUpdate(
+                    sourceGuid, targetPrefabPath, out string reason))
+            {
+                error = "检测到已整理的 Prefab，但增量记录当前不可用：" + reason;
+                return false;
+            }
+
+            incrementalReview = true;
+            return true;
+        }
+
+        internal static string BuildIncrementalConversationPrompt(
+            PsdHierarchyChatContext context,
+            bool resumed = false)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+            string root = PsdHierarchyChatClient.ToPortableFullPath(context.projectRoot.TrimEnd('/', '\\'));
+            string skill = PsdHierarchyChatClient.ToPortableFullPath(context.skillFullPath);
+            return "全部使用中文输出。当前 Prefab 已经完成过 AI 整理。" +
+                (resumed
+                    ? "先阅读已有 review 和 plan，继续之前的调整对话。\n"
+                    : "先只问用户：已整理过这个 Prefab，你想调整哪些地方？ 不要先输出完整审查或 JSON 计划。\n") +
+                "用户说明调整目标后，以磁盘上的当前 Prefab 和权威快照为基准进行多轮对话。" +
+                "只为明确要求的变更生成增量操作，保留其余现有层级、命名、子 Prefab、资源和业务组件。" +
+                "如需求不明确，继续问具体节点或期望结果；不要猜测或重做完整整理。\n" +
+                "当前快照：" + PsdHierarchyChatClient.ToPortableFullPath(context.hierarchySnapshotFullPath) + "\n" +
+                "当前 Prefab：" + root + "/" + context.targetPrefabAssetPath + "\n" +
+                "计划格式和执行规则：" + skill + "；只在开始编写计划时阅读，并以本增量会话约束优先。\n" +
+                "每轮审查只覆盖用户要求的变化及其必要依赖。计划文件仍是完整 v2 JSON 文档，" +
+                "但操作数组只包含本轮差异；operationScope.kind 必须是 incremental_adjustment，" +
+                "operationScope.requestedChange 必须记录用户明确提出的修改，selectionNodeIds 指向受影响的当前节点。" +
+                "展示增量审查并取得明确批准后才可写 .apply。一次成功 Apply 后快照会失效；" +
+                "用户若继续调整，需再次点击 AI整理创建绑定新快照的增量会话。\n";
+        }
+
+        internal static bool TryValidateIncrementalPlan(string planJson, out string error)
+        {
+            error = string.Empty;
+            try
+            {
+                JObject plan = JObject.Parse(planJson ?? string.Empty);
+                if (!(plan["operationScope"] is JObject scope) ||
+                    !string.Equals(scope.Value<string>("kind"), "incremental_adjustment", StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(scope.Value<string>("requestedChange")))
+                {
+                    error = "增量计划必须在 operationScope 中声明 kind=incremental_adjustment 和本轮 requestedChange。";
+                    return false;
+                }
+
+                if (!(plan["selectionNodeIds"] is JArray selected) || selected.Count == 0)
+                {
+                    error = "增量计划必须列出本轮受影响的 selectionNodeIds。";
+                    return false;
+                }
+
+                var affected = new HashSet<string>(StringComparer.Ordinal);
+                foreach (JToken node in selected)
+                {
+                    string nodeReference = node.Type == JTokenType.String ? node.Value<string>() : string.Empty;
+                    if (string.IsNullOrWhiteSpace(nodeReference) ||
+                        !nodeReference.StartsWith("node:", StringComparison.Ordinal))
+                    {
+                        error = "增量计划的 selectionNodeIds 必须使用 node:<id>。";
+                        return false;
+                    }
+                    affected.Add(nodeReference);
+                }
+
+                foreach (KeyValuePair<string, string> operation in new[]
+                {
+                    new KeyValuePair<string, string>("moves", "source"),
+                    new KeyValuePair<string, string>("renames", "target"),
+                    new KeyValuePair<string, string>("tightBounds", "target"),
+                    new KeyValuePair<string, string>("emptyContainerRemovals", "source"),
+                })
+                {
+                    foreach (JObject item in (plan[operation.Key] as JArray ?? new JArray()).Children<JObject>())
+                    {
+                        string target = item.Value<string>(operation.Value);
+                        if (target != null && target.StartsWith("node:", StringComparison.Ordinal) &&
+                            !affected.Contains(target))
+                        {
+                            error = "增量计划的 " + operation.Key + " 引用了未列入 selectionNodeIds 的节点：" + target;
+                            return false;
+                        }
+                    }
+                }
+
+                string[] operationArrays =
+                {
+                    "wrappers", "moves", "renames", "tightBounds", "emptyContainerRemovals",
+                    "componentExtractions", "stateComponentExtractions", "variantComponentExtractions",
+                    "statefulComponentExtractions", "postGroupingExtractionIntents",
+                    "textureRenames", "spriteAtlasRenames",
+                };
+                if (!Array.Exists(operationArrays, name => plan[name] is JArray items && items.Count > 0))
+                {
+                    error = "增量计划没有实际修改操作；请先说明需要调整的内容。";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception exception) when (exception is Newtonsoft.Json.JsonException ||
+                                              exception is ArgumentException ||
+                                              exception is InvalidCastException)
+            {
+                error = "增量计划 JSON 无效：" + exception.Message;
+                return false;
+            }
+        }
+
         private static bool TryOpenTerminal(string sourcePsdAssetPath, bool localRepair, out string error)
         {
             PsdImporter.ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
@@ -212,6 +353,10 @@ namespace PsdLayoutTool2
 
             if (!PsdHierarchyChatContextBuilder.TryCreate(sourcePsdAssetPath, targetPrefabPath,
                     out PsdHierarchyChatContext context, out error)) return false;
+            bool incrementalReview = false;
+            if (!localRepair && !TryResolveIncrementalReview(sourcePsdAssetPath, targetPrefabPath,
+                    out incrementalReview, out error)) return false;
+            context.incrementalReview = incrementalReview;
             PsdHierarchyLocalRepairScope localRepairScope = null;
             if (localRepair && !PsdHierarchyLocalRepairScope.TryCaptureCurrentSelection(
                     context,
@@ -260,7 +405,8 @@ namespace PsdLayoutTool2
                     out _,
                     out _,
                     out _,
-                    out existingSnapshotFingerprint);
+                    out existingSnapshotFingerprint,
+                    incrementalReview);
                 if (resumed && !string.Equals(
                         existingSnapshotFingerprint,
                         context.hierarchySnapshotFingerprint,
@@ -282,10 +428,14 @@ namespace PsdLayoutTool2
                 if (!resumed)
                 {
                     WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planPath, reviewPath,
-                        context.hierarchySnapshotFingerprint, localRepairScope: localRepairScope);
+                        context.hierarchySnapshotFingerprint, localRepairScope: localRepairScope,
+                        incrementalReview: incrementalReview && !localRepair);
                 }
-                string taskPrompt = PsdHierarchyChatClient.BuildPortablePrompt(context) +
-                    BuildTerminalSessionContract(planPath, reviewPath, applyPath, applyResultPath, localRepair);
+                string taskPrompt = (incrementalReview && !localRepair
+                        ? BuildIncrementalConversationPrompt(context, resumed)
+                        : PsdHierarchyChatClient.BuildPortablePrompt(context)) +
+                    BuildTerminalSessionContract(planPath, reviewPath, applyPath, applyResultPath,
+                        localRepair, incrementalReview && !localRepair, resumed && incrementalReview);
                 if (resumed)
                 {
                     taskPrompt += "\n\n===== RESUMED TERMINAL SESSION =====\n" +
@@ -297,6 +447,9 @@ namespace PsdLayoutTool2
                 string initialPrompt = resumed
                     ? "Resume the existing PSD hierarchy review. Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
                       " and then read the existing review and plan files it names before continuing. Preserve the saved context and wait for explicit approval before writing .apply."
+                    : incrementalReview && !localRepair
+                        ? "Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
+                          ". This Prefab is already organized. First ask me in Chinese what I want adjusted. Wait for my answer; then discuss only incremental changes to the current Prefab."
                     : "Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
                       (localRepair
                           ? ". Review only the locked Unity selection against the current Prefab snapshot, then save a scoped review and complete JSON plan to the paths in that file. Wait for explicit approval before writing .apply."
@@ -337,7 +490,8 @@ namespace PsdLayoutTool2
             out string promptPath,
             out string planPath,
             out string reviewPath,
-            out string snapshotFingerprint)
+            out string snapshotFingerprint,
+            bool incrementalReview = false)
         {
             sessionId = string.Empty;
             promptPath = string.Empty;
@@ -356,6 +510,7 @@ namespace PsdLayoutTool2
                         Newtonsoft.Json.JsonConvert.DeserializeObject<PsdHierarchyTerminalApplyWatcher.SessionRecord>(
                             File.ReadAllText(sessionPath, Encoding.UTF8));
                     if (record == null || record.version != PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion ||
+                        record.incrementalReview != incrementalReview ||
                         !string.Equals(record.sourcePsdAssetPath, sourcePsdAssetPath, StringComparison.OrdinalIgnoreCase) ||
                         !string.Equals(record.targetPrefabPath, targetPrefabPath, StringComparison.OrdinalIgnoreCase) ||
                         string.IsNullOrWhiteSpace(record.sessionId) || string.IsNullOrWhiteSpace(record.planPath) ||

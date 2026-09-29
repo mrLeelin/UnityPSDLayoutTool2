@@ -30,7 +30,7 @@ namespace PsdLayoutTool2
             this.assetPath = assetPath;
             this.prefabName = prefabName;
             this.template = template;
-            this.instancePaths = instancePaths;
+            this.instancePaths = new List<string>(instancePaths);
             this.instanceTransforms = instanceTransforms;
         }
 
@@ -38,8 +38,42 @@ namespace PsdLayoutTool2
         internal readonly string assetPath;
         internal readonly string prefabName;
         internal readonly Transform template;
-        internal readonly IReadOnlyList<string> instancePaths;
+        internal readonly List<string> instancePaths;
         internal readonly IReadOnlyList<Transform> instanceTransforms;
+
+        internal void CaptureCurrentInstancePath(int index)
+        {
+            if (index < 0 || index >= instanceTransforms.Count)
+                throw new ArgumentOutOfRangeException(nameof(index));
+
+            Transform instance = instanceTransforms[index];
+            if (instance == null)
+                throw new InvalidOperationException("Extraction source disappeared before replacement.");
+
+            instancePaths[index] = BuildHierarchyPath(instance);
+        }
+
+        internal void CaptureCurrentInstancePaths()
+        {
+            for (int index = 0; index < instanceTransforms.Count; index++)
+            {
+                CaptureCurrentInstancePath(index);
+            }
+        }
+
+        private static string BuildHierarchyPath(Transform transform)
+        {
+            var names = new List<string>();
+            Transform current = transform;
+            while (current != null)
+            {
+                names.Add(current.name);
+                current = current.parent;
+            }
+
+            names.Reverse();
+            return string.Join("/", names);
+        }
     }
 
     /// <summary>
@@ -408,7 +442,8 @@ namespace PsdLayoutTool2
             var operations = new List<NativeExtractionOperation>();
             if (extractions.Count == 0)
             {
-                ValidateNoMandatoryCandidateWithoutExtraction(plan, context);
+                if (!context.incrementalReview)
+                    ValidateNoMandatoryCandidateWithoutExtraction(plan, context);
                 return operations;
             }
 
@@ -452,7 +487,8 @@ namespace PsdLayoutTool2
                     if (instance == null)
                         throw new InvalidDataException(
                             "componentExtractions[" + id + "].instances was not found in the loaded Prefab: " + path);
-                    if (claimedSources.Any(claimed => claimed == instance || instance.IsChildOf(claimed)))
+                    if (claimedSources.Any(claimed =>
+                            claimed == instance || instance.IsChildOf(claimed) || claimed.IsChildOf(instance)))
                         throw new InvalidDataException(
                             "componentExtractions[" + id + "] overlaps another extraction source: " + path);
 
@@ -484,7 +520,8 @@ namespace PsdLayoutTool2
                     id, assetPath, prefabName, template, instancePaths, instanceTransforms));
             }
 
-            ValidateMandatoryCandidates(plan, context);
+            if (!context.incrementalReview)
+                ValidateMandatoryCandidates(plan, context);
             return operations;
         }
 
@@ -524,6 +561,9 @@ namespace PsdLayoutTool2
                 if (!replaceExistingTargets && File.Exists(fullPath))
                     throw new InvalidDataException("Extraction target already exists: " + assetPath);
 
+                // Bind() resolves node:<id> before ApplyPlan moves nodes. Capture all
+                // current paths after those moves and before the first source is destroyed.
+                operation.CaptureCurrentInstancePaths();
                 GameObject sharedAsset = CreateSharedPrefab(operation, assetPath);
 
                 // 替换前记录所有指向源子树的外部序列化引用，替换后重定向到实例对象。
@@ -531,8 +571,9 @@ namespace PsdLayoutTool2
                     root, operation.instanceTransforms, includeInternal: true);
                 var remap = new Dictionary<int, Object>();
 
-                foreach (Transform source in operation.instanceTransforms)
+                for (int index = 0; index < operation.instanceTransforms.Count; index++)
                 {
+                    Transform source = operation.instanceTransforms[index];
                     ReplaceWithInstance(source, sharedAsset, remap);
                 }
 

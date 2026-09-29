@@ -225,6 +225,7 @@ namespace PsdLayoutTool2
         private readonly Dictionary<string, IReadOnlyList<PsdHierarchySnapshotChild>> directChildrenByPath;
         private readonly HashSet<string> assetRenameSourcePathSet;
         internal PsdHierarchyLocalRepairScope localRepairScope;
+        internal bool incrementalReview;
 
         internal bool TryGetNodePath(string nodeId, out string path)
         {
