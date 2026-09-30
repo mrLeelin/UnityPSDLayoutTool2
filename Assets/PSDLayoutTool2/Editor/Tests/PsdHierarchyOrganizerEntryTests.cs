@@ -150,6 +150,8 @@ namespace PsdLayoutTool2.Tests
                 incrementalReview: true);
 
             Assert.That(prompt, Does.Contain("先只问用户"));
+            Assert.That(prompt, Does.Contain("只由你一个主 Agent 完成"));
+            Assert.That(prompt, Does.Contain("不要派生子 Agent"));
             Assert.That(prompt, Does.Contain("只包含本轮差异"));
             Assert.That(prompt, Does.Contain("operationScope.kind 必须是 incremental_adjustment"));
             Assert.That(contract, Does.Contain("First ask the user what to adjust"));

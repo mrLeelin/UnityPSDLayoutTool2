@@ -458,6 +458,32 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void CleanupPromptsRequireSingleAgentAndArtifactFirstExecution()
+        {
+            var context = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter", "Assets/UI/Source.psd", "Assets/UI/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/Skill.md", "Skill", "Prefab");
+            string portable = PsdHierarchyChatClient.BuildPortablePrompt(context);
+            string external = PsdHierarchyChatClient.BuildExternalSessionPrompt(context,
+                "E:/Project/Demo/monsterhunter/Library/review.plan.json",
+                "E:/Project/Demo/monsterhunter/Library/review.md",
+                "E:/Project/Demo/monsterhunter/Library/review.apply");
+
+            string direct = PsdHierarchyChatClient.BuildClaudeDirectPrompt(context,
+                new[] { new PsdHierarchyChatMessage("user", "Review") });
+            foreach (string prompt in new[] { context.BuildInstructions(), portable, external, direct })
+                Assert.That(prompt, Does.Contain(PsdHierarchyChatClient.SingleAgentCleanupContract));
+            foreach (string prompt in new[] { portable, external })
+            {
+                Assert.That(prompt, Does.Contain("once per unchanged version"));
+                Assert.That(prompt, Does.Contain("complete draft JSON and review BEFORE preparing validation runners"));
+                Assert.That(prompt, Does.Contain("lint -> simulation -> required Unity preflight and visual checks"));
+                Assert.That(prompt, Does.Contain("Every five minutes").And.Contain("actual written artifact paths"));
+                Assert.That(prompt, Does.Contain("Never skip approval, preservation or visual gates"));
+            }
+        }
+
+        [Test]
         public void PortablePromptRequiresOneTableBasedConfirmationThenAutomaticCompletion()
         {
             string fullSnapshot = new JObject

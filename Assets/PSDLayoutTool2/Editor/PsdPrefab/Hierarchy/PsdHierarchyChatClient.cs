@@ -277,6 +277,7 @@ namespace PsdLayoutTool2
         {
             var builder = new StringBuilder();
             builder.AppendLine("You are assisting with a Unity Prefab hierarchy cleanup from inside the Unity Editor.");
+            builder.AppendLine(PsdHierarchyChatClient.SingleAgentCleanupContract);
             builder.AppendLine("The user supplied the exact cleanup skill and target Prefab below.");
             builder.AppendLine("Inspect first and provide a complete, reviewable plan. Do not claim to have edited a local asset: the Unity chat window performs the approved update.");
             builder.AppendLine("Do not invoke PowerShell, Python, Unity runners, or file-writing tools yourself.");
@@ -2018,6 +2019,8 @@ namespace PsdLayoutTool2
             "SNAPSHOT FRESHNESS: snapshotFingerprint is the hash of the Prefab file, so it changes after every successful apply. Re-read the current snapshot before planning again and never reuse an old fingerprint or node id.";
         internal const string WorkflowBindingContract =
             "WORKFLOW BINDING: every plan must also include targetPrefabAssetPath, selectionNodeIds (node:<id> only), operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion. These fields bind the plan to the current selection review and are revalidated immediately before apply.";
+        internal const string SingleAgentCleanupContract =
+            "SINGLE-AGENT CLEANUP: the primary agent must perform every review, planning, extraction and verification stage itself. Do not spawn, resume or delegate to subagents, teams or external advisor agents, including read-only review. This restriction overrides general workspace delegation permission.";
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
             "1. 结合 PSD 与 Prefab 的完整层级、节点几何、组件、同级顺序和重复结构，说明当前结构的主要问题。\n" +
@@ -2119,6 +2122,7 @@ namespace PsdLayoutTool2
 
             var builder = new StringBuilder();
             builder.AppendLine("You are reviewing one existing Unity Prefab hierarchy from inside a Unity Editor tool.");
+            builder.AppendLine(SingleAgentCleanupContract);
             builder.AppendLine("Use the Read tool to inspect exactly these three files before answering:");
             builder.AppendLine("1. Cleanup skill: " + context.skillFullPath);
             builder.AppendLine("2. Executable plan format: " + PsdHierarchyChatContextBuilder.PlanFormatFullPath(context.projectRoot));
@@ -2650,11 +2654,16 @@ namespace PsdLayoutTool2
             var builder = new StringBuilder();
             builder.AppendLine("Use skill prefab-hierarchy-cleanup. Read these local files:");
             builder.AppendLine("全部使用中文输出。");
+            builder.AppendLine(SingleAgentCleanupContract);
             builder.AppendLine("Skill: " + normalizedSkillPath);
             builder.AppendLine("Plan format: " + planFormatFullPath);
             builder.AppendLine("Prefab: " + targetPrefabFullPath);
             builder.AppendLine("Hierarchy snapshot: " + ToPortableFullPath(context.hierarchySnapshotFullPath));
             builder.AppendLine("Accuracy rules:");
+            builder.AppendLine("- Read the complete task, skill, plan format and authoritative snapshot once per unchanged version, in bounded non-overlapping chunks to prevent truncation. Re-read only changed inputs or a missing/truncated section.");
+            builder.AppendLine("- After required evidence is collected, write the complete draft JSON and review BEFORE preparing validation runners. Use existing helpers; inspect executor source only for a specific validation error or missing capability. Do not build speculative validation infrastructure or repeatedly poll for draft files.");
+            builder.AppendLine("- Execution order: evidence -> complete draft plan and review -> lint -> simulation -> required Unity preflight and visual checks -> publish exact validated bytes -> explicit approval -> apply/result. Never skip approval, preservation or visual gates to save time.");
+            builder.AppendLine("- Every five minutes report elapsed time, actual written artifact paths, the specific blocker and the next concrete action. If no complete draft exists, prioritize completing it or identify the exact missing evidence; do not continue speculative tooling.");
             builder.AppendLine("- Inspect the complete hierarchy, geometry, component types, active states, sibling order, nested Prefab boundaries, and repeated structures; names alone are insufficient.");
             builder.AppendLine("- Treat the hierarchy snapshot as authoritative. Read only targeted Prefab sections when the snapshot lacks evidence or conflicts with serialized data; do not repeatedly read the complete Prefab and snapshot.");
             builder.AppendLine("- Distinguish observed facts, inferences, and unknowns. Cross-check Prefab and snapshot; cite exact node:<id> references for important conclusions.");
