@@ -44,8 +44,12 @@ namespace PsdLayoutTool2
         private volatile bool running;
         private volatile string cachedJson;
         // /models 在监听线程执行；这些回退值由主线程 RefreshCache 更新，避免后台线程访问 EditorPrefs/Unity API。
-        private volatile string cachedModelsEndpoint;
+        // cachedCustomEndpoint 为空表示走本机 CLI，不再回落到写死的官方地址。
+        private volatile string cachedCustomEndpoint;
         private volatile string cachedModelsApiKey;
+        private volatile int cachedAiProvider;
+        // CLI 目录由主线程 RefreshCache 预计算，监听线程只读，避免和 PiCatalog 静态缓存抢。
+        private volatile string cachedCliCatalogJson;
         private string pendingJson;
         /// <summary>页面按钮触发的动作名。由监听线程排队、主线程 OnEditorUpdate 执行。</summary>
         private string pendingAction;
@@ -294,13 +298,17 @@ namespace PsdLayoutTool2
             {
                 cachedJson = BuildConfigJson().ToString(Formatting.None);
                 PsdHierarchyAiSettingsSnapshot ai = settings.ResolveHierarchyAiSettings();
-                cachedModelsEndpoint = ai.ResolveEndpoint();
+                cachedAiProvider = (int)ai.provider;
+                cachedCustomEndpoint = string.IsNullOrWhiteSpace(ai.customEndpoint)
+                    ? string.Empty
+                    : ai.customEndpoint.Trim();
                 cachedModelsApiKey = string.Empty;
                 if (ai.provider != PsdHierarchyAiProvider.None)
                 {
                     new PsdHierarchyAiSecretStore().TryReadApiKey(ProjectRoot(), ai.provider, out string storedKey);
                     cachedModelsApiKey = storedKey ?? string.Empty;
                 }
+                cachedCliCatalogJson = BuildCliCatalogJson();
             }
             catch (Exception e)
             {
@@ -417,7 +425,14 @@ namespace PsdLayoutTool2
                 try
                 {
                     JObject request = JObject.Parse(body ?? string.Empty);
-                    Write(response, FetchModelsJson(request.Value<string>("endpoint"), request.Value<string>("apiKey")),
+                    int? providerOverride = request["provider"]?.Type == JTokenType.Integer
+                        ? request.Value<int>("provider")
+                        : (int?)null;
+                    Write(response,
+                        ListModelsJson(
+                            request.Value<string>("endpoint"),
+                            request.Value<string>("apiKey"),
+                            providerOverride),
                         "application/json; charset=utf-8");
                 }
                 catch (Exception e)
@@ -444,48 +459,216 @@ namespace PsdLayoutTool2
             response.Close();
         }
 
-        private string FetchModelsJson(string endpoint, string apiKey)
+        /// <summary>
+        /// 统一的「可用模型」列表：本机 CLI 回目录，自定义 API 打 /models。
+        /// 页面在展开模型下拉时调用，不再要求先填 Key 才能看到 CLI 候选。
+        /// </summary>
+        private string ListModelsJson(string endpoint, string apiKey, int? providerOverride)
         {
-            if (string.IsNullOrWhiteSpace(endpoint)) endpoint = cachedModelsEndpoint;
-            if (string.IsNullOrWhiteSpace(apiKey)) apiKey = cachedModelsApiKey;
-            if (string.IsNullOrWhiteSpace(apiKey))
-                throw new ArgumentException("请先填写 API 地址和 API Key，或先保存自定义 API 配置。");
-            if (string.IsNullOrWhiteSpace(endpoint)) throw new ArgumentException("请先填写 API 地址。");
+            string formEndpoint = (endpoint ?? string.Empty).Trim();
+            string effectiveEndpoint = string.IsNullOrEmpty(formEndpoint)
+                ? (cachedCustomEndpoint ?? string.Empty).Trim()
+                : formEndpoint;
+            int providerValue = providerOverride ?? cachedAiProvider;
+            string effectiveKey = string.IsNullOrWhiteSpace(apiKey)
+                ? (cachedModelsApiKey ?? string.Empty)
+                : apiKey.Trim();
+
+            if (string.IsNullOrWhiteSpace(effectiveEndpoint))
+            {
+                return LookupCliModelsJson(providerValue);
+            }
+
+            return FetchApiModelsJson(effectiveEndpoint, effectiveKey);
+        }
+
+        /// <summary>
+        /// 监听线程读主线程算好的 CLI 目录。缓存未就绪时退化为现算（测试路径）。
+        /// </summary>
+        private string LookupCliModelsJson(int providerValue)
+        {
+            string catalogJson = cachedCliCatalogJson;
+            if (string.IsNullOrEmpty(catalogJson))
+            {
+                return BuildCliModelsJson(providerValue);
+            }
+
+            try
+            {
+                JObject catalog = JObject.Parse(catalogJson);
+                JToken entry = catalog[((int)providerValue).ToString()];
+                if (entry is JObject item)
+                {
+                    var models = item["models"] as JArray ?? new JArray();
+                    var result = new JObject
+                    {
+                        ["ok"] = true,
+                        ["source"] = "cli",
+                        ["models"] = models,
+                    };
+                    string defaultModel = item.Value<string>("defaultModel");
+                    if (!string.IsNullOrEmpty(defaultModel)) result["defaultModel"] = defaultModel;
+                    return result.ToString(Formatting.None);
+                }
+            }
+            catch (Exception)
+            {
+                // 缓存解析失败就现算，保证下拉仍能列出候选。
+            }
+
+            return BuildCliModelsJson(providerValue);
+        }
+
+        /// <summary>主线程把各 provider 的 CLI 候选算成一张表，供 /models 只读查询。</summary>
+        internal static string BuildCliCatalogJson()
+        {
+            var catalog = new JObject();
+            foreach (PsdHierarchyAiProvider provider in Enum.GetValues(typeof(PsdHierarchyAiProvider)))
+            {
+                if (provider == PsdHierarchyAiProvider.None) continue;
+                JObject entry = JObject.Parse(BuildCliModelsJson((int)provider));
+                catalog[((int)provider).ToString()] = new JObject
+                {
+                    ["models"] = entry["models"] ?? new JArray(),
+                    ["defaultModel"] = entry.Value<string>("defaultModel") ?? string.Empty,
+                };
+            }
+
+            return catalog.ToString(Formatting.None);
+        }
+
+        /// <summary>
+        /// 本机 CLI 的候选：静态表 +（Pi 的）本机 models.json。不发起网络请求，也不需要 API Key。
+        /// </summary>
+        internal static string BuildCliModelsJson(int providerValue)
+        {
+            var models = new JArray();
+            string defaultModel = string.Empty;
+            var provider = (PsdHierarchyAiProvider)providerValue;
+            if (provider != PsdHierarchyAiProvider.None)
+            {
+                string[] suggestions = null;
+                if (PsdHierarchyAiCliDiscovery.TryGetSupported(provider, out PsdHierarchyAiCliDescriptor descriptor))
+                {
+                    suggestions = descriptor.modelSuggestions;
+                }
+
+                if (provider == PsdHierarchyAiProvider.Pi &&
+                    PsdHierarchyAiPiCatalog.TryLoad(out string[] piModels, out _, out string piDefault))
+                {
+                    if (piModels != null && piModels.Length > 0) suggestions = piModels;
+                    if (!string.IsNullOrEmpty(piDefault)) defaultModel = piDefault;
+                }
+
+                if (suggestions != null)
+                {
+                    foreach (string id in suggestions)
+                    {
+                        if (!string.IsNullOrWhiteSpace(id)) models.Add(id.Trim());
+                    }
+                }
+            }
+
+            var result = new JObject
+            {
+                ["ok"] = true,
+                ["source"] = "cli",
+                ["models"] = models,
+            };
+            if (!string.IsNullOrEmpty(defaultModel)) result["defaultModel"] = defaultModel;
+            return result.ToString(Formatting.None);
+        }
+
+        /// <summary>
+        /// 把用户填的 OpenAI 兼容地址归一到真正的 GET /models。
+        /// 会剥掉 chat/completions、responses、messages 等聊天后缀，避免拼出
+        /// /v1/responses/models 这种不存在的路径。
+        /// </summary>
+        internal static Uri BuildModelsRequestUri(string endpoint)
+        {
+            if (string.IsNullOrWhiteSpace(endpoint))
+                throw new ArgumentException("请填写 API 地址。");
             if (!Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out Uri parsed) ||
                 (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
                 throw new ArgumentException("API 地址必须是 http 或 https 的完整地址。");
+
             string path = parsed.AbsolutePath.TrimEnd('/');
+            string[] chatSuffixes = { "/chat/completions", "/responses", "/messages", "/completions" };
+            foreach (string suffix in chatSuffixes)
+            {
+                if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    path = path.Substring(0, path.Length - suffix.Length);
+                    break;
+                }
+            }
+
+            path = path.TrimEnd('/');
             if (!path.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
             {
-                if (path.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
-                    path = path.Substring(0, path.Length - "/chat/completions".Length);
-                parsed = new UriBuilder(parsed) { Path = path.TrimEnd('/') + "/models" }.Uri;
+                path = path.Length == 0 ? "/models" : path + "/models";
             }
+
+            return new UriBuilder(parsed) { Path = path }.Uri;
+        }
+
+        /// <summary>从 OpenAI 兼容的 /models 响应里抽出模型 id（data[].id 或 models[]）。</summary>
+        internal static JArray ParseModelIds(string payloadJson)
+        {
+            JObject payload = JObject.Parse(payloadJson ?? string.Empty);
+            var models = new JArray();
+            JToken data = payload["data"] ?? payload["models"];
+            if (data is JArray array)
+            {
+                foreach (JToken item in array)
+                {
+                    string id = item.Type == JTokenType.String ? item.Value<string>() : item.Value<string>("id");
+                    if (!string.IsNullOrWhiteSpace(id)) models.Add(id.Trim());
+                }
+            }
+
+            return models;
+        }
+
+        private static string FetchApiModelsJson(string endpoint, string apiKey)
+        {
+            Uri parsed = BuildModelsRequestUri(endpoint);
             var request = (HttpWebRequest)WebRequest.Create(parsed);
             request.Method = "GET";
             request.Timeout = 12000;
             request.ReadWriteTimeout = 12000;
-            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + apiKey.Trim();
-            request.Headers["x-api-key"] = apiKey.Trim();
-            request.Accept = "application/json";
-            using (var webResponse = (HttpWebResponse)request.GetResponse())
-            using (var stream = webResponse.GetResponseStream())
-            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            if (!string.IsNullOrWhiteSpace(apiKey))
             {
-                JObject payload = JObject.Parse(reader.ReadToEnd());
-                var models = new JArray();
-                JToken data = payload["data"] ?? payload["models"];
-                if (data is JArray array)
-                    foreach (JToken item in array)
-                    {
-                        string id = item.Type == JTokenType.String ? item.Value<string>() : item.Value<string>("id");
-                        if (!string.IsNullOrWhiteSpace(id)) models.Add(id.Trim());
-                    }
-                if (models.Count == 0) throw new InvalidOperationException("接口返回中没有找到模型列表（需要 data[].id 或 models[]）。");
-                return new JObject { ["ok"] = true, ["models"] = models }.ToString(Formatting.None);
+                // 部分本地网关不需要 Key；只有填了才带鉴权头。
+                request.Headers["Authorization"] = "Bearer " + apiKey.Trim();
+                request.Headers["x-api-key"] = apiKey.Trim();
+            }
+
+            request.Accept = "application/json";
+            try
+            {
+                using (var webResponse = (HttpWebResponse)request.GetResponse())
+                using (var stream = webResponse.GetResponseStream())
+                using (var reader = new StreamReader(stream, Encoding.UTF8))
+                {
+                    JArray models = ParseModelIds(reader.ReadToEnd());
+                    if (models.Count == 0)
+                        throw new InvalidOperationException("接口返回中没有找到模型列表（需要 data[].id 或 models[]）。");
+                    return new JObject { ["ok"] = true, ["source"] = "api", ["models"] = models }.ToString(Formatting.None);
+                }
+            }
+            catch (WebException e)
+            {
+                if (e.Response is HttpWebResponse errorResponse)
+                {
+                    throw new InvalidOperationException(
+                        "拉取模型失败：HTTP " + (int)errorResponse.StatusCode +
+                        (string.IsNullOrWhiteSpace(apiKey) ? "（该接口可能需要 API Key）" : "（请检查 API 地址与 Key）"));
+                }
+
+                throw new InvalidOperationException("拉取模型失败：" + e.Message);
             }
         }
-
         /// <summary>
         /// 执行页面按钮触发的动作。只在主线程（OnEditorUpdate）调用，
         /// 因为 AssetDatabase / Application 这类 API 只允许在主线程使用。
@@ -1689,7 +1872,7 @@ border-top:0;padding-top:0;flex:0 0 auto}
           <label class='form-label' for='aiModel'>模型名称</label>
           <div class='combo' id='aiModelCombo'>
             <input class='form-input' id='aiModel' placeholder='留空 = 用 CLI 自己配置的' autocomplete='off' spellcheck='false'>
-            <button type='button' class='combo-toggle' id='aiModelDrop' aria-label='展开模型候选'>▾</button>
+            <button type='button' class='combo-toggle' id='aiModelDrop' aria-label='实时拉取并展开模型候选' title='实时拉取可用模型'>⟳</button>
             <div class='combo-panel' id='aiModelPanel' role='listbox' hidden></div>
           </div>
           <span class='form-help' id='modelHint'></span>
@@ -1715,10 +1898,6 @@ border-top:0;padding-top:0;flex:0 0 auto}
           <input class='form-input' id='aiApiKey' type='password' placeholder='留空表示不修改'>
           <span class='form-help' id='keyHint'></span>
         </div>
-      </div>
-      <div class='form-group'>
-        <button class='btn btn-secondary' id='fetchModels' type='button'>↻ 根据 API 地址和 Key 获取模型</button>
-        <span class='form-help' id='modelsHint'>支持 OpenAI 兼容接口的 /models 返回。</span>
       </div>
       <div class='form-group'>
         <button class='btn btn-secondary' id='clearKey'>清除本机保存的 Key</button>
@@ -1970,7 +2149,7 @@ function refreshDetailVisibility(){
   box.hidden=false;
   var info=currentCli();
   byId('modelHint').textContent=info
-    ?('留空时使用 '+info.name+' CLI 自身配置的模型'+(info.defaultModel?'（当前默认 '+info.defaultModel+'）':'')+'。点输入框右侧的 ▾ 或直接手填。'+
+    ?('留空时使用 '+info.name+' CLI 自身配置的模型'+(info.defaultModel?'（当前默认 '+info.defaultModel+'）':'')+'。点输入框右侧的 ⟳ 实时拉取可用模型，也可直接手填。'+
       (info.modelHint?('常见取值：'+info.modelHint+'。'):''))
     :'留空时使用 CLI 自身配置的模型。';
   byId('effortHint').textContent=info
@@ -2156,6 +2335,8 @@ function comboOpen(inputId){
   ctx.active=-1;
   comboRender(inputId);
   ctx.panel.hidden=false;
+  /* 模型下拉每次打开都实时拉取，面板先显示本地候选，回包后再刷新。 */
+  if(inputId==='aiModel'&&typeof refreshAvailableModels==='function')refreshAvailableModels();
 }
 
 function comboClose(inputId){
@@ -2418,22 +2599,34 @@ function postAction(name,toastText,button,pending){
 byId('catalogRefresh').addEventListener('click',function(){
   postAction('catalog-refresh','正在扫描公共资源，稍后自动刷新结果',byId('catalogRefresh'));
 });
-byId('fetchModels').addEventListener('click',function(){
-  var button=byId('fetchModels'), endpoint=byId('aiEndpoint').value.trim(), key=byId('aiApiKey').value;
-  button.disabled=true;button.textContent='获取中…';
-  fetchWithTimeout('/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:endpoint,apiKey:key})},15000)
+/* 模型下拉打开时实时拉取：本机 CLI 回目录，自定义 API 才走 /models。 */
+var modelsRefreshToken=0;
+function refreshAvailableModels(){
+  var token=++modelsRefreshToken;
+  var endpoint=byId('aiEndpoint').value.trim();
+  var key=byId('aiApiKey').value;
+  var provider=parseInt(byId('aiProvider').value,10);
+  if(isNaN(provider))provider=null;
+  fetchWithTimeout('/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:endpoint,apiKey:key,provider:provider})},15000)
     .then(function(r){return r.json().then(function(x){if(!r.ok||!x.ok)throw new Error(x.error||('HTTP '+r.status));return x;});})
     .then(function(x){
+      if(token!==modelsRefreshToken)return;
       var info=currentCli();
-      if(info){info.modelSuggestions=x.models||[];info.modelHint=(x.models||[]).join('、');}
-      comboRender('aiModel');
-      comboOpen('aiModel');
-      byId('modelsHint').textContent='已获取 '+(x.models||[]).length+' 个模型，可点选或继续手填。';
-      setStatusHold('模型列表获取成功','ok',5000);
+      if(info){
+        info.modelSuggestions=x.models||[];
+        info.modelHint=(x.models||[]).join('、');
+        if(x.defaultModel)info.defaultModel=x.defaultModel;
+      }
+      if(comboCtx.aiModel&&!comboCtx.aiModel.panel.hidden)comboRender('aiModel');
+      var msg='已刷新 '+(x.models||[]).length+' 个可用模型'
+        +(x.source==='api'?'（自定义 API）':'（本机 CLI 目录）');
+      byId('modelHint').textContent=msg;
     })
-    .catch(function(e){byId('modelsHint').textContent='获取失败：'+e.message;setStatusHold('获取模型失败','err',8000);})
-    .then(function(){button.disabled=false;button.textContent='↻ 根据 API 地址和 Key 获取模型';});
-});
+    .catch(function(e){
+      if(token!==modelsRefreshToken)return;
+      byId('modelHint').textContent='刷新失败：'+e.message;
+    });
+}
 byId('previewStart').addEventListener('click',function(){
   postAction('preview-start','正在启动预览服务',byId('previewStart'),{
     label:'正在启动…',

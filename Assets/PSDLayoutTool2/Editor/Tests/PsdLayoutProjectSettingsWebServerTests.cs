@@ -79,6 +79,82 @@ namespace PsdLayoutTool2.Tests
             Assert.That(page, Does.Contain("当前工程：<strong>{{PSD_LAYOUT_PROJECT_NAME}}</strong>"));
         }
 
+        [Test]
+        public void BuildModelsRequestUriStripsChatSuffixesAndAppendsModels()
+        {
+            Assert.That(
+                PsdLayoutProjectSettingsWebServer.BuildModelsRequestUri("https://api.openai.com/v1").AbsoluteUri,
+                Is.EqualTo("https://api.openai.com/v1/models"));
+            Assert.That(
+                PsdLayoutProjectSettingsWebServer.BuildModelsRequestUri("https://api.openai.com/v1/responses").AbsoluteUri,
+                Is.EqualTo("https://api.openai.com/v1/models"));
+            Assert.That(
+                PsdLayoutProjectSettingsWebServer.BuildModelsRequestUri("https://api.openai.com/v1/chat/completions").AbsoluteUri,
+                Is.EqualTo("https://api.openai.com/v1/models"));
+            Assert.That(
+                PsdLayoutProjectSettingsWebServer.BuildModelsRequestUri("https://api.anthropic.com/v1/messages").AbsoluteUri,
+                Is.EqualTo("https://api.anthropic.com/v1/models"));
+        }
+
+        [Test]
+        public void BuildModelsRequestUriKeepsModelsPathAndRejectsInvalid()
+        {
+            Assert.That(
+                PsdLayoutProjectSettingsWebServer.BuildModelsRequestUri("https://proxy.example.com/openai/v1/models").AbsoluteUri,
+                Is.EqualTo("https://proxy.example.com/openai/v1/models"));
+
+            Assert.That(
+                () => PsdLayoutProjectSettingsWebServer.BuildModelsRequestUri("not-a-url"),
+                Throws.ArgumentException);
+        }
+
+        [Test]
+        public void ParseModelIdsAcceptsDataArrayAndPlainStringList()
+        {
+            Newtonsoft.Json.Linq.JArray fromData =
+                PsdLayoutProjectSettingsWebServer.ParseModelIds(
+                    "{\"data\":[{\"id\":\"gpt-5\"},{\"id\":\"gpt-5-mini\"}]}");
+            Assert.That(fromData.Count, Is.EqualTo(2));
+            Assert.That(fromData[0]!.ToString(), Is.EqualTo("gpt-5"));
+
+            Newtonsoft.Json.Linq.JArray fromList =
+                PsdLayoutProjectSettingsWebServer.ParseModelIds(
+                    "{\"models\":[\"alpha\",\"beta \"]}");
+            Assert.That(fromList.Count, Is.EqualTo(2));
+            Assert.That(fromList[1]!.ToString(), Is.EqualTo("beta"));
+        }
+
+        [Test]
+        public void BuildCliModelsJsonListsCodexSuggestionsWithoutNetwork()
+        {
+            string json = PsdLayoutProjectSettingsWebServer.BuildCliModelsJson((int)PsdHierarchyAiProvider.Codex);
+            var payload = Newtonsoft.Json.Linq.JObject.Parse(json);
+
+            Assert.That(payload.Value<bool>("ok"), Is.True);
+            Assert.That(payload.Value<string>("source"), Is.EqualTo("cli"));
+            Assert.That(payload.Value<Newtonsoft.Json.Linq.JArray>("models")!.ToString(),
+                Does.Contain("gpt-5"));
+        }
+
+        [Test]
+        public void BuildCliModelsJsonReturnsEmptyListForNone()
+        {
+            string json = PsdLayoutProjectSettingsWebServer.BuildCliModelsJson((int)PsdHierarchyAiProvider.None);
+            var payload = Newtonsoft.Json.Linq.JObject.Parse(json);
+
+            Assert.That(payload.Value<Newtonsoft.Json.Linq.JArray>("models")!.Count, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void BuildCliCatalogJsonCoversSupportedProviders()
+        {
+            string json = PsdLayoutProjectSettingsWebServer.BuildCliCatalogJson();
+            var catalog = Newtonsoft.Json.Linq.JObject.Parse(json);
+
+            Assert.That(catalog["1"], Is.Not.Null); // Codex
+            Assert.That(catalog["1"]!["models"]!.ToString(), Does.Contain("gpt-5"));
+        }
+
         private static bool InvokeTryListen(PsdLayoutProjectSettingsWebServer server, int port, out string failure)
         {
             var arguments = new object[] { port, null };
