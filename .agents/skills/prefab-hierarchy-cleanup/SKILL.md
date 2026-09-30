@@ -89,6 +89,10 @@ When the task depends on the user's current Unity Editor GameObject selection, u
 3. Author a version 2 `node:<id>` plan from [references/plan-format.md](references/plan-format.md). Optionally lint it offline with `scripts/validate_plan_locally.py` and `scripts/simulate_and_verify_plan.py` against the same JSON snapshot.
 4. Execute only through the Unity core: the human approves, the AI writes `<session>.apply`, and Unity validates, applies and reports `<session>.apply-result.json`.
 5. Never write `.apply` before explicit human approval, and never write it twice for the same request.
+   After approval, create the JSON sentinel with `scripts/create_apply_approval.py --plan <exact plan> --apply <exact apply>`;
+   do not hand-compose `planPath`. The helper resolves the existing plan to a platform-native absolute path
+   (Windows drive path with `\\`; macOS/Linux path with `/`), derives the current SHA-256, snapshot fingerprint,
+   target Prefab and review version from that exact plan, and refuses an existing `.apply` or result file.
 6. If the receipt reports `rejected`, report the complete error and stop. A correction must be emitted as a complete new review and plan under a new request, then receive explicit human approval before its own `.apply` is written.
 7. If the receipt reports `partial` or `uncertain`, do not apply again: verify the saved state and require a new review.
 8. After every successful apply the Prefab file, and therefore the snapshot fingerprint, has changed. Read the current snapshot again before authoring any further plan; never reuse an old `snapshotFingerprint` or old node IDs.

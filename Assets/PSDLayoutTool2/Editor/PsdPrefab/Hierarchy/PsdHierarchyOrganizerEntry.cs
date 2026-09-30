@@ -69,6 +69,13 @@ namespace PsdLayoutTool2
                 throw new ArgumentException("计划路径不能为空。", nameof(planFullPath));
             }
 
+            // Normalize both the canonical plan path and the legacy malformed
+            // `<session>.plan.apply` input to the session-scoped sentinel.
+            if (planFullPath.EndsWith(".plan.apply", StringComparison.OrdinalIgnoreCase))
+            {
+                return planFullPath.Substring(0, planFullPath.Length - ".plan.apply".Length) + ".apply";
+            }
+
             if (planFullPath.EndsWith(".plan.json", StringComparison.OrdinalIgnoreCase))
             {
                 return planFullPath.Substring(0, planFullPath.Length - ".plan.json".Length) + ".apply";

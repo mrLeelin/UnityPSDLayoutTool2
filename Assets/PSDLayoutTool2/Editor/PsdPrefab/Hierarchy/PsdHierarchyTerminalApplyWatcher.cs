@@ -397,12 +397,7 @@ namespace PsdLayoutTool2
                 throw new ArgumentException("Apply 路径不能为空。", nameof(applyPath));
             }
 
-            if (applyPath.EndsWith(ApplyExtension, StringComparison.OrdinalIgnoreCase))
-            {
-                return applyPath.Substring(0, applyPath.Length - ApplyExtension.Length) + ResultSuffix;
-            }
-
-            return applyPath + ResultSuffix;
+            return StripStateExtension(applyPath) + ResultSuffix;
         }
 
         /// <summary>与 Apply 哨兵同前缀的会话描述文件路径。</summary>
@@ -424,12 +419,7 @@ namespace PsdLayoutTool2
                 throw new ArgumentException("Apply 路径不能为空。", nameof(applyPath));
             }
 
-            if (applyPath.EndsWith(ApplyExtension, StringComparison.OrdinalIgnoreCase))
-            {
-                return applyPath.Substring(0, applyPath.Length - ApplyExtension.Length) + ApplyingExtension;
-            }
-
-            return applyPath + ApplyingExtension;
+            return StripStateExtension(applyPath) + ApplyingExtension;
         }
 
         /// <summary>任意哨兵状态路径 → 回执路径。</summary>
@@ -929,7 +919,16 @@ namespace PsdLayoutTool2
             {
                 if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
                 {
-                    return path.Substring(0, path.Length - suffix.Length);
+                    string prefix = path.Substring(0, path.Length - suffix.Length);
+                    // Older clients incorrectly emitted `<session>.plan.apply`.
+                    // Treat `.plan` as a plan-file marker, never as part of the
+                    // session id, so the canonical session record is found.
+                    if (prefix.EndsWith(".plan", StringComparison.OrdinalIgnoreCase))
+                    {
+                        prefix = prefix.Substring(0, prefix.Length - ".plan".Length);
+                    }
+
+                    return prefix;
                 }
             }
 

@@ -35,3 +35,6 @@ __pycache__/
 # 此规则是保险：万一又有会话往 skill 目录里写 plan，也不会进版本库。
 .agents/skills/*/plans/
 .scratch
+
+# OMX 会话运行时状态，不进版本库
+.omx/state/

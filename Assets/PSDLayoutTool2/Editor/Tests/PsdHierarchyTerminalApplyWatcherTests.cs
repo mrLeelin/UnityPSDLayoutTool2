@@ -27,6 +27,25 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void MalformedPlanApplyPathResolvesToCanonicalSessionPrefix()
+        {
+            string malformed = TerminalDirectory + @"\abc.plan.apply";
+
+            Assert.That(
+                PsdHierarchyTerminalApplyWatcher.BuildSessionPath(malformed),
+                Does.EndWith(@"abc.session.json"));
+            Assert.That(
+                PsdHierarchyTerminalApplyWatcher.BuildResultPath(malformed),
+                Does.EndWith(@"abc.apply-result.json"));
+            Assert.That(
+                PsdHierarchyTerminalApplyWatcher.BuildClaimPath(malformed),
+                Does.EndWith(@"abc.applying"));
+            Assert.That(
+                PsdHierarchyOrganizerEntry.BuildApplySentinelPath(malformed),
+                Does.EndWith(@"abc.apply"));
+        }
+
+        [Test]
         public void BuildResultPathUsesApplyResultJsonSuffix()
         {
             string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(
