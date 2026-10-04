@@ -338,32 +338,25 @@ namespace PsdLayoutTool2
             PsdHierarchyAiCliDiscovery.TryGetSupported(snapshot.provider, out PsdHierarchyAiCliDescriptor supported);
             bool usesCustomApi = snapshot.connectionMode == PsdHierarchyAiConnectionMode.CustomApi;
 
-            // Pi 的模型目录每台机器不同（支持 cc-switch 之类的自定义 provider，本机是 DeepSeek），
-            // 运行时读 ~/.pi/agent/ 覆盖静态示例；读不到时数组为空、自然回退静态值。
-            string[] modelChoices = supported.modelSuggestions;
-            string[] effortChoices = supported.reasoningEffortLevels;
-            string modelHintSource = supported.defaultModelHint;
-            string effortHintSource = supported.reasoningEffortHint;
-            string defaultModelSuffix = string.Empty;
-            if (snapshot.provider == PsdHierarchyAiProvider.Pi &&
-                PsdHierarchyAiPiCatalog.TryLoad(out string[] piModels, out string[] piLevels, out string piDefault))
+            // 模型目录每台机器不同（Pi 支持 cc-switch 之类的自定义 provider；Codex / Grok 的
+            // 真实目录也只在本机缓存里），所以运行时读本机文件、读不到才回退静态示例。
+            // 和网页设置页共用同一个解析器，两个界面的候选不会再各说各话。
+            // 来源只体现在提示文案里：静态示例会明确说自己只是示例。
+            PsdHierarchyAiCliCatalog catalog = PsdHierarchyAiCliModelCatalog.Resolve(snapshot.provider);
+            string[] modelChoices = catalog.models;
+            string[] effortChoices = catalog.effortLevels;
+            string modelHintSource = catalog.models.Length > 0
+                ? "例如 " + PsdHierarchyAiCliModelCatalog.Summarize(catalog.models)
+                : supported.defaultModelHint;
+            string effortHintSource = catalog.effortLevels.Length > 0
+                ? string.Join(" / ", catalog.effortLevels)
+                : supported.reasoningEffortHint;
+            string defaultModelSuffix = string.IsNullOrEmpty(catalog.defaultModel)
+                ? string.Empty
+                : "（当前默认 " + catalog.defaultModel + "）";
+            if (!catalog.isLocal && catalog.models.Length > 0)
             {
-                if (piModels.Length > 0)
-                {
-                    modelChoices = piModels;
-                    modelHintSource = "例如 " + string.Join("、", piModels);
-                }
-
-                if (piLevels.Length > 0)
-                {
-                    effortChoices = piLevels;
-                    effortHintSource = string.Join(" / ", piLevels);
-                }
-
-                if (!string.IsNullOrEmpty(piDefault))
-                {
-                    defaultModelSuffix = "（当前默认 " + piDefault + "）";
-                }
+                modelHintSource = modelHintSource + "（未读到本机目录，以上是内置示例）";
             }
 
             var modelField = CreateEditablePopupField(

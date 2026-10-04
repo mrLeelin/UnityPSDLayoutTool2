@@ -61,6 +61,10 @@ namespace PsdLayoutTool2
         /// 模型名称的候选取值。**只用于界面的下拉建议，不参与校验**：
         /// 每个 CLI 支持的模型名是开放集合（新版本随时会加），所以这里列的是常见项，
         /// 输入框必须始终允许手填其它名字。
+        ///
+        /// 这里只是**兜底**：运行时优先用 PsdHierarchyAiCliModelCatalog 读各 CLI 缓存在家目录里的
+        /// 真实目录（Codex/Grok/Pi 都有）。本机实测这份静态表和实际情况完全对不上
+        /// （codex 实际是 gpt-6.1-sol、grok 实际是 grok-4.6），只在读不到本机目录时才会用到它。
         /// </summary>
         internal readonly string[] modelSuggestions;
 
@@ -430,7 +434,8 @@ namespace PsdLayoutTool2
             return true;
         }
 
-        private static string AgentDirectory()
+        /// <summary>其他 CLI 的目录读取器（见 PsdHierarchyAiCliModelCatalog）也要用同一套家目录规则。</summary>
+        internal static string AgentDirectory()
         {
             // 不用 Application.platform：那是 Unity 的 ECall，脱离编辑器（单测 / 反射探针）会抛
             // 「ECall methods must be packaged into a system module」。USERPROFILE / HOME
@@ -444,7 +449,8 @@ namespace PsdLayoutTool2
             return Path.Combine(home ?? string.Empty, ".pi", "agent");
         }
 
-        private static string DescribeFile(string path)
+        /// <summary>缓存的键：大小 + 修改时间。文件没变就复用上次结果（包括「解析失败」这个结论）。</summary>
+        internal static string DescribeFile(string path)
         {
             try
             {
@@ -462,7 +468,7 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static string ReadAllTextOrNull(string path)
+        internal static string ReadAllTextOrNull(string path)
         {
             try
             {
@@ -474,7 +480,7 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static JObject ParseObjectOrNull(string json)
+        internal static JObject ParseObjectOrNull(string json)
         {
             if (string.IsNullOrWhiteSpace(json))
             {
@@ -490,6 +496,564 @@ namespace PsdLayoutTool2
                 return null;
             }
         }
+    }
+
+    /// <summary>
+    /// 某个 CLI 的候选目录：模型名 + 有效思考档位 + 本机默认值 + 数据来源。
+    /// 模型名是开放集合（永远只是建议，输入框必须允许手填）；档位是封闭集合（列出来就是全集）。
+    /// </summary>
+    internal readonly struct PsdHierarchyAiCliCatalog
+    {
+        internal PsdHierarchyAiCliCatalog(
+            string[] models,
+            string[] effortLevels,
+            string defaultModel,
+            string origin,
+            bool isLocal)
+        {
+            this.models = models ?? Empty;
+            this.effortLevels = effortLevels ?? Empty;
+            this.defaultModel = defaultModel ?? string.Empty;
+            this.origin = origin ?? string.Empty;
+            this.isLocal = isLocal;
+        }
+
+        private static readonly string[] Empty = new string[0];
+
+        internal readonly string[] models;
+        internal readonly string[] effortLevels;
+        internal readonly string defaultModel;
+
+        /// <summary>给人读的来源说明，页面直接显示，例如「本机 ~/.codex/models_cache.json」。</summary>
+        internal readonly string origin;
+
+        /// <summary>true = 真读了本机文件；false = 只能用内置示例，那份列表必然和用户实际用的对不上。</summary>
+        internal readonly bool isLocal;
+    }
+
+    /// <summary>
+    /// 各 CLI 的「本机模型目录」读取器。
+    ///
+    /// 为什么需要它：四个 CLI 里**只有 pi 有命令行式的模型列表**，另外三个都没有这种命令，
+    /// 但它们都会把自己那份真实目录缓存在家目录里：
+    ///   Claude : ~/.claude/settings.json 的 env.ANTHROPIC_DEFAULT_*_MODEL[_NAME]
+    ///   Codex  : ~/.codex/models_cache.json（服务端下发的完整目录）+ ~/.codex/config.toml 的 model
+    ///   Grok   : ~/.grok/models_cache.json + ~/.grok/config.toml 的 [models] default
+    ///   Pi     : ~/.pi/agent/models.json（由 PsdHierarchyAiPiCatalog 解析）
+    ///
+    /// 只读 pi 那一份的后果是实测过的：本机 codex 实际用 gpt-6.1-sol、grok 实际用 grok-4.6，
+    /// 而静态示例里写的是 gpt-5 / grok-4，**一个都不存在** —— 于是「拉取模型名」无论怎么写都不对，
+    /// 因为数据根本没去拿。这里改成四个都读本机，读不到才回退示例，并把来源如实告诉页面。
+    ///
+    /// 只读文件、不联网、不需要 API Key；读写都只碰纯 .NET API，因此在监听线程调用也安全。
+    /// </summary>
+    internal static class PsdHierarchyAiCliModelCatalog
+    {
+        /// <summary>档位的规范顺序：下拉与提示文案都按它排序，避免各处顺序不一致。</summary>
+        private static readonly string[] EffortOrder =
+        {
+            "off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        };
+
+        private static readonly PsdHierarchyAiCliCatalog EmptyCatalog =
+            new PsdHierarchyAiCliCatalog(null, null, string.Empty, string.Empty, false);
+
+        // BuildConfigJson 每 0.4 秒跑一次，不能每次都读盘解析；/models 还可能从监听线程进来现算。
+        // 所以缓存要加锁：两个线程都可能第一次走到这里。
+        private static readonly object sync = new object();
+        private static readonly Dictionary<int, Slot> slots = new Dictionary<int, Slot>();
+
+        private sealed class Slot
+        {
+            internal string key = string.Empty;
+            internal bool loaded;
+            internal PsdHierarchyAiCliCatalog value;
+        }
+
+        internal static PsdHierarchyAiCliCatalog Resolve(PsdHierarchyAiProvider provider)
+        {
+            if (provider == PsdHierarchyAiProvider.None)
+            {
+                return EmptyCatalog;
+            }
+
+            lock (sync)
+            {
+                int id = (int)provider;
+                if (!slots.TryGetValue(id, out Slot slot))
+                {
+                    slot = new Slot();
+                    slots[id] = slot;
+                }
+
+                string key = BuildCacheKey(provider);
+                if (!slot.loaded || !string.Equals(key, slot.key, StringComparison.Ordinal))
+                {
+                    slot.key = key;
+                    slot.loaded = true;
+                    slot.value = Load(provider);
+                }
+
+                return slot.value;
+            }
+        }
+
+        private static string BuildCacheKey(PsdHierarchyAiProvider provider)
+        {
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    return PsdHierarchyAiPiCatalog.DescribeFile(ClaudeSettingsPath());
+                case PsdHierarchyAiProvider.Codex:
+                    return PsdHierarchyAiPiCatalog.DescribeFile(CodexCatalogPath()) + "|" +
+                           PsdHierarchyAiPiCatalog.DescribeFile(CodexConfigPath());
+                case PsdHierarchyAiProvider.Grok:
+                    return PsdHierarchyAiPiCatalog.DescribeFile(GrokCatalogPath()) + "|" +
+                           PsdHierarchyAiPiCatalog.DescribeFile(GrokConfigPath());
+                case PsdHierarchyAiProvider.Pi:
+                    return PsdHierarchyAiPiCatalog.DescribeFile(PiSettingsPath()) + "|" +
+                           PsdHierarchyAiPiCatalog.DescribeFile(PiModelsPath());
+                default:
+                    return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 逐字段回退：本机目录给了模型没给档位（Claude 就是这样），档位仍用静态全集，
+        /// 而不是整份丢掉退回示例。
+        /// </summary>
+        private static PsdHierarchyAiCliCatalog Load(PsdHierarchyAiProvider provider)
+        {
+            PsdHierarchyAiCliCatalog local = ReadLocal(provider);
+            if (!local.isLocal)
+            {
+                return new PsdHierarchyAiCliCatalog(
+                    FallbackModels(provider), FallbackEfforts(provider),
+                    string.Empty, BuiltInOrigin(provider), false);
+            }
+
+            return new PsdHierarchyAiCliCatalog(
+                local.models.Length > 0 ? local.models : FallbackModels(provider),
+                local.effortLevels.Length > 0 ? local.effortLevels : FallbackEfforts(provider),
+                local.defaultModel,
+                local.origin,
+                true);
+        }
+
+        private static PsdHierarchyAiCliCatalog ReadLocal(PsdHierarchyAiProvider provider)
+        {
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    return ReadClaude();
+                case PsdHierarchyAiProvider.Codex:
+                    return ReadCodex();
+                case PsdHierarchyAiProvider.Grok:
+                    return ReadGrok();
+                case PsdHierarchyAiProvider.Pi:
+                    return ReadPi();
+                default:
+                    return EmptyCatalog;
+            }
+        }
+
+        /// <summary>
+        /// Claude Code 没有列模型的命令，但它自己的配置里就写着当前用的模型。
+        /// 值可能是别名（sonnet）也可能是完整 id（claude-sonnet-5），还可能带 claude-code
+        /// 自己的质量后缀 [1M] —— 那个后缀只有它自己认，所以统一剥掉（见 NormalizeModelId）。
+        /// </summary>
+        private static PsdHierarchyAiCliCatalog ReadClaude()
+        {
+            JObject settings = PsdHierarchyAiPiCatalog.ParseObjectOrNull(
+                PsdHierarchyAiPiCatalog.ReadAllTextOrNull(ClaudeSettingsPath()));
+            if (settings == null)
+            {
+                return EmptyCatalog;
+            }
+
+            JToken env = settings["env"];
+            var models = new List<string>();
+
+            // ANTHROPIC_MODEL 是本机真正生效的那个；没有再退回顶层 model（通常是个别名）。
+            AddModel(models, env?["ANTHROPIC_MODEL"]?.ToString());
+            string defaultModel = models.Count > 0 ? models[0] : string.Empty;
+            AddModel(models, settings["model"]?.ToString());
+            if (string.IsNullOrEmpty(defaultModel) && models.Count > 0)
+            {
+                defaultModel = models[0];
+            }
+
+            // 走中转（cc-switch 这类）时，三个档位会各自映射到一个具体模型名上。
+            // _NAME 是纯模型名，_MODEL 可能带 [1M] 后缀，两边都收、去重后自然只剩 _NAME。
+            string[] tiers = { "OPUS", "SONNET", "HAIKU", "FABLE" };
+            foreach (string tier in tiers)
+            {
+                AddModel(models, env?["ANTHROPIC_DEFAULT_" + tier + "_MODEL_NAME"]?.ToString());
+            }
+
+            foreach (string tier in tiers)
+            {
+                AddModel(models, env?["ANTHROPIC_DEFAULT_" + tier + "_MODEL"]?.ToString());
+            }
+
+            if (models.Count == 0)
+            {
+                return EmptyCatalog;
+            }
+
+            // Claude 的 --effort 档位没有本机来源，回退静态全集（effortLevels 留空即触发）。
+            return new PsdHierarchyAiCliCatalog(
+                models.ToArray(), null, defaultModel, "本机 ~/.claude/settings.json", true);
+        }
+
+        /// <summary>
+        /// Codex 把服务端下发的完整模型目录缓存成 models_cache.json，每项自带
+        /// visibility（hidden 的不该列）与它真正支持的档位。当前默认模型在 config.toml 顶层的 model 上。
+        /// </summary>
+        private static PsdHierarchyAiCliCatalog ReadCodex()
+        {
+            JObject cache = PsdHierarchyAiPiCatalog.ParseObjectOrNull(
+                PsdHierarchyAiPiCatalog.ReadAllTextOrNull(CodexCatalogPath()));
+            if (cache == null || !(cache["models"] is JArray entries))
+            {
+                return EmptyCatalog;
+            }
+
+            var models = new List<string>();
+            var efforts = new List<string>();
+            foreach (JToken token in entries)
+            {
+                if (!(token is JObject model))
+                {
+                    continue;
+                }
+
+                if (string.Equals(model.Value<string>("visibility"), "hidden", StringComparison.OrdinalIgnoreCase) ||
+                    model.Value<bool?>("supported_in_api") == false)
+                {
+                    continue;
+                }
+
+                string slug = NormalizeModelId(model.Value<string>("slug"));
+                if (slug.Length == 0 || models.Contains(slug))
+                {
+                    continue;
+                }
+
+                models.Add(slug);
+                AddEfforts(efforts, model["supported_reasoning_levels"], "effort");
+            }
+
+            if (models.Count == 0)
+            {
+                return EmptyCatalog;
+            }
+
+            string defaultModel = NormalizeModelId(ReadTomlValue(CodexConfigPath(), string.Empty, "model"));
+            if (!models.Contains(defaultModel))
+            {
+                // 配置里写的模型不在目录里（换过 provider 之类）就不要假装它是候选。
+                defaultModel = string.Empty;
+            }
+
+            // 取并集而不是只取默认模型的档位：目录里各模型档位差别很大（有的只有 none，
+            // 有的多出 ultra），只取一个会把别的合法档位挡掉。并集只会多列、不会少列。
+            return new PsdHierarchyAiCliCatalog(
+                models.ToArray(),
+                efforts.Count > 0 ? OrderEfforts(efforts) : null,
+                defaultModel,
+                "本机 ~/.codex/models_cache.json",
+                true);
+        }
+
+        /// <summary>
+        /// Grok 的目录同样缓存在 models_cache.json 里（models 是对象，取 info.id）；
+        /// 当前默认模型在 config.toml 的 [models] default 上。
+        /// </summary>
+        private static PsdHierarchyAiCliCatalog ReadGrok()
+        {
+            JObject cache = PsdHierarchyAiPiCatalog.ParseObjectOrNull(
+                PsdHierarchyAiPiCatalog.ReadAllTextOrNull(GrokCatalogPath()));
+            if (cache == null || !(cache["models"] is JObject entries))
+            {
+                return EmptyCatalog;
+            }
+
+            var models = new List<string>();
+            var efforts = new List<string>();
+            foreach (JProperty property in entries.Properties())
+            {
+                if (!(property.Value is JObject entry))
+                {
+                    continue;
+                }
+
+                JObject info = entry["info"] as JObject;
+                if (info?.Value<bool?>("hidden") == true)
+                {
+                    continue;
+                }
+
+                string id = NormalizeModelId(info?.Value<string>("id") ?? property.Name);
+                if (id.Length == 0 || models.Contains(id))
+                {
+                    continue;
+                }
+
+                models.Add(id);
+                AddEfforts(efforts, info?["reasoning_efforts"], "id");
+            }
+
+            if (models.Count == 0)
+            {
+                return EmptyCatalog;
+            }
+
+            string defaultModel = NormalizeModelId(ReadTomlValue(GrokConfigPath(), "models", "default"));
+            if (!models.Contains(defaultModel))
+            {
+                defaultModel = string.Empty;
+            }
+
+            return new PsdHierarchyAiCliCatalog(
+                models.ToArray(),
+                efforts.Count > 0 ? OrderEfforts(efforts) : null,
+                defaultModel,
+                "本机 ~/.grok/models_cache.json",
+                true);
+        }
+
+        private static PsdHierarchyAiCliCatalog ReadPi()
+        {
+            if (!PsdHierarchyAiPiCatalog.TryLoad(out string[] models, out string[] levels, out string defaultModel))
+            {
+                return EmptyCatalog;
+            }
+
+            return new PsdHierarchyAiCliCatalog(
+                models, levels, defaultModel, "本机 ~/.pi/agent/models.json", true);
+        }
+
+        private static string[] FallbackModels(PsdHierarchyAiProvider provider)
+        {
+            return PsdHierarchyAiCliDiscovery.TryGetSupported(provider, out PsdHierarchyAiCliDescriptor descriptor)
+                ? descriptor.modelSuggestions
+                : new string[0];
+        }
+
+        private static string[] FallbackEfforts(PsdHierarchyAiProvider provider)
+        {
+            return PsdHierarchyAiCliDiscovery.TryGetSupported(provider, out PsdHierarchyAiCliDescriptor descriptor)
+                ? descriptor.reasoningEffortLevels
+                : new string[0];
+        }
+
+        private static string BuiltInOrigin(PsdHierarchyAiProvider provider)
+        {
+            switch (provider)
+            {
+                case PsdHierarchyAiProvider.Claude:
+                    return "内置示例（未找到 ~/.claude/settings.json）";
+                case PsdHierarchyAiProvider.Codex:
+                    return "内置示例（未找到 ~/.codex/models_cache.json）";
+                case PsdHierarchyAiProvider.Grok:
+                    return "内置示例（未找到 ~/.grok/models_cache.json）";
+                case PsdHierarchyAiProvider.Pi:
+                    return "内置示例（未找到 ~/.pi/agent/models.json）";
+                default:
+                    return "内置示例";
+            }
+        }
+
+        /// <summary>
+        /// 把候选压成一行提示：最多列 4 个，其余用「等 N 个」带过。
+        /// 真实目录可能有十几项（本机 codex 就是 15 个），全列出来在提示行里就是一堵字墙。
+        /// </summary>
+        internal static string Summarize(string[] values)
+        {
+            if (values == null || values.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            const int head = 4;
+            if (values.Length <= head)
+            {
+                return string.Join("、", values);
+            }
+
+            var shown = new string[head];
+            Array.Copy(values, shown, head);
+            return string.Join("、", shown) + " 等 " + values.Length + " 个";
+        }
+
+        /// <summary>
+        /// 剥掉 claude-code 自己的质量后缀与首尾空白：claude-sonnet-5[1M] → claude-sonnet-5。
+        /// 后缀是它内部写法，原样传给 --model 或自定义 API 只会变成不认识的模型名。
+        /// </summary>
+        internal static string NormalizeModelId(string raw)
+        {
+            string value = (raw ?? string.Empty).Trim();
+            if (value.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            int bracket = value.IndexOf('[');
+            if (bracket > 0 && value.EndsWith("]", StringComparison.Ordinal))
+            {
+                value = value.Substring(0, bracket).Trim();
+            }
+
+            return value;
+        }
+
+        private static void AddModel(List<string> models, string raw)
+        {
+            string value = NormalizeModelId(raw);
+            if (value.Length == 0 || models.Contains(value))
+            {
+                return;
+            }
+
+            models.Add(value);
+        }
+
+        /// <summary>档位节点可能是 ["low","high"]，也可能是 [{"effort":"low"},…] / [{"id":"low"},…]。</summary>
+        private static void AddEfforts(List<string> efforts, JToken levels, string fieldName)
+        {
+            if (!(levels is JArray array))
+            {
+                return;
+            }
+
+            foreach (JToken token in array)
+            {
+                string effort = token is JObject item ? item.Value<string>(fieldName) : token.ToString();
+                AddEffort(efforts, effort);
+            }
+        }
+
+        private static void AddEffort(List<string> efforts, string raw)
+        {
+            string value = (raw ?? string.Empty).Trim();
+            if (value.Length == 0 || efforts.Contains(value))
+            {
+                return;
+            }
+
+            efforts.Add(value);
+        }
+
+        /// <summary>按 EffortOrder 排序；表外的值原样排在末尾，CLI 加了新档位也不会被悄悄丢掉。</summary>
+        private static string[] OrderEfforts(List<string> values)
+        {
+            var ordered = new List<string>();
+            foreach (string known in EffortOrder)
+            {
+                if (values.Contains(known))
+                {
+                    ordered.Add(known);
+                }
+            }
+
+            foreach (string value in values)
+            {
+                if (!ordered.Contains(value))
+                {
+                    ordered.Add(value);
+                }
+            }
+
+            return ordered.ToArray();
+        }
+
+        /// <summary>
+        /// 极简 TOML 取值：只认「section 下的 key = 值」这一种形态，够读 config.toml 里的
+        /// model / default 两个字符串键。不引完整 TOML 解析器 —— 为了两个字符串不值得加依赖。
+        /// section 传空串表示只看第一个 [table] 之前的那段（顶层键）。
+        /// </summary>
+        private static string ReadTomlValue(string path, string section, string key)
+        {
+            string text = PsdHierarchyAiPiCatalog.ReadAllTextOrNull(path);
+            if (string.IsNullOrEmpty(text))
+            {
+                return string.Empty;
+            }
+
+            bool topLevel = string.IsNullOrEmpty(section);
+            bool inSection = topLevel;
+            string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            foreach (string rawLine in lines)
+            {
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+
+                if (line[0] == '[')
+                {
+                    inSection = topLevel ? false : line.Trim('[', ']').Trim() == section;
+                    continue;
+                }
+
+                if (!inSection)
+                {
+                    continue;
+                }
+
+                int equals = line.IndexOf('=');
+                if (equals <= 0 || line.Substring(0, equals).Trim() != key)
+                {
+                    continue;
+                }
+
+                return UnquoteToml(line.Substring(equals + 1));
+            }
+
+            return string.Empty;
+        }
+
+        private static string UnquoteToml(string raw)
+        {
+            string value = (raw ?? string.Empty).Trim();
+            if (value.Length >= 2 && (value[0] == '"' || value[0] == '\''))
+            {
+                int end = value.IndexOf(value[0], 1);
+                return end > 0 ? value.Substring(1, end - 1).Trim() : value.Trim(value[0]).Trim();
+            }
+
+            // 裸值：行尾注释要切掉（引号里的 # 属于值本身，上面那个分支已经处理）。
+            int hash = value.IndexOf('#');
+            if (hash >= 0)
+            {
+                value = value.Substring(0, hash);
+            }
+
+            return value.Trim();
+        }
+
+        private static string HomeDirectory()
+        {
+            // 不用 Application.platform：那是 Unity 的 ECall，脱离编辑器（单测 / 反射探针）会抛
+            // 「ECall methods must be packaged into a system module」。
+            string home = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (string.IsNullOrEmpty(home))
+            {
+                home = Environment.GetEnvironmentVariable("HOME");
+            }
+
+            return home ?? string.Empty;
+        }
+
+        private static string ClaudeSettingsPath() => Path.Combine(HomeDirectory(), ".claude", "settings.json");
+        private static string CodexCatalogPath() => Path.Combine(HomeDirectory(), ".codex", "models_cache.json");
+        private static string CodexConfigPath() => Path.Combine(HomeDirectory(), ".codex", "config.toml");
+        private static string GrokCatalogPath() => Path.Combine(HomeDirectory(), ".grok", "models_cache.json");
+        private static string GrokConfigPath() => Path.Combine(HomeDirectory(), ".grok", "config.toml");
+        private static string PiSettingsPath() => Path.Combine(PsdHierarchyAiPiCatalog.AgentDirectory(), "settings.json");
+        private static string PiModelsPath() => Path.Combine(PsdHierarchyAiPiCatalog.AgentDirectory(), "models.json");
     }
 
     internal readonly struct PsdHierarchyAiSettingsSnapshot

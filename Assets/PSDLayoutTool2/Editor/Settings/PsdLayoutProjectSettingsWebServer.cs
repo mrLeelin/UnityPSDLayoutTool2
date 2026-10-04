@@ -324,17 +324,40 @@ namespace PsdLayoutTool2
                 try
                 {
                     context = listener.GetContext();
-                    Handle(context);
+                    /* 每个请求丢给线程池，而不是就地处理。
+                       监听线程是串行的：就地处理时，任何一条慢请求（例如 /models 等对方接口
+                       最多 8 秒）都会把页面 1.5 秒一次的 /config 轮询一起堵住，页面上表现为
+                       「连接断开 · 轮询失败」，而真正的原因只是一条慢请求。
+                       Handle 里没有不带锁的跨请求可变状态（pendingJson / pendingAction /
+                       typeScanRequested 都过 gate，cached* 全是 volatile 只读），所以并发安全。 */
+                    ThreadPool.QueueUserWorkItem(DispatchRequest, context);
                 }
                 catch (Exception e)
                 {
                     if (!running) break;
-                    /* 原先是裸 catch{}：Handle 一抛异常，响应既不写也不关，
-                       浏览器端的 fetch 就无限等待，表现成「保存中…」永远不变，
-                       而且 Unity 控制台里连一条线索都没有。现在记录并把错误回给页面。 */
-                    Debug.LogError("[PSDLayoutTool2] 网页设置请求处理失败：" + e);
+                    Debug.LogError("[PSDLayoutTool2] 网页设置服务接受请求失败：" + e);
                     TryWriteError(context, e);
                 }
+            }
+        }
+
+        /// <summary>
+        /// 线程池里的单请求入口。异常必须在这里兜住：Handle 一抛，响应既不写也不关，
+        /// 浏览器端的 fetch 就无限等待，表现成「保存中…」永远不变，
+        /// 而且 Unity 控制台里连一条线索都没有（原先是裸 catch{}）。
+        /// </summary>
+        private void DispatchRequest(object state)
+        {
+            var context = state as HttpListenerContext;
+            if (context == null) return;
+            try
+            {
+                Handle(context);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[PSDLayoutTool2] 网页设置请求处理失败：" + e);
+                TryWriteError(context, e);
             }
         }
 
@@ -483,7 +506,9 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
-        /// 监听线程读主线程算好的 CLI 目录。缓存未就绪时退化为现算（测试路径）。
+        /// 监听线程读主线程算好的 CLI 目录。缓存未就绪时退化为现算（测试路径）——
+        /// 现算走 PsdHierarchyAiCliModelCatalog，它有带锁的「文件大小+修改时间」缓存，
+        /// 因此在监听线程调用也安全，不需要借道主线程。
         /// </summary>
         private string LookupCliModelsJson(int providerValue)
         {
@@ -505,6 +530,9 @@ namespace PsdLayoutTool2
                         ["ok"] = true,
                         ["source"] = "cli",
                         ["models"] = models,
+                        ["origin"] = item.Value<string>("origin") ?? string.Empty,
+                        ["originKind"] = item.Value<string>("originKind") ?? string.Empty,
+                        ["effortLevels"] = item["effortLevels"] as JArray ?? new JArray(),
                     };
                     string defaultModel = item.Value<string>("defaultModel");
                     if (!string.IsNullOrEmpty(defaultModel)) result["defaultModel"] = defaultModel;
@@ -531,6 +559,10 @@ namespace PsdLayoutTool2
                 {
                     ["models"] = entry["models"] ?? new JArray(),
                     ["defaultModel"] = entry.Value<string>("defaultModel") ?? string.Empty,
+                    // 来源与档位也要进表：否则 /models 走缓存这条路径会把这些字段丢掉。
+                    ["origin"] = entry.Value<string>("origin") ?? string.Empty,
+                    ["originKind"] = entry.Value<string>("originKind") ?? string.Empty,
+                    ["effortLevels"] = entry["effortLevels"] ?? new JArray(),
                 };
             }
 
@@ -538,44 +570,27 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
-        /// 本机 CLI 的候选：静态表 +（Pi 的）本机 models.json。不发起网络请求，也不需要 API Key。
+        /// 本机 CLI 的候选：读该 CLI 缓存在家目录里的真实模型目录（Codex / Grok / Pi 都有），
+        /// 读不到才回退静态示例。不发起网络请求，也不需要 API Key。
+        ///
+        /// 走 PsdHierarchyAiCliModelCatalog 会按「文件大小 + 修改时间」缓存，所以这里可以安全地
+        /// 在监听线程被调用（LookupCliModelsJson 的兜底路径就是这种调用）。
         /// </summary>
         internal static string BuildCliModelsJson(int providerValue)
         {
-            var models = new JArray();
-            string defaultModel = string.Empty;
             var provider = (PsdHierarchyAiProvider)providerValue;
-            if (provider != PsdHierarchyAiProvider.None)
-            {
-                string[] suggestions = null;
-                if (PsdHierarchyAiCliDiscovery.TryGetSupported(provider, out PsdHierarchyAiCliDescriptor descriptor))
-                {
-                    suggestions = descriptor.modelSuggestions;
-                }
-
-                if (provider == PsdHierarchyAiProvider.Pi &&
-                    PsdHierarchyAiPiCatalog.TryLoad(out string[] piModels, out _, out string piDefault))
-                {
-                    if (piModels != null && piModels.Length > 0) suggestions = piModels;
-                    if (!string.IsNullOrEmpty(piDefault)) defaultModel = piDefault;
-                }
-
-                if (suggestions != null)
-                {
-                    foreach (string id in suggestions)
-                    {
-                        if (!string.IsNullOrWhiteSpace(id)) models.Add(id.Trim());
-                    }
-                }
-            }
+            PsdHierarchyAiCliCatalog catalog = PsdHierarchyAiCliModelCatalog.Resolve(provider);
 
             var result = new JObject
             {
                 ["ok"] = true,
                 ["source"] = "cli",
-                ["models"] = models,
+                ["models"] = new JArray(catalog.models),
+                ["origin"] = catalog.origin,
+                ["originKind"] = catalog.isLocal ? "local" : "builtin",
             };
-            if (!string.IsNullOrEmpty(defaultModel)) result["defaultModel"] = defaultModel;
+            if (!string.IsNullOrEmpty(catalog.defaultModel)) result["defaultModel"] = catalog.defaultModel;
+            if (catalog.effortLevels.Length > 0) result["effortLevels"] = new JArray(catalog.effortLevels);
             return result.ToString(Formatting.None);
         }
 
@@ -630,13 +645,33 @@ namespace PsdLayoutTool2
             return models;
         }
 
+        // 自定义 API 的 /models 结果短时缓存。监听线程是串行处理的（见 ListenLoop），
+        // 一次 8 秒的等待会连带把页面 1.5 秒一次的 /config 轮询卡到超时。
+        // 缓存命中时是纯内存返回，重复点 ⟳ 或反复开关面板都不会再打一次请求。
+        private static readonly object apiModelsGate = new object();
+        private static string apiModelsCacheKey = string.Empty;
+        private static string apiModelsCacheJson = string.Empty;
+        private static DateTime apiModelsCacheAt = DateTime.MinValue;
+
         private static string FetchApiModelsJson(string endpoint, string apiKey)
         {
             Uri parsed = BuildModelsRequestUri(endpoint);
+            string cacheKey = parsed.AbsoluteUri + "|" +
+                              (string.IsNullOrWhiteSpace(apiKey) ? "-" : apiKey.GetHashCode().ToString());
+            lock (apiModelsGate)
+            {
+                if (cacheKey == apiModelsCacheKey &&
+                    !string.IsNullOrEmpty(apiModelsCacheJson) &&
+                    (DateTime.UtcNow - apiModelsCacheAt).TotalSeconds < 30d)
+                {
+                    return apiModelsCacheJson;
+                }
+            }
+
             var request = (HttpWebRequest)WebRequest.Create(parsed);
             request.Method = "GET";
-            request.Timeout = 12000;
-            request.ReadWriteTimeout = 12000;
+            request.Timeout = 8000;
+            request.ReadWriteTimeout = 8000;
             if (!string.IsNullOrWhiteSpace(apiKey))
             {
                 // 部分本地网关不需要 Key；只有填了才带鉴权头。
@@ -654,7 +689,22 @@ namespace PsdLayoutTool2
                     JArray models = ParseModelIds(reader.ReadToEnd());
                     if (models.Count == 0)
                         throw new InvalidOperationException("接口返回中没有找到模型列表（需要 data[].id 或 models[]）。");
-                    return new JObject { ["ok"] = true, ["source"] = "api", ["models"] = models }.ToString(Formatting.None);
+                    string payload = new JObject
+                    {
+                        ["ok"] = true,
+                        ["source"] = "api",
+                        ["models"] = models,
+                        ["origin"] = parsed.AbsoluteUri,
+                        ["originKind"] = "api",
+                    }.ToString(Formatting.None);
+                    lock (apiModelsGate)
+                    {
+                        apiModelsCacheKey = cacheKey;
+                        apiModelsCacheJson = payload;
+                        apiModelsCacheAt = DateTime.UtcNow;
+                    }
+
+                    return payload;
                 }
             }
             catch (WebException e)
@@ -1078,6 +1128,14 @@ namespace PsdLayoutTool2
             IReadOnlyList<PsdHierarchyAiCliDescriptor> installed = PsdHierarchyAiCliDiscovery.FindInstalled();
             for (int index = 0; index < installed.Count; index++)
             {
+                // 每个 CLI 的候选都尽量取本机真实目录（Codex/Grok/Pi 都缓存在家目录里），
+                // 读不到才回退静态示例 —— 来源同时带出去，页面会如实说明是哪一种。
+                // 之前只对 Pi 做了这件事，另外三个一直显示写死的示例名（本机实测全对不上）。
+                // 变量名不能叫 catalog：同一个方法后面还有 PsdCommonAssetCatalog catalog，
+                // 内层作用域重名会直接 CS0136。
+                PsdHierarchyAiCliCatalog modelCatalog =
+                    PsdHierarchyAiCliModelCatalog.Resolve(installed[index].provider);
+
                 var item = new JObject
                 {
                     ["provider"] = (int)installed[index].provider,
@@ -1085,29 +1143,23 @@ namespace PsdLayoutTool2
                     ["modelHint"] = installed[index].defaultModelHint,
                     ["effortHint"] = installed[index].reasoningEffortHint,
                     // 模型名是「建议」：页面上做成可手填的下拉，所以仍要保留输入框。
-                    ["modelSuggestions"] = new JArray(installed[index].modelSuggestions),
+                    ["modelSuggestions"] = new JArray(modelCatalog.models),
                     // 思考程度是封闭枚举，按 CLI 逐个给全，供下拉直接列选项。
-                    ["effortLevels"] = new JArray(installed[index].reasoningEffortLevels),
-                };
-                // Pi 的模型目录每台机器不同（还支持 cc-switch 之类的自定义 provider），
-                // 静态示例会和用户实际用的对不上，所以运行时读 ~/.pi/agent/ 覆盖。
-                if (installed[index].provider == PsdHierarchyAiProvider.Pi &&
-                    PsdHierarchyAiPiCatalog.TryLoad(out string[] piModels, out string[] piLevels, out string piDefault))
-                {
-                    if (piModels.Length > 0)
-                    {
-                        item["modelSuggestions"] = new JArray(piModels);
-                        item["modelHint"] = "例如 " + string.Join("、", piModels);
-                    }
-
-                    if (piLevels.Length > 0)
-                    {
-                        item["effortLevels"] = new JArray(piLevels);
-                        item["effortHint"] = string.Join(" / ", piLevels);
-                    }
-
+                    ["effortLevels"] = new JArray(modelCatalog.effortLevels),
                     // 页面用它显示「留空时实际会用哪个模型」，只作提示、不参与保存。
-                    item["defaultModel"] = piDefault;
+                    ["defaultModel"] = modelCatalog.defaultModel,
+                    ["modelOrigin"] = modelCatalog.origin,
+                    ["modelOriginKind"] = modelCatalog.isLocal ? "local" : "builtin",
+                };
+
+                if (modelCatalog.models.Length > 0)
+                {
+                    item["modelHint"] = "例如 " + PsdHierarchyAiCliModelCatalog.Summarize(modelCatalog.models);
+                }
+
+                if (modelCatalog.effortLevels.Length > 0)
+                {
+                    item["effortHint"] = string.Join(" / ", modelCatalog.effortLevels);
                 }
 
                 clis.Add(item);
@@ -1510,10 +1562,20 @@ width:36px;height:30px;display:flex;align-items:center;justify-content:center;
 background:transparent;border:0;border-radius:6px;cursor:pointer;
 font-size:15px;line-height:1;color:var(--muted);transition:background .15s,color .15s}
 .combo-toggle:hover{background:var(--field-bg);color:var(--text)}
+/* 拉取中：把 ⟳ 换成转圈，并禁用按钮，避免同一时刻打两条 /models（监听线程是串行的）。 */
+.combo-toggle.is-busy{font-size:0;color:var(--blue-dark);cursor:progress;background:var(--field-bg)}
+.combo-toggle.is-busy::before{content:'';display:block;width:13px;height:13px;border-radius:50%;
+border:2px solid var(--line);border-top-color:var(--blue-dark);animation:combo-spin .7s linear infinite}
+@keyframes combo-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+/* 拉取结果的独立一行：不能用 modelHint，它每 1.5 秒会被轮询重写一次。 */
+.form-help.is-ok{color:var(--teal-dark)}
+.form-help.is-err{color:#b91c1c}
 .combo-panel{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:400;
 background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);
 box-shadow:0 12px 32px rgba(15,23,42,.18);padding:6px;
-max-height:260px;overflow-y:auto}
+max-height:340px;max-height:min(340px,46vh);overflow-y:auto;
+/* 滚到列表末尾别把滚动传给页面：页面一滚就会被 comboCloseAll 收掉面板 */
+overscroll-behavior:contain}
 .combo-panel[hidden]{display:none}
 .combo-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;
 cursor:pointer;font-size:14px;line-height:1.35}
@@ -1872,10 +1934,11 @@ border-top:0;padding-top:0;flex:0 0 auto}
           <label class='form-label' for='aiModel'>模型名称</label>
           <div class='combo' id='aiModelCombo'>
             <input class='form-input' id='aiModel' placeholder='留空 = 用 CLI 自己配置的' autocomplete='off' spellcheck='false'>
-            <button type='button' class='combo-toggle' id='aiModelDrop' aria-label='实时拉取并展开模型候选' title='实时拉取可用模型'>⟳</button>
+            <button type='button' class='combo-toggle' id='aiModelDrop' aria-label='实时拉取并展开模型候选' title='拉取本机可用模型'>⟳</button>
             <div class='combo-panel' id='aiModelPanel' role='listbox' hidden></div>
           </div>
           <span class='form-help' id='modelHint'></span>
+          <span class='form-help' id='modelFetch'></span>
         </div>
         <div class='form-group'>
           <label class='form-label' for='aiEffort'>思考程度</label>
@@ -1969,6 +2032,10 @@ var TEXT_FIELDS=['imageComponentTypeName','buttonComponentTypeName','outputFolde
 var statusEl=document.getElementById('status');
 var errorEl=document.getElementById('lastError');
 var clis=[];
+/* 拉取到的本机模型候选，按 provider 存。
+   必须是独立于 clis 的一份映射：renderProviders 每 1.5 秒用 /config 重算一次 clis，
+   把结果直接写回 clis[i] 会被下一次轮询悄悄冲掉 —— 表现就是「刷新后对了 1 秒又变回去」。 */
+var liveModels={};
 var hasKey=false;
 var providerSig=null;
 function byId(id){return document.getElementById(id);}
@@ -2252,14 +2319,30 @@ function comboSetup(inputId,panelId){
   var input=byId(inputId);
   var panel=byId(panelId);
   if(!input||!panel)return;
-  comboCtx[inputId]={input:input,panel:panel,items:[],active:-1,note:''};
+  comboCtx[inputId]={input:input,panel:panel,items:[],active:-1,note:'',hover:false,panelDown:0,filter:false,sig:''};
+  /* 鼠标是不是停在面板上。点面板的空白处或滚动条时，输入框先失焦但人没走，
+     下面的 blur 要靠它区分这两种情况。 */
+  panel.addEventListener('mouseenter',function(){comboCtx[inputId].hover=true;});
+  panel.addEventListener('mouseleave',function(){comboCtx[inputId].hover=false;});
+  /* 面板上的 mousedown 留个时间戳兜底：面板内容被重建的那一瞬 hover 可能来不及重新置位，
+     只靠 hover 判断会有漏网的「点滚动条 → 失焦 → 面板被收掉」。 */
+  panel.addEventListener('mousedown',function(){comboCtx[inputId].panelDown=Date.now();});
 
-  input.addEventListener('focus',function(){comboOpen(inputId);});
+  input.addEventListener('focus',function(){
+    /* 已经开着就别再 comboOpen：那会重建面板并把 scrollTop 打回顶部。 */
+    if(comboCtx[inputId].panel.hidden)comboOpen(inputId);
+  });
+  /* Esc 关掉面板后输入框还留着焦点，此时再点它不会再触发 focus；
+     没有这一条就会「点输入框没反应」，得先点别处再点回来才行。 */
+  input.addEventListener('click',function(){
+    if(comboCtx[inputId].panel.hidden)comboOpen(inputId);
+  });
   input.addEventListener('input',function(){
     dirty[inputId]=true;
     /* 输入时按已打的内容过滤；已经打开的键盘高亮要重置，否则选中的还是上一批。 */
     var ctx=comboCtx[inputId];
     ctx.active=-1;
+    ctx.filter=true;
     comboRender(inputId);
   });
   input.addEventListener('keydown',function(ev){
@@ -2281,7 +2364,15 @@ function comboSetup(inputId,panelId){
        否则点候选会先被这里关掉、什么也没选中。 */
     setTimeout(function(){
       var ctx=comboCtx[inputId];
-      if(ctx&&!ctx.panel.hidden&&!ctx.panel.contains(document.activeElement))comboClose(inputId);
+      if(!ctx||ctx.panel.hidden)return;
+      /* 这 140ms 里又点回来了（blur → 立刻重新聚焦），面板是刚打开的，不能关。 */
+      if(document.activeElement===ctx.input)return;
+      /* 点在面板的空白处或滚动条上会先让输入框失焦，但人显然没打算走：
+         照旧收面板的话，就变成「一碰滚动条面板就没了、永远滚不到下面」。 */
+      if(ctx.hover)return;
+      if(ctx.panelDown&&Date.now()-ctx.panelDown<400)return;
+      if(ctx.panel.contains(document.activeElement))return;
+      comboClose(inputId);
     },140);
   });
 
@@ -2291,8 +2382,14 @@ function comboSetup(inputId,panelId){
        否则输入框先 blur 关面板、按钮再 toggle 又把空面板打开。 */
     toggle.addEventListener('mousedown',function(ev){
       ev.preventDefault();
+      if(toggle.disabled)return;
       var ctx=comboCtx[inputId];
-      if(ctx.panel.hidden)comboOpen(inputId);else comboClose(inputId);
+      if(ctx.panel.hidden){comboOpen(inputId);return;}
+      /* 面板已经开着的时候，⟳ 的语义是「再拉一次」而不是「关掉」——
+         图标写着「拉取本机可用模型」，点第二下却把面板收起，就是「点了没反应」的来源。
+         思考程度的候选是本地算的，没有可刷新之说，保持「开着就关」。 */
+      if(inputId==='aiModel'){refreshAvailableModels();return;}
+      comboClose(inputId);
     });
   }
 }
@@ -2303,19 +2400,18 @@ function comboSource(inputId){
   var info=currentCli();
   var provider=parseInt(byId('aiProvider').value,10);
   if(inputId==='aiModel'){
-    if(!info){
+    if(!info||provider===-1){
       return {items:[],note:'选择「不启用」时不需要填模型；填了也只在本机 CLI 下生效。',
               foot:'可以手填任何该 CLI 认的模型名。'};
     }
-    if(provider===-1){
-      return {items:[],note:'当前是「不启用」，模型名不会生效。',
-              foot:'可以手填任何该 CLI 认的模型名。'};
-    }
-    return {items:info.modelSuggestions||[],
-            default:info.defaultModel||'',
-            foot:info.modelSuggestions&&info.modelSuggestions.length
-              ? '上面只是常见取值，也可以手填其它模型名。'
-              : '该 CLI 没有内置候选，直接手填模型名即可。'};
+    /* 优先用刚刚拉取到的那份（本机真实目录），没有才退回 /config 带来的候选。 */
+    var live=liveModels[provider];
+    var items=(live&&live.models&&live.models.length)?live.models:(info.modelSuggestions||[]);
+    return {items:items,
+            default:(live&&live.defaultModel)?live.defaultModel:(info.defaultModel||''),
+            foot:items.length
+              ? ('以上是'+modelSourceShort(live)+'列出的 '+items.length+' 个候选，也可以手填其它模型名。')
+              : '该 CLI 没有给出候选，直接手填模型名即可。'};
   }
 
   var levels=info?(info.effortLevels||[]):[];
@@ -2333,6 +2429,9 @@ function comboOpen(inputId){
   var ctx=comboCtx[inputId];
   if(!ctx)return;
   ctx.active=-1;
+  /* 打开面板一律列出全部候选，不按输入框里已有的值过滤
+     （只有正在打字才算「筛选」，见 comboRender）。 */
+  ctx.filter=false;
   comboRender(inputId);
   ctx.panel.hidden=false;
   /* 模型下拉每次打开都实时拉取，面板先显示本地候选，回包后再刷新。 */
@@ -2355,15 +2454,40 @@ function comboRender(inputId){
   var ctx=comboCtx[inputId];
   if(!ctx)return;
   var src=comboSource(inputId);
-  var q=String(ctx.input.value||'').trim().toLowerCase();
   var items=src.items||[];
-  /* 已经打进去的值别在候选里重复一遍，看着像多出来一项。 */
-  var list=items.filter(function(v){return String(v).toLowerCase()!==q;});
-  if(q)list=list.filter(function(v){return String(v).toLowerCase().indexOf(q)>=0;});
+  var value=String(ctx.input.value||'');
+  var q=value.trim().toLowerCase();
+  /* 只有「正在打字」才按输入值过滤。打开面板时必须列全：
+     字段里通常已经存着上次保存的模型名，而这个值未必在候选里
+     （例如 pi 的候选里没有 deepseek-v4-flash），按它过滤会把整份列表滤空，
+     面板就只剩一行「没有匹配的候选」——看起来像候选没拉到，其实是自己滤掉的。 */
+  var filtering=!!ctx.filter&&!!q;
+  var list=items;
+  if(filtering){
+    /* 已经打进去的值别在候选里重复一遍，看着像多出来一项。 */
+    list=list.filter(function(v){return String(v).toLowerCase()!==q;});
+    list=list.filter(function(v){return String(v).toLowerCase().indexOf(q)>=0;});
+  }
   ctx.items=list;
   ctx.note=src.note||'';
 
+  /* 当前值不在候选里就如实说一句，否则用户只看到「当前」徽标不见了、以为列表坏了。 */
+  var foot=src.foot||'';
+  if(!filtering&&value&&items.length){
+    var known=false;
+    for(var k=0;k<items.length;k++){if(String(items[k])===value){known=true;break;}}
+    if(!known)foot='当前填的 '+value+' 不在这份候选里，原样保存即可。'+foot;
+  }
+
   var panel=ctx.panel;
+  /* 内容没变就别重建 DOM。refreshDetailVisibility 每次轮询（1.5 秒）都会调到这里，
+     重建会把 scrollTop 打回 0——表现就是「列表滑不到下面，一松手又弹回顶部」。 */
+  var sig=list.join('|')+'||'+(src.default||'')+'|'+foot+'|'+(src.note||'');
+  if(ctx.sig===sig&&!panel.hidden){
+    comboMarkActive(inputId);
+    return;
+  }
+  ctx.sig=sig;
   panel.textContent='';
   if(!list.length){
     panel.appendChild(el('div','combo-note',
@@ -2374,19 +2498,21 @@ function comboRender(inputId){
       row.setAttribute('role','option');
       row.title=String(v);
       var span=el('span','combo-value');
-      span.appendChild(comboMark(String(v),q));
+      span.appendChild(comboMark(String(v),filtering?q:''));
       row.appendChild(span);
-      if(String(v)===String(ctx.input.value||''))row.appendChild(el('span','combo-act','当前'));
+      if(String(v)===value)row.appendChild(el('span','combo-act','当前'));
       else if(src.default&&String(v)===String(src.default))row.appendChild(el('span','combo-act','默认'));
-      /* mousedown 早于 blur：preventDefault 把焦点留在输入框上 */
-      row.addEventListener('mousedown',function(ev){ev.preventDefault();comboPick(inputId,index);});
+      /* mousedown 只负责拦住焦点转移（它早于 blur，preventDefault 可把焦点留在输入框上），
+         真正的选中放 click：原来在 mousedown 就选，按住想滑列表会立刻误选并把面板关掉。 */
+      row.addEventListener('mousedown',function(ev){ev.preventDefault();});
+      row.addEventListener('click',function(ev){ev.preventDefault();comboPick(inputId,index);});
       panel.appendChild(row);
     });
   }
-  if(src.foot)panel.appendChild(el('div','combo-foot',src.foot));
+  if(foot)panel.appendChild(el('div','combo-foot',foot));
 
   /* 手填模式下没候选就不弹一个空面板挡着输入框。 */
-  if(!list.length&&!src.foot){
+  if(!list.length&&!foot){
     panel.hidden=true;
     return;
   }
@@ -2408,11 +2534,18 @@ function comboMark(value,query){
 function comboMarkActive(inputId){
   var ctx=comboCtx[inputId];
   if(!ctx)return;
-  var rows=ctx.panel.querySelectorAll('.combo-item');
+  var panel=ctx.panel;
+  var rows=panel.querySelectorAll('.combo-item');
   for(var i=0;i<rows.length;i++){
     var on=i===ctx.active;
     rows[i].classList.toggle('is-active',on);
-    if(on&&rows[i].scrollIntoView)rows[i].scrollIntoView({block:'nearest'});
+    if(!on)continue;
+    /* 只滚面板自己：scrollIntoView 会连页面一起滚，页面一滚就会被 comboCloseAll 关掉面板。 */
+    var row=rows[i];
+    var top=row.offsetTop;
+    var bottom=top+row.offsetHeight;
+    if(top<panel.scrollTop)panel.scrollTop=top;
+    else if(bottom>panel.scrollTop+panel.clientHeight)panel.scrollTop=bottom-panel.clientHeight;
   }
 }
 
@@ -2435,7 +2568,7 @@ function comboPick(inputId,index){
   setStatusHold('已填入 '+value+'，记得点保存同步','ok',5000);
 }
 
-/* 点空白处、滚动、改窗口大小都收掉面板；切换分组时也一样。 */
+/* 只有真的点在面板/输入框/⟳ 之外才收面板（点面板内部的空白处和滚动条都算「还在操作」）。 */
 document.addEventListener('mousedown',function(ev){
   Object.keys(comboCtx).forEach(function(id){
     var ctx=comboCtx[id];
@@ -2446,7 +2579,10 @@ document.addEventListener('mousedown',function(ev){
     comboClose(id);
   });
 });
-window.addEventListener('scroll',comboCloseAll,true);
+/* 点空白处、改窗口大小收掉面板。
+   滚动不收面板：combo-panel 贴在 .combo（position:relative）上，页面滚动时它本来就跟着
+   输入框一起走，没有错位要处理；反倒是「一滚就收」会误伤——面板刚打开时会往下面那行
+   拉取结果里写「正在拉取…」，页高一变浏览器补个滚动，刚弹出来的面板就被收掉了。 */
 window.addEventListener('resize',comboCloseAll);
 
 /* comboSetup 放在 renderProviders 之后：函数声明会提升，但首次聚焦时
@@ -2599,32 +2735,60 @@ function postAction(name,toastText,button,pending){
 byId('catalogRefresh').addEventListener('click',function(){
   postAction('catalog-refresh','正在扫描公共资源，稍后自动刷新结果',byId('catalogRefresh'));
 });
-/* 模型下拉打开时实时拉取：本机 CLI 回目录，自定义 API 才走 /models。 */
+/* 模型候选拉取。
+   服务端按来源分两条路：填了 API 地址就走那个地址的 GET /models（带 30 秒结果缓存），
+   否则读该 CLI 缓存在家目录里的真实模型目录（Codex/Grok/Pi 都有，Claude 从 settings.json 取）。
+   两条路的实际来源都用 origin/originKind 回传，这里如实显示，不再一律说成「本机 CLI 目录」。 */
 var modelsRefreshToken=0;
+function modelSourceShort(x){
+  if(!x)return '';
+  if(x.originKind==='local')return '本机目录';
+  if(x.originKind==='api')return '自定义 API';
+  return '内置示例';
+}
+function modelOriginText(x){
+  var name=modelSourceShort(x);
+  var detail=x&&x.origin?('（'+x.origin+'）'):'';
+  if(x&&x.originKind==='builtin')return '本机没找到对应目录，显示的是内置示例';
+  return name+detail;
+}
+/* 拉取结果写在独立一行：modelHint 每 1.5 秒会被 refreshDetailVisibility 重写一次，
+   写在那里最多只能看到 1.5 秒，看起来就像「刷新没生效」。 */
+function setFetchNote(text,kind){
+  var note=byId('modelFetch');
+  if(!note)return;
+  note.textContent=text||'';
+  note.className='form-help'+(kind?(' '+kind):'');
+}
 function refreshAvailableModels(){
   var token=++modelsRefreshToken;
   var endpoint=byId('aiEndpoint').value.trim();
   var key=byId('aiApiKey').value;
   var provider=parseInt(byId('aiProvider').value,10);
   if(isNaN(provider))provider=null;
+  var drop=byId('aiModelDrop');
+  if(drop){drop.disabled=true;drop.classList.add('is-busy');}
+  setFetchNote('正在拉取可用模型…','');
   fetchWithTimeout('/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:endpoint,apiKey:key,provider:provider})},15000)
     .then(function(r){return r.json().then(function(x){if(!r.ok||!x.ok)throw new Error(x.error||('HTTP '+r.status));return x;});})
     .then(function(x){
       if(token!==modelsRefreshToken)return;
-      var info=currentCli();
-      if(info){
-        info.modelSuggestions=x.models||[];
-        info.modelHint=(x.models||[]).join('、');
-        if(x.defaultModel)info.defaultModel=x.defaultModel;
+      if(provider!=null){
+        liveModels[provider]={models:x.models||[],defaultModel:x.defaultModel||'',
+                              origin:x.origin||'',originKind:x.originKind||''};
       }
       if(comboCtx.aiModel&&!comboCtx.aiModel.panel.hidden)comboRender('aiModel');
-      var msg='已刷新 '+(x.models||[]).length+' 个可用模型'
-        +(x.source==='api'?'（自定义 API）':'（本机 CLI 目录）');
-      byId('modelHint').textContent=msg;
+      setFetchNote('已拉取 '+(x.models||[]).length+' 个可用模型 · '+modelOriginText(x),'is-ok');
     })
     .catch(function(e){
       if(token!==modelsRefreshToken)return;
-      byId('modelHint').textContent='刷新失败：'+e.message;
+      setFetchNote('拉取失败：'+e.message,'is-err');
+    })
+    .then(function(){
+      /* 只有最后一次请求有权解除按钮的忙碌态，否则会提前解锁、点出第二条 /models。 */
+      if(token!==modelsRefreshToken)return;
+      var btn=byId('aiModelDrop');
+      if(btn){btn.disabled=false;btn.classList.remove('is-busy');}
     });
 }
 byId('previewStart').addEventListener('click',function(){
@@ -2873,6 +3037,7 @@ document.addEventListener('mousedown',function(ev){
 byId('save').addEventListener('click',function(){post(payload(),'配置已同步到 Unity',byId('save'));});
 byId('aiProvider').addEventListener('change',function(){
   dirty.aiProvider=true;refreshDetailVisibility();markSelectedCard();
+  setFetchNote('','');
   /* 换成别的 CLI，候选集完全不同，收掉旧面板免得看起来像还在选上一个模型的档位。 */
   comboClose('aiModel');comboClose('aiEffort');
 });
