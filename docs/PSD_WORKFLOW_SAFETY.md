@@ -13,3 +13,13 @@ The terminal watcher remains the single apply entry point for this protocol. It 
 `NavItem_Diary.prefab` is treated as an incident artifact. It must be inspected and compared against the ledger and the intended review before any cleanup or deletion is planned. This change does not modify or delete it.
 
 The Unity CLI/editor process remains a privileged boundary: arbitrary external `eval` or editor scripts must be disabled or separately sandboxed by the host. The C# gate cannot prove that an out-of-process actor did not bypass Unity's apply watcher.
+
+## Terminal conversation recovery
+
+Every terminal review now keeps three additional files beside its existing session, review and plan files:
+
+- `<session>.conversation.jsonl` records durable lifecycle events with UTF-8 append and flush semantics.
+- `<session>.terminal.log` is a PowerShell transcript, so a window close does not discard output already written by the terminal.
+- `<session>.summary.md` is an optional AI-maintained decision summary for long conversations.
+
+Reopening `AI整理` still requires the same PSD, Prefab and snapshot fingerprint. A session can be resumed before a plan exists when one of the durable conversation files is present. Existing apply, partial and uncertain protections remain authoritative; conversation recovery never creates or retries an Apply sentinel. A truncated final JSONL line or transcript tail is ignored during recovery.

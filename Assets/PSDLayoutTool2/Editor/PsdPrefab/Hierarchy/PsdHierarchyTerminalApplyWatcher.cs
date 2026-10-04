@@ -63,6 +63,16 @@ namespace PsdLayoutTool2
             public bool incrementalReview;
             public string localRepairScopeMode = string.Empty;
             public string[] localRepairSelectedPaths = Array.Empty<string>();
+            // Conversation persistence is additive to protocol 2. Older session
+            // records remain valid and fall back to the review/plan artifacts.
+            public string provider = string.Empty;
+            public string cliExecutablePath = string.Empty;
+            public string cliSessionId = string.Empty;
+            public string conversationPath = string.Empty;
+            public string transcriptPath = string.Empty;
+            public string summaryPath = string.Empty;
+            public string state = "Created";
+            public string lastTurnAtUtc = string.Empty;
         }
 
         /// <summary>抢占记录：写入计划内容哈希与执行标识，重载后据此判断不确定请求。</summary>

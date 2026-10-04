@@ -237,6 +237,32 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ConversationOnlySessionRemainsResumableBeforeAPlanExists()
+        {
+            string resumableId = "conversation-only-" + Guid.NewGuid().ToString("N");
+            string plan = Path.Combine(terminalDirectory, resumableId + ".plan.json");
+            string review = Path.Combine(terminalDirectory, resumableId + ".review.md");
+            PsdHierarchyOrganizerEntry.WriteTerminalSession(
+                resumableId, SourceAssetPath, targetPrefabPath, plan, review, "snapshot-a");
+            sessionId = resumableId;
+            string conversationPath = PsdHierarchyTerminalConversationStore.BuildConversationPath(
+                terminalDirectory, resumableId);
+            PsdHierarchyTerminalConversationStore.AppendEvent(
+                conversationPath, "user_message", "user", "刚开始讨论就关闭了终端");
+
+            Assert.That(
+                PsdHierarchyOrganizerEntry.TryFindResumableTerminalSession(
+                    Path.GetFullPath(Path.Combine(Application.dataPath, "..")),
+                    SourceAssetPath,
+                    targetPrefabPath,
+                    out string foundId,
+                    out _, out _, out _, out string foundFingerprint),
+                Is.True);
+            Assert.That(foundId, Is.EqualTo(resumableId));
+            Assert.That(foundFingerprint, Is.EqualTo("snapshot-a"));
+        }
+
+        [Test]
         public void FindsLatestUnfinishedSessionForTheSamePrefab()
         {
             string resumableId = "resume-" + Guid.NewGuid().ToString("N");

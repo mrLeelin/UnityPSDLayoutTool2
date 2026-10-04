@@ -30,7 +30,13 @@ namespace PsdLayoutTool2
             string snapshotFingerprint = "",
             string reviewVersion = "",
             PsdHierarchyLocalRepairScope localRepairScope = null,
-            bool incrementalReview = false)
+            bool incrementalReview = false,
+            PsdHierarchyAiProvider provider = PsdHierarchyAiProvider.None,
+            string cliExecutablePath = "",
+            string cliSessionId = "",
+            string conversationPath = "",
+            string transcriptPath = "",
+            string summaryPath = "")
         {
             string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
             if (string.IsNullOrEmpty(projectRoot))
@@ -54,11 +60,123 @@ namespace PsdLayoutTool2
                 localRepairScopeMode = localRepairScope?.mode.ToString() ?? string.Empty,
                 localRepairSelectedPaths = localRepairScope?.selectedPaths ?? Array.Empty<string>(),
                 incrementalReview = incrementalReview,
+                provider = provider.ToString(),
+                cliExecutablePath = cliExecutablePath ?? string.Empty,
+                cliSessionId = cliSessionId ?? string.Empty,
+                conversationPath = conversationPath ?? string.Empty,
+                transcriptPath = transcriptPath ?? string.Empty,
+                summaryPath = summaryPath ?? string.Empty,
+                state = "Created",
+                lastTurnAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             };
             File.WriteAllText(
                 Path.Combine(directory, sessionId + ".session.json"),
                 Newtonsoft.Json.JsonConvert.SerializeObject(record, Newtonsoft.Json.Formatting.Indented),
                 new UTF8Encoding(false));
+        }
+
+        private static void EnsureTerminalSessionPersistence(
+            string projectRoot,
+            string sessionId,
+            string sourcePsdAssetPath,
+            string targetPrefabPath,
+            string planPath,
+            string reviewPath,
+            string snapshotFingerprint,
+            PsdHierarchyAiProvider provider,
+            string cliExecutablePath,
+            out PsdHierarchyTerminalApplyWatcher.SessionRecord record)
+        {
+            string directory = Path.Combine(projectRoot ?? string.Empty, "Library", "PsdHierarchyTerminal");
+            Directory.CreateDirectory(directory);
+            string sessionPath = Path.Combine(directory, sessionId + ".session.json");
+            record = null;
+            try
+            {
+                if (File.Exists(sessionPath))
+                {
+                    record = Newtonsoft.Json.JsonConvert.DeserializeObject<PsdHierarchyTerminalApplyWatcher.SessionRecord>(
+                        File.ReadAllText(sessionPath, Encoding.UTF8));
+                }
+            }
+            catch
+            {
+                record = null;
+            }
+
+            if (record == null)
+            {
+                WriteTerminalSession(
+                    sessionId,
+                    sourcePsdAssetPath,
+                    targetPrefabPath,
+                    planPath,
+                    reviewPath,
+                    snapshotFingerprint,
+                    provider: provider,
+                    cliExecutablePath: cliExecutablePath,
+                    conversationPath: PsdHierarchyTerminalConversationStore.BuildConversationPath(directory, sessionId),
+                    transcriptPath: PsdHierarchyTerminalConversationStore.BuildTranscriptPath(directory, sessionId),
+                    summaryPath: PsdHierarchyTerminalConversationStore.BuildSummaryPath(directory, sessionId));
+                record = Newtonsoft.Json.JsonConvert.DeserializeObject<PsdHierarchyTerminalApplyWatcher.SessionRecord>(
+                    File.ReadAllText(sessionPath, Encoding.UTF8));
+                return;
+            }
+
+            bool changed = false;
+            if (string.IsNullOrWhiteSpace(record.planPath) && !string.IsNullOrWhiteSpace(planPath))
+            {
+                record.planPath = planPath;
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.reviewPath) && !string.IsNullOrWhiteSpace(reviewPath))
+            {
+                record.reviewPath = reviewPath;
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.snapshotFingerprint) && !string.IsNullOrWhiteSpace(snapshotFingerprint))
+            {
+                record.snapshotFingerprint = snapshotFingerprint;
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.conversationPath))
+            {
+                record.conversationPath = PsdHierarchyTerminalConversationStore.BuildConversationPath(directory, sessionId);
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.transcriptPath))
+            {
+                record.transcriptPath = PsdHierarchyTerminalConversationStore.BuildTranscriptPath(directory, sessionId);
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.summaryPath))
+            {
+                record.summaryPath = PsdHierarchyTerminalConversationStore.BuildSummaryPath(directory, sessionId);
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.provider) && provider != PsdHierarchyAiProvider.None)
+            {
+                record.provider = provider.ToString();
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.cliExecutablePath) && !string.IsNullOrWhiteSpace(cliExecutablePath))
+            {
+                record.cliExecutablePath = cliExecutablePath;
+                changed = true;
+            }
+            if (string.IsNullOrWhiteSpace(record.lastTurnAtUtc))
+            {
+                record.lastTurnAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                File.WriteAllText(
+                    sessionPath,
+                    Newtonsoft.Json.JsonConvert.SerializeObject(record, Newtonsoft.Json.Formatting.Indented),
+                    new UTF8Encoding(false));
+            }
         }
 
         /// <summary>Apply 哨兵绝对路径：AI 在人工审核通过后写入此文件触发 Unity 自动应用。</summary>
@@ -438,13 +556,59 @@ namespace PsdLayoutTool2
                 {
                     WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planPath, reviewPath,
                         context.hierarchySnapshotFingerprint, localRepairScope: localRepairScope,
-                        incrementalReview: incrementalReview && !localRepair);
+                        incrementalReview: incrementalReview && !localRepair,
+                        provider: settings.provider,
+                        cliExecutablePath: cli.executablePath,
+                        conversationPath: PsdHierarchyTerminalConversationStore.BuildConversationPath(promptDirectory, sessionId),
+                        transcriptPath: PsdHierarchyTerminalConversationStore.BuildTranscriptPath(promptDirectory, sessionId),
+                        summaryPath: PsdHierarchyTerminalConversationStore.BuildSummaryPath(promptDirectory, sessionId));
                 }
+                EnsureTerminalSessionPersistence(
+                    context.projectRoot,
+                    sessionId,
+                    sourcePsdAssetPath,
+                    targetPrefabPath,
+                    planPath,
+                    reviewPath,
+                    context.hierarchySnapshotFingerprint,
+                    settings.provider,
+                    cli.executablePath,
+                    out PsdHierarchyTerminalApplyWatcher.SessionRecord sessionRecord);
+                string conversationPath = sessionRecord.conversationPath;
+                string transcriptPath = sessionRecord.transcriptPath;
+                string summaryPath = sessionRecord.summaryPath;
+                if (string.IsNullOrWhiteSpace(conversationPath))
+                {
+                    conversationPath = PsdHierarchyTerminalConversationStore.BuildConversationPath(promptDirectory, sessionId);
+                }
+                if (string.IsNullOrWhiteSpace(transcriptPath))
+                {
+                    transcriptPath = PsdHierarchyTerminalConversationStore.BuildTranscriptPath(promptDirectory, sessionId);
+                }
+                if (string.IsNullOrWhiteSpace(summaryPath))
+                {
+                    summaryPath = PsdHierarchyTerminalConversationStore.BuildSummaryPath(promptDirectory, sessionId);
+                }
+                PsdHierarchyTerminalConversationStore.AppendEvent(
+                    conversationPath,
+                    resumed ? "terminal_resumed" : "terminal_started",
+                    state: "Running");
+                sessionRecord.state = "Running";
+                sessionRecord.lastTurnAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+                File.WriteAllText(
+                    Path.Combine(promptDirectory, sessionId + ".session.json"),
+                    Newtonsoft.Json.JsonConvert.SerializeObject(sessionRecord, Newtonsoft.Json.Formatting.Indented),
+                    new UTF8Encoding(false));
                 string taskPrompt = (incrementalReview && !localRepair
                         ? BuildIncrementalConversationPrompt(context, resumed)
                         : PsdHierarchyChatClient.BuildPortablePrompt(context)) +
                     BuildTerminalSessionContract(planPath, reviewPath, applyPath, applyResultPath,
                         localRepair, incrementalReview && !localRepair, resumed && incrementalReview);
+                taskPrompt += PsdHierarchyTerminalConversationStore.BuildRecoveryPrompt(
+                    conversationPath,
+                    transcriptPath,
+                    summaryPath,
+                    resumed);
                 if (resumed)
                 {
                     taskPrompt += "\n\n===== RESUMED TERMINAL SESSION =====\n" +
@@ -463,17 +627,26 @@ namespace PsdLayoutTool2
                       (localRepair
                           ? ". Review only the locked Unity selection against the current Prefab snapshot, then save a scoped review and complete JSON plan to the paths in that file. Wait for explicit approval before writing .apply."
                           : ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file. JSON may be edited before approval. After I explicitly approve, write .apply and poll .apply-result.json. If Unity rejects at approval only, repair the approval record and reuse the same plan. If the plan or review is edited after approval, or if the rejection is binding, naming, preflight, partial, or uncertain, require a new complete review/plan and new approval session; do not reuse the old session. If the result is partial or uncertain, stop and tell me to verify the Prefab instead.");
+                PsdHierarchyTerminalConversationStore.AppendEvent(
+                    conversationPath,
+                    "terminal_prompt",
+                    role: "system",
+                    content: initialPrompt,
+                    state: "Running");
                 string cliPath = cli.executablePath.Replace("'", "''");
+                string transcriptPathForShell = transcriptPath.Replace("'", "''");
                 // 模型与思考程度都留空时不生成任何参数，直接使用 CLI 自身的配置。
                 string optionArguments = PsdHierarchyChatClient.BuildModelAndEffortArguments(
                     connection,
                     value => "'" + value.Replace("'", "''") + "'");
-                string command = "[Console]::InputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
+                string command = "$transcriptPath = '" + transcriptPathForShell + "'; " +
+                    "try { Start-Transcript -LiteralPath $transcriptPath -Append -Force | Out-Null } catch { }; " +
+                    "[Console]::InputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
                     "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
                     "$OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
                     "chcp 65001 | Out-Null; " +
                     "Set-Location -LiteralPath '" + context.projectRoot.Replace("'", "''") +
-                    "'; & '" + cliPath + "'" + optionArguments + " '" + initialPrompt.Replace("'", "''") + "'";
+                    "'; try { & '" + cliPath + "'" + optionArguments + " '" + initialPrompt.Replace("'", "''") + "' } finally { try { Stop-Transcript | Out-Null } catch { } }";
                 string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
                 Process.Start(new ProcessStartInfo {
                     FileName = "powershell.exe",
@@ -522,19 +695,39 @@ namespace PsdLayoutTool2
                         record.incrementalReview != incrementalReview ||
                         !string.Equals(record.sourcePsdAssetPath, sourcePsdAssetPath, StringComparison.OrdinalIgnoreCase) ||
                         !string.Equals(record.targetPrefabPath, targetPrefabPath, StringComparison.OrdinalIgnoreCase) ||
-                        string.IsNullOrWhiteSpace(record.sessionId) || string.IsNullOrWhiteSpace(record.planPath) ||
-                        string.IsNullOrWhiteSpace(record.reviewPath) || !File.Exists(record.planPath) || !File.Exists(record.reviewPath))
+                        string.IsNullOrWhiteSpace(record.sessionId))
                         continue;
-                    string applyPath = BuildApplySentinelPath(record.planPath);
-                    string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
-                    bool resultExists = File.Exists(resultPath);
-                    bool resumablePrewriteRejection = IsResumablePrewriteRejection(resultPath);
-                    bool failedPathExists = File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-failed");
-                    if (File.Exists(applyPath) || File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".applying") ||
-                        (failedPathExists && !resumablePrewriteRejection) ||
-                        File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-uncertain") ||
-                        (resultExists && !resumablePrewriteRejection))
+                    bool hasReviewAndPlan = !string.IsNullOrWhiteSpace(record.planPath) &&
+                        !string.IsNullOrWhiteSpace(record.reviewPath) &&
+                        File.Exists(record.planPath) && File.Exists(record.reviewPath);
+                    string conversationPath = string.IsNullOrWhiteSpace(record.conversationPath)
+                        ? PsdHierarchyTerminalConversationStore.BuildConversationPath(directory, record.sessionId)
+                        : record.conversationPath;
+                    string transcriptPath = string.IsNullOrWhiteSpace(record.transcriptPath)
+                        ? PsdHierarchyTerminalConversationStore.BuildTranscriptPath(directory, record.sessionId)
+                        : record.transcriptPath;
+                    string summaryPath = string.IsNullOrWhiteSpace(record.summaryPath)
+                        ? PsdHierarchyTerminalConversationStore.BuildSummaryPath(directory, record.sessionId)
+                        : record.summaryPath;
+                    bool hasDurableConversation = PsdHierarchyTerminalConversationStore.HasRecoverableArtifacts(
+                        conversationPath,
+                        transcriptPath,
+                        summaryPath);
+                    if (!hasReviewAndPlan && !hasDurableConversation)
                         continue;
+                    if (hasReviewAndPlan)
+                    {
+                        string applyPath = BuildApplySentinelPath(record.planPath);
+                        string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
+                        bool resultExists = File.Exists(resultPath);
+                        bool resumablePrewriteRejection = IsResumablePrewriteRejection(resultPath);
+                        bool failedPathExists = File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-failed");
+                        if (File.Exists(applyPath) || File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".applying") ||
+                            (failedPathExists && !resumablePrewriteRejection) ||
+                            File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-uncertain") ||
+                            (resultExists && !resumablePrewriteRejection))
+                            continue;
+                    }
                     DateTime write = File.GetLastWriteTimeUtc(sessionPath);
                     if (write <= bestWrite) continue;
                     bestWrite = write;
@@ -620,14 +813,29 @@ namespace PsdLayoutTool2
                 string planFullPath = Path.Combine(outputDirectory, sessionId + ".plan.json");
                 string reviewFullPath = Path.Combine(outputDirectory, sessionId + ".review.md");
                 string applyFullPath = BuildApplySentinelPath(planFullPath);
+                string conversationFullPath = PsdHierarchyTerminalConversationStore.BuildConversationPath(outputDirectory, sessionId);
+                string transcriptFullPath = PsdHierarchyTerminalConversationStore.BuildTranscriptPath(outputDirectory, sessionId);
+                string summaryFullPath = PsdHierarchyTerminalConversationStore.BuildSummaryPath(outputDirectory, sessionId);
                 WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planFullPath, reviewFullPath,
-                    context.hierarchySnapshotFingerprint);
+                    context.hierarchySnapshotFingerprint,
+                    conversationPath: conversationFullPath,
+                    transcriptPath: transcriptFullPath,
+                    summaryPath: summaryFullPath);
+                PsdHierarchyTerminalConversationStore.AppendEvent(
+                    conversationFullPath,
+                    "external_prompt_created",
+                    state: "Created");
 
                 string prompt = PsdHierarchyChatClient.BuildExternalSessionPrompt(
                     context,
                     planFullPath,
                     reviewFullPath,
                     applyFullPath);
+                prompt += PsdHierarchyTerminalConversationStore.BuildRecoveryPrompt(
+                    conversationFullPath,
+                    transcriptFullPath,
+                    summaryFullPath,
+                    false);
                 // 长提示词同时落盘：剪贴板粘贴失败或需要留档时，可以直接把文件路径交给 CLI。
                 File.WriteAllText(promptFullPath, prompt, new UTF8Encoding(false));
                 EditorGUIUtility.systemCopyBuffer = prompt;
