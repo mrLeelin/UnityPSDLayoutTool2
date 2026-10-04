@@ -77,6 +77,9 @@ namespace PsdLayoutTool2.Tests
 
             Assert.That(page, Does.Contain("<title>PSD Layout Tool 设置 · {{PSD_LAYOUT_PROJECT_NAME}}</title>"));
             Assert.That(page, Does.Contain("当前工程：<strong>{{PSD_LAYOUT_PROJECT_NAME}}</strong>"));
+            Assert.That(page, Does.Contain("id='aiOrganizeAnchors'"));
+            Assert.That(page, Does.Contain("id='aiModelToggle'"));
+            Assert.That(page, Does.Contain("id='aiModelPicker'"));
         }
 
         [Test]

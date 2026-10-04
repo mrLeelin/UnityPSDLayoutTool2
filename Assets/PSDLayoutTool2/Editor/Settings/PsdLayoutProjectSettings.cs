@@ -157,6 +157,16 @@ namespace PsdLayoutTool2
         internal readonly Type buttonComponentType;
     }
 
+    internal readonly struct PsdLayoutProjectRaycastTargetSnapshot
+    {
+        internal PsdLayoutProjectRaycastTargetSnapshot(bool enableGeneratedUiRaycastTargets)
+        {
+            this.enableGeneratedUiRaycastTargets = enableGeneratedUiRaycastTargets;
+        }
+
+        internal readonly bool enableGeneratedUiRaycastTargets;
+    }
+
     internal readonly struct PsdLayoutProjectSettingsMigrationSnapshot
     {
         internal PsdLayoutProjectSettingsMigrationSnapshot(
@@ -447,6 +457,32 @@ namespace PsdLayoutTool2
     }
 
     [Serializable]
+    internal sealed class PsdLayoutProjectRaycastTargetSettings
+    {
+        // Preserve the documented display-only default for newly generated UI.
+        internal const bool DefaultEnableGeneratedUiRaycastTargets = false;
+
+        [SerializeField]
+        private bool enableGeneratedUiRaycastTargets = DefaultEnableGeneratedUiRaycastTargets;
+
+        internal bool Set(bool value)
+        {
+            if (enableGeneratedUiRaycastTargets == value)
+            {
+                return false;
+            }
+
+            enableGeneratedUiRaycastTargets = value;
+            return true;
+        }
+
+        internal PsdLayoutProjectRaycastTargetSnapshot Resolve()
+        {
+            return new PsdLayoutProjectRaycastTargetSnapshot(enableGeneratedUiRaycastTargets);
+        }
+    }
+
+    [Serializable]
     internal sealed class PsdLayoutProjectNineSliceSettings
     {
         /// <summary>
@@ -670,7 +706,7 @@ namespace PsdLayoutTool2
     /// </summary>
     internal sealed class PsdLayoutProjectSettings : ScriptableObject
     {
-        private const int CurrentSettingsVersion = 10;
+        private const int CurrentSettingsVersion = 11;
 
         /// <summary>
         /// 个人字段（AI / 预览端口 / 九宫格 markers）已迁到 UserSettings JSON 后，
@@ -693,6 +729,10 @@ namespace PsdLayoutTool2
 
         [SerializeField]
         private PsdLayoutProjectUiComponentSettings uiComponentSettings = new PsdLayoutProjectUiComponentSettings();
+
+        [SerializeField]
+        private PsdLayoutProjectRaycastTargetSettings raycastTargetSettings =
+            new PsdLayoutProjectRaycastTargetSettings();
 
         [SerializeField]
         private PsdLayoutProjectNineSliceSettings nineSliceSettings = new PsdLayoutProjectNineSliceSettings();
@@ -750,6 +790,21 @@ namespace PsdLayoutTool2
             return true;
         }
 
+        internal PsdLayoutProjectRaycastTargetSnapshot ResolveRaycastTargetSettings()
+        {
+            EnsureData();
+            return raycastTargetSettings.Resolve();
+        }
+
+        internal void SetGeneratedUiRaycastTargets(bool enabled)
+        {
+            EnsureData();
+            if (raycastTargetSettings.Set(enabled))
+            {
+                SaveAsset();
+            }
+        }
+
         internal PsdLayoutProjectNineSliceSnapshot ResolveNineSliceSettings()
         {
             EnsureData();
@@ -798,7 +853,24 @@ namespace PsdLayoutTool2
                 (PsdHierarchyAiProvider)ai.provider,
                 ai.customEndpoint,
                 ai.customModel,
-                ai.reasoningEffort);
+                ai.reasoningEffort,
+                ai.organizeAnchors);
+        }
+
+        internal void SetHierarchyAiAnchorOrganization(bool enabled)
+        {
+            EnsureData();
+            PsdLayoutLocalUserSettings.Data data = PsdLayoutLocalUserSettings.Load();
+            if (data.ai.organizeAnchors == enabled)
+            {
+                return;
+            }
+
+            data.ai.organizeAnchors = enabled;
+            if (!PsdLayoutLocalUserSettings.Save(data, out string saveError))
+            {
+                throw new InvalidOperationException(saveError);
+            }
         }
 
         internal void SetHierarchyAiSettings(
@@ -1022,6 +1094,12 @@ namespace PsdLayoutTool2
                 changed = true;
             }
 
+            if (raycastTargetSettings == null)
+            {
+                raycastTargetSettings = new PsdLayoutProjectRaycastTargetSettings();
+                changed = true;
+            }
+
             if (nineSliceSettings == null)
             {
                 nineSliceSettings = new PsdLayoutProjectNineSliceSettings();
@@ -1073,6 +1151,7 @@ namespace PsdLayoutTool2
             seeded.ai.customModel = assetAi.customModel;
             seeded.ai.reasoningEffort = assetAi.reasoningEffort;
             seeded.ai.customEndpoint = assetAi.customEndpoint;
+            seeded.ai.organizeAnchors = assetAi.organizeAnchors;
             seeded.previewServerPort = previewServerSettings.ResolvePort();
             seeded.showNineSliceImageMarkers = nineSliceSettings.Resolve().showImageMarkers;
             if (!PsdLayoutLocalUserSettings.Save(seeded))

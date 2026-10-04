@@ -41,6 +41,31 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void AnchorOrganizationIsDisabledByDefault()
+        {
+            var settings = new PsdHierarchyAiSettings();
+
+            Assert.That(settings.Resolve().organizeAnchors, Is.False);
+        }
+
+        [Test]
+        public void AnchorOrganizationCanBeToggledWithoutChangingAiConnection()
+        {
+            var settings = new PsdHierarchyAiSettings();
+            settings.Set(PsdHierarchyAiProvider.Codex, string.Empty, string.Empty, string.Empty);
+
+            Assert.That(settings.SetAnchorOrganization(true), Is.True);
+            PsdHierarchyAiSettingsSnapshot enabled = settings.Resolve();
+            Assert.That(enabled.organizeAnchors, Is.True);
+            Assert.That(enabled.provider, Is.EqualTo(PsdHierarchyAiProvider.Codex));
+
+            Assert.That(settings.SetAnchorOrganization(false), Is.True);
+            PsdHierarchyAiSettingsSnapshot disabled = settings.Resolve();
+            Assert.That(disabled.organizeAnchors, Is.False);
+            Assert.That(disabled.provider, Is.EqualTo(PsdHierarchyAiProvider.Codex));
+        }
+
+        [Test]
         public void LegacyClaudeAndCodexProviderValuesArePreserved()
         {
             // 老配置里 provider 是按整数存的，加 None 时把 Claude/Codex 的取值挪位会静默改写用户配置。

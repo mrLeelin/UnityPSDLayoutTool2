@@ -283,15 +283,36 @@ namespace PsdLayoutTool2
             }
 
             var errorBox = CreateHiddenErrorBox();
+            var anchorOrganizationField = new Toggle("AI 整理时同时整理锚点")
+            {
+                name = "psd-project-settings-ai-organize-anchors",
+                value = snapshot.organizeAnchors,
+                tooltip = "开启后，AI 层级整理会把 RectTransform 锚点纳入分析和整理建议；关闭时保留现有锚点。",
+            };
+            section.Add(anchorOrganizationField);
+            anchorOrganizationField.RegisterValueChangedCallback(change =>
+            {
+                settings.SetHierarchyAiAnchorOrganization(change.newValue);
+                ReplaceSection(section, CreateHierarchyAiSection(settings));
+            });
+
+            var modelSelection = new Foldout
+            {
+                name = "psd-project-settings-ai-model-selection",
+                text = "选择模型",
+                value = false,
+            };
+            section.Add(modelSelection);
+
             var providerField = new PopupField<string>("AI", providerChoices, selectedIndex)
             {
                 name = "psd-project-settings-ai-provider",
             };
-            section.Add(providerField);
+            modelSelection.Add(providerField);
 
             if (installed.Count == 0)
             {
-                section.Add(new HelpBox(
+                modelSelection.Add(new HelpBox(
                     "未检测到任何受支持的 AI CLI（Claude / Codex / Grok / Pi）。" +
                     "请先安装其中一个并重启 Unity，再使用 AI 整理。",
                     HelpBoxMessageType.Error));
@@ -328,10 +349,10 @@ namespace PsdLayoutTool2
 
             if (!snapshot.isConfigured)
             {
-                section.Add(new HelpBox(
+                modelSelection.Add(new HelpBox(
                     "AI 整理当前未启用。选择上面的 CLI 后会显示模型、思考程度与 API 设置。",
                     HelpBoxMessageType.Info));
-                section.Add(errorBox);
+                modelSelection.Add(errorBox);
                 return section;
             }
 
@@ -381,9 +402,9 @@ namespace PsdLayoutTool2
                 "psd-project-settings-ai-endpoint",
                 "留空表示调用本机 " + supported.displayName +
                 " CLI，不打开外部终端、不需要 API Key；填写后才走自定义 API。");
-            section.Add(modelField);
-            section.Add(effortField);
-            section.Add(endpointField);
+            modelSelection.Add(modelField);
+            modelSelection.Add(effortField);
+            modelSelection.Add(endpointField);
 
             /* PopupField 的 change.newValue 是「选中的候选项」，不是文本框里打的字。
                手填时它一直是旧的选中项，所以要连 textElement.text 一起读，
@@ -405,16 +426,16 @@ namespace PsdLayoutTool2
 
             if (!usesCustomApi)
             {
-                section.Add(new HelpBox(
+                modelSelection.Add(new HelpBox(
                     "当前走本机 " + supported.displayName + " CLI：模型与思考程度留空即使用 CLI 自身配置，也不需要 API Key。",
                     HelpBoxMessageType.Info));
-                section.Add(errorBox);
+                modelSelection.Add(errorBox);
                 return section;
             }
 
             if (!PsdHierarchyChatClient.HasBuiltInApiDefaults(snapshot.provider))
             {
-                section.Add(new HelpBox(
+                modelSelection.Add(new HelpBox(
                     supported.displayName + " 没有可以预设的官方 API 地址，走自定义 API 时必须自己填地址和模型。",
                     HelpBoxMessageType.Warning));
             }
@@ -437,7 +458,7 @@ namespace PsdLayoutTool2
                 "psd-project-settings-ai-api-key",
                 "不会写入项目配置或 Git。清空并确认后会删除本地保存的 Key。");
             apiKeyField.isPasswordField = true;
-            section.Add(apiKeyField);
+            modelSelection.Add(apiKeyField);
             apiKeyField.RegisterValueChangedCallback(change =>
             {
                 try
@@ -457,7 +478,7 @@ namespace PsdLayoutTool2
                 }
             });
 
-            section.Add(errorBox);
+            modelSelection.Add(errorBox);
             return section;
         }
 
@@ -661,6 +682,7 @@ namespace PsdLayoutTool2
         {
             VisualElement section = CreateSection(UiComponentSectionName, "UI 组件类型");
             PsdLayoutProjectUiComponentSnapshot snapshot = settings.ResolveUiComponentSettings();
+            PsdLayoutProjectRaycastTargetSnapshot raycastSnapshot = settings.ResolveRaycastTargetSettings();
             string imageTypeName = snapshot.imageComponentType.FullName;
             string buttonTypeName = snapshot.buttonComponentType.FullName;
             section.Add(new HelpBox(
@@ -702,6 +724,19 @@ namespace PsdLayoutTool2
                 "例如 Game.UI.CustomTouchButton。留空时使用 UnityEngine.UI.Button。",
                 typeof(MonoBehaviour),
                 value => ApplyTypes(imageField.value, value));
+
+            var raycastTargetField = new Toggle("生成 UI 启用 Raycast Target")
+            {
+                name = "psd-project-settings-generated-ui-raycast-target",
+                value = raycastSnapshot.enableGeneratedUiRaycastTargets,
+                tooltip = "生成 Prefab 时为普通 Image、Common_Texture 和文字组件勾选 Raycast Target。Common_Prefab 实例及其内部组件保持原状态。",
+            };
+            section.Add(raycastTargetField);
+            raycastTargetField.RegisterValueChangedCallback(change =>
+            {
+                settings.SetGeneratedUiRaycastTargets(change.newValue);
+                ReplaceSection(section, CreateUiComponentSection(settings));
+            });
             section.Add(validationBox);
             return section;
         }

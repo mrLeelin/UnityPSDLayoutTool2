@@ -38,6 +38,9 @@ namespace PsdLayoutTool2.Tests
             PsdImporter.AtlasVersion = PsdImporter.SpriteAtlasVersion.V1;
             PsdImporter.ApplyProjectUiComponentSettings(
                 new PsdLayoutProjectUiComponentSnapshot(typeof(UiImage), typeof(UiButton)));
+            PsdImporter.ApplyProjectRaycastTargetSettings(
+                new PsdLayoutProjectRaycastTargetSnapshot(
+                    PsdLayoutProjectRaycastTargetSettings.DefaultEnableGeneratedUiRaycastTargets));
             AssetDatabase.DeleteAsset(TempFolder);
         }
 
@@ -176,6 +179,37 @@ namespace PsdLayoutTool2.Tests
                 data.TrySetComponentTypes(typeof(UiButton).FullName, typeof(UiButton).FullName, out string error),
                 Is.False);
             Assert.That(error, Does.Contain(typeof(UiImage).FullName));
+        }
+
+        [Test]
+        public void RaycastTargetSettingsDefaultToDisabledAndCanChange()
+        {
+            var data = new PsdLayoutProjectRaycastTargetSettings();
+
+            Assert.That(
+                data.Resolve().enableGeneratedUiRaycastTargets,
+                Is.EqualTo(PsdLayoutProjectRaycastTargetSettings.DefaultEnableGeneratedUiRaycastTargets));
+            Assert.That(data.Set(true), Is.True);
+            Assert.That(data.Resolve().enableGeneratedUiRaycastTargets, Is.True);
+            Assert.That(data.Set(true), Is.False);
+        }
+
+        [Test]
+        public void ImporterAppliesRaycastTargetSettingToConfiguredImages()
+        {
+            PsdImporter.ApplyProjectRaycastTargetSettings(
+                new PsdLayoutProjectRaycastTargetSnapshot(true));
+            var gameObject = new GameObject("Raycast Target Image");
+            try
+            {
+                UiImage image = PsdImporter.AddConfiguredImageComponent(gameObject);
+
+                Assert.That(image.raycastTarget, Is.True);
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
         }
 
         [Test]
@@ -440,10 +474,19 @@ namespace PsdLayoutTool2.Tests
 
                 Assert.That(root, Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(AiSectionName), Is.Not.Null);
+                Assert.That(
+                    root.Q<Toggle>("psd-project-settings-ai-organize-anchors"),
+                    Is.Not.Null);
+                Assert.That(
+                    root.Q<Foldout>("psd-project-settings-ai-model-selection"),
+                    Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(OutputSectionName), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(UiComponentSectionName), Is.Not.Null);
                 Assert.That(root.Q<TextField>("psd-project-settings-image-component-type"), Is.Not.Null);
                 Assert.That(root.Q<TextField>("psd-project-settings-button-component-type"), Is.Not.Null);
+                Assert.That(
+                    root.Q<Toggle>("psd-project-settings-generated-ui-raycast-target"),
+                    Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(FontSectionName), Is.Not.Null);
                 Assert.That(root.Q<VisualElement>(CommonNamingSectionName), Is.Not.Null);
                 Assert.That(

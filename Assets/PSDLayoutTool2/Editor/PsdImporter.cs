@@ -112,6 +112,7 @@
 
         private static Type uiImageComponentType = typeof(Image);
         private static Type uiButtonComponentType = typeof(Button);
+        private static bool enableGeneratedUiRaycastTargets;
 
         /// <summary>
         /// The current UI layout context used to place child RectTransforms.
@@ -943,6 +944,7 @@
                 LogProjectFontSettingsWarnings(projectFontSettings);
                 ApplyProjectOutputSettings(PsdLayoutProjectSettings.instance.ResolveOutputSettings());
                 ApplyProjectUiComponentSettings(PsdLayoutProjectSettings.instance.ResolveUiComponentSettings());
+                ApplyProjectRaycastTargetSettings(PsdLayoutProjectSettings.instance.ResolveRaycastTargetSettings());
                 currentTmpFontFallbacksByPsdName =
                     new Dictionary<string, TMP_FontAsset>(StringComparer.OrdinalIgnoreCase);
                 currentPngPathByContentHash = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -5270,6 +5272,7 @@
 
             Image uiImage = AddConfiguredImageComponent(uiObject);
             uiImage.sprite = CreateSprite(layer);
+            uiImage.raycastTarget = enableGeneratedUiRaycastTargets;
             ApplyImageLayoutBehavior(uiImage, preset);
             ApplyNineSliceImageBehavior(uiImage, layer);
             return uiImage;
@@ -5313,7 +5316,7 @@
             textUI.horizontalOverflow = HorizontalWrapMode.Overflow;
             textUI.verticalOverflow = VerticalWrapMode.Overflow;
             textUI.resizeTextForBestFit = false;
-            textUI.raycastTarget = false;
+            textUI.raycastTarget = enableGeneratedUiRaycastTargets;
 
             ApplyTextStyle(textUI, layer);
 
@@ -5346,7 +5349,7 @@
             textUI.color = ApplyLayerOpacity(layer.FillColor, layer);
             textUI.enableWordWrapping = false;
             textUI.overflowMode = TextOverflowModes.Overflow;
-            textUI.raycastTarget = false;
+            textUI.raycastTarget = enableGeneratedUiRaycastTargets;
             textUI.richText = false;
             textUI.alignment = GetTextMeshProAlignment(layer.Justification);
             ApplyTextMeshProCapitalization(textUI, layer.TextStyle);
@@ -5466,6 +5469,12 @@
             uiButtonComponentType = settings.buttonComponentType ?? typeof(Button);
         }
 
+        internal static void ApplyProjectRaycastTargetSettings(
+            PsdLayoutProjectRaycastTargetSnapshot settings)
+        {
+            enableGeneratedUiRaycastTargets = settings.enableGeneratedUiRaycastTargets;
+        }
+
         internal static Image AddConfiguredImageComponent(GameObject gameObject)
         {
             Image image = gameObject.AddComponent(uiImageComponentType) as Image;
@@ -5473,6 +5482,8 @@
             {
                 throw new InvalidOperationException("Configured Image component must inherit UnityEngine.UI.Image.");
             }
+
+            image.raycastTarget = enableGeneratedUiRaycastTargets;
 
             return image;
         }
@@ -6182,6 +6193,7 @@
 
             Image image = AddConfiguredImageComponent(uiObject);
             image.sprite = sprite;
+            image.raycastTarget = false;
             ApplyImageLayoutBehavior(image, preset);
             return image;
         }

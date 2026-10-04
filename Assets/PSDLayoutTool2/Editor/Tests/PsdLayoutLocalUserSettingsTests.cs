@@ -47,6 +47,7 @@ namespace PsdLayoutTool2.Tests
             data.ai.customModel = "grok-4";
             data.ai.reasoningEffort = "high";
             data.ai.customEndpoint = string.Empty;
+            data.ai.organizeAnchors = true;
 
             PsdLayoutLocalUserSettings.Save(data);
             PsdLayoutLocalUserSettings.ResetCacheForTests();
@@ -60,6 +61,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(loaded.ai.provider, Is.EqualTo((int)PsdHierarchyAiProvider.Grok));
             Assert.That(loaded.ai.customModel, Is.EqualTo("grok-4"));
             Assert.That(loaded.ai.reasoningEffort, Is.EqualTo("high"));
+            Assert.That(loaded.ai.organizeAnchors, Is.True);
         }
 
         [Test]
@@ -68,6 +70,7 @@ namespace PsdLayoutTool2.Tests
             PsdLayoutLocalUserSettings.Data data = PsdLayoutLocalUserSettings.Load();
 
             Assert.That(data.ai.provider, Is.EqualTo((int)PsdHierarchyAiProvider.None));
+            Assert.That(data.ai.organizeAnchors, Is.False);
             Assert.That(data.previewServerPort, Is.EqualTo(PsdCommonAssetPreviewSettings.DefaultPort));
             Assert.That(data.showNineSliceImageMarkers, Is.EqualTo(PsdLayoutProjectNineSliceSettings.DefaultShowImageMarkers));
         }

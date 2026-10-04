@@ -40,6 +40,7 @@ namespace PsdLayoutTool2
             public string customModel = string.Empty;
             public string reasoningEffort = string.Empty;
             public string customEndpoint = string.Empty;
+            public bool organizeAnchors = PsdHierarchyAiSettings.DefaultOrganizeAnchors;
         }
 
         /// <summary>工程根：优先 Assets 父目录（与 watcher/session 一致），单测无 Editor 时回退 CWD。</summary>
@@ -158,6 +159,7 @@ namespace PsdLayoutTool2
                         customModel = source.ai.customModel,
                         reasoningEffort = source.ai.reasoningEffort,
                         customEndpoint = source.ai.customEndpoint,
+                        organizeAnchors = source.ai.organizeAnchors,
                     },
                 previewServerPort = source.previewServerPort,
                 showNineSliceImageMarkers = source.showNineSliceImageMarkers,

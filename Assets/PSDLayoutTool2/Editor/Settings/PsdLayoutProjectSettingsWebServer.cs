@@ -1102,6 +1102,8 @@ namespace PsdLayoutTool2
             PsdLayoutProjectUiComponentSnapshot ui = settings.ResolveUiComponentSettings();
             root["imageComponentTypeName"] = ui.imageComponentType.FullName;
             root["buttonComponentTypeName"] = ui.buttonComponentType.FullName;
+            root["enableGeneratedUiRaycastTargets"] =
+                settings.ResolveRaycastTargetSettings().enableGeneratedUiRaycastTargets;
 
             PsdLayoutProjectOutputSnapshot output = settings.ResolveOutputSettings();
             root["outputMode"] = (int)output.outputMode;
@@ -1122,6 +1124,7 @@ namespace PsdLayoutTool2
             root["aiModel"] = ai.customModel;
             root["aiEffort"] = ai.reasoningEffort;
             root["aiEndpoint"] = ai.customEndpoint;
+            root["aiOrganizeAnchors"] = ai.organizeAnchors;
             root["aiHasApiKey"] = HasApiKey(ai.provider);
 
             var clis = new JArray();
@@ -1248,6 +1251,12 @@ namespace PsdLayoutTool2
                     }
                 }
 
+                if (data["enableGeneratedUiRaycastTargets"] != null)
+                {
+                    settings.SetGeneratedUiRaycastTargets(
+                        data.Value<bool>("enableGeneratedUiRaycastTargets"));
+                }
+
                 // ---- 输出与公共资源命名 ----
                 if (HasAny(data, "outputMode", "outputFolderName", "atlasOutputPath", "textureOutputPath", "prefabOutputPath"))
                 {
@@ -1277,7 +1286,7 @@ namespace PsdLayoutTool2
                 }
 
                 // ---- AI 层级整理 ----
-                if (HasAny(data, "aiProvider", "aiModel", "aiEffort", "aiEndpoint"))
+                if (HasAny(data, "aiProvider", "aiModel", "aiEffort", "aiEndpoint", "aiOrganizeAnchors"))
                 {
                     PsdHierarchyAiSettingsSnapshot ai = settings.ResolveHierarchyAiSettings();
                     int providerValue = ReadInt(data, "aiProvider", (int)ai.provider);
@@ -1296,6 +1305,11 @@ namespace PsdLayoutTool2
                                  out string aiError))
                     {
                         messages.Add(aiError);
+                    }
+
+                    if (data["aiOrganizeAnchors"] != null)
+                    {
+                        settings.SetHierarchyAiAnchorOrganization(data.Value<bool>("aiOrganizeAnchors"));
                     }
                 }
 
@@ -1665,6 +1679,23 @@ background:linear-gradient(135deg,#14b8a6,#0f766e)}
 .ai-provider-selected{display:none;font-size:12px;font-weight:700;color:var(--teal-dark);
 white-space:nowrap}
 .ai-provider-card.is-selected .ai-provider-selected{display:block}
+.ai-model-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;
+padding:16px 18px;margin:16px 0 12px;border:1px solid #bde9df;border-radius:16px;
+background:linear-gradient(135deg,#f0fdfa 0%,#f8fafc 100%);color:var(--text);font:inherit;
+font-size:15px;font-weight:700;text-align:left;cursor:pointer;
+box-shadow:0 4px 14px rgba(15,118,110,.08);transition:background .18s,border-color .18s,box-shadow .18s,transform .18s}
+.ai-model-toggle:hover{background:linear-gradient(135deg,#e6fffa 0%,#fff 100%);
+border-color:#5eead4;box-shadow:0 7px 20px rgba(15,118,110,.14);transform:translateY(-1px)}
+.ai-model-toggle-copy{display:flex;align-items:center;gap:12px;min-width:0}
+.ai-model-toggle-mark{width:34px;height:34px;display:grid;place-items:center;flex:0 0 auto;
+border-radius:10px;background:linear-gradient(135deg,#14b8a6,#0f766e);color:#fff;font-size:18px}
+.ai-model-toggle-title{display:block}
+.ai-model-toggle-sub{display:block;margin-top:3px;color:var(--muted);font-size:12px;font-weight:400}
+.ai-model-toggle-icon{font-size:18px;color:var(--muted);line-height:1;transition:transform .18s ease}
+.ai-model-toggle[aria-expanded='true'] .ai-model-toggle-icon{transform:rotate(180deg)}
+.ai-model-picker{padding:18px 18px 2px;border:1px solid var(--line);border-radius:16px;
+background:#fff;box-shadow:inset 0 1px 0 rgba(15,23,42,.02)}
+.ai-model-picker[hidden]{display:none}
 .ai-api-row{display:grid;grid-template-columns:3fr 2fr;gap:14px}
 
 /* ---------- 公共资源库 / 共享预览 ---------- */
@@ -1792,6 +1823,16 @@ border-top:0;padding-top:0;flex:0 0 auto}
       <input class='form-input' id='buttonComponentTypeName' placeholder='UnityEngine.UI.Button'>
       <span class='form-help'>生成按钮时挂载的组件类名，可用任意 MonoBehaviour，包括自定义 Button。</span>
     </div>
+    <div class='switch-row'>
+      <div class='switch-text'>
+        <span class='switch-main'>生成 UI 启用 Raycast Target</span>
+        <span class='switch-sub'>生成 Prefab 时为普通 Image、Common_Texture 和文字组件勾选 Raycast Target。Common_Prefab 实例及其内部组件保持原状态。</span>
+      </div>
+      <label class='switch'>
+        <input type='checkbox' id='enableGeneratedUiRaycastTargets'>
+        <span class='switch-track'></span>
+      </label>
+    </div>
   </section>
 
   <section class='card' id='sec-nine'>
@@ -1916,19 +1957,34 @@ border-top:0;padding-top:0;flex:0 0 auto}
       <span class='badge badge-success' id='cliBadge'>检测中…</span>
     </div>
 
-    <div class='form-group'>
-      <label class='form-label'>AI 模型</label>
-      <div class='ai-provider-grid' id='aiProviderOptions' role='radiogroup' aria-label='AI 模型'></div>
-      <select id='aiProvider' hidden></select>
-      <span class='form-help'>只列出本机已安装的 CLI。选「不启用」时下面的参数会隐藏，AI 整理会提示先来这里选择。</span>
+    <div class='switch-row'>
+      <div class='switch-text'>
+        <span class='switch-main'>AI 整理时同时整理锚点</span>
+        <span class='switch-sub'>开启后把 RectTransform 锚点纳入本次层级整理；关闭时保留现有锚点。</span>
+      </div>
+      <label class='switch'>
+        <input type='checkbox' id='aiOrganizeAnchors'>
+        <span class='switch-track'></span>
+      </label>
     </div>
 
-    <div id='noCli' class='info-banner warn' hidden>
-      <strong>本机未检测到任何 CLI</strong>
-      Claude / Codex / Grok / Pi 都没有找到。安装后需要让 Unity 重新加载才能探测到，通常重启编辑器即可。
-    </div>
+    <button type='button' class='ai-model-toggle' id='aiModelToggle' aria-expanded='false' aria-controls='aiModelPicker'>
+      <span class='ai-model-toggle-copy'><span class='ai-model-toggle-mark'>✦</span><span><span class='ai-model-toggle-title'>选择模型</span><span class='ai-model-toggle-sub'>展开选择 AI 智能体并配置模型参数</span></span></span>
+      <span class='ai-model-toggle-icon' id='aiModelToggleIcon'>⌄</span>
+    </button>
+    <div id='aiModelPicker' class='ai-model-picker' hidden>
+      <div class='form-group'>
+        <label class='form-label'>AI 模型</label>
+        <div class='ai-provider-grid' id='aiProviderOptions' role='radiogroup' aria-label='AI 模型'></div>
+        <select id='aiProvider' hidden></select>
+        <span class='form-help'>只列出本机已安装的 CLI。选「不启用」时下面的参数会隐藏，AI 整理会提示先来这里选择。</span>
+      </div>
+      <div id='noCli' class='info-banner warn' hidden>
+        <strong>本机未检测到任何 CLI</strong>
+        Claude / Codex / Grok / Pi 都没有找到。安装后需要让 Unity 重新加载才能探测到，通常重启编辑器即可。
+      </div>
 
-    <div id='aiDetails' hidden>
+      <div id='aiDetails' hidden>
       <div class='form-grid'>
         <div class='form-group'>
           <label class='form-label' for='aiModel'>模型名称</label>
@@ -1964,6 +2020,7 @@ border-top:0;padding-top:0;flex:0 0 auto}
       </div>
       <div class='form-group'>
         <button class='btn btn-secondary' id='clearKey'>清除本机保存的 Key</button>
+      </div>
       </div>
     </div>
   </section>
@@ -2038,6 +2095,7 @@ var clis=[];
 var liveModels={};
 var hasKey=false;
 var providerSig=null;
+var aiModelPickerOpen=false;
 function byId(id){return document.getElementById(id);}
 function active(el){return document.activeElement===el;}
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=String(text);return e;}
@@ -2092,6 +2150,15 @@ function setStatus(text,kind){statusEl.textContent=text;statusEl.className=kind|
 function setStatusHold(text,kind,holdMs){
   setStatus(text,kind);
   statusLockUntil=Date.now()+(holdMs||4000);
+}
+
+function setAiModelPickerOpen(open){
+  aiModelPickerOpen=!!open;
+  var picker=byId('aiModelPicker');
+  var toggle=byId('aiModelToggle');
+  if(!picker||!toggle)return;
+  picker.hidden=!aiModelPickerOpen;
+  toggle.setAttribute('aria-expanded',aiModelPickerOpen?'true':'false');
 }
 
 /* 轮询专用：锁定窗口内不覆盖状态栏。 */
@@ -2595,6 +2662,8 @@ function load(){
     clearPollFailure();
     TEXT_FIELDS.forEach(function(id){applyField(id,cfg[id]);});
     if(!dirty.outputMode)applyField('outputMode',cfg.outputMode);
+    if(!dirty.enableGeneratedUiRaycastTargets)applyField('enableGeneratedUiRaycastTargets',cfg.enableGeneratedUiRaycastTargets);
+    if(!dirty.aiOrganizeAnchors)applyField('aiOrganizeAnchors',cfg.aiOrganizeAnchors);
     if(!dirty.autoCropNineSlice)applyField('autoCropNineSlice',cfg.autoCropNineSlice);
     updateNineSliceBanner();
     if(!dirty.showNineSliceMarkers)applyField('showNineSliceMarkers',cfg.showNineSliceMarkers);
@@ -2624,6 +2693,8 @@ function payload(){
   var body={};
   TEXT_FIELDS.forEach(function(id){var f=byId(id);if(f)body[id]=f.value;});
   body.outputMode=parseInt(byId('outputMode').value,10);
+  body.enableGeneratedUiRaycastTargets=!!byId('enableGeneratedUiRaycastTargets').checked;
+  body.aiOrganizeAnchors=!!byId('aiOrganizeAnchors').checked;
   body.autoCropNineSlice=!!byId('autoCropNineSlice').checked;
   body.showNineSliceMarkers=!!byId('showNineSliceMarkers').checked;
   var port=parseInt(byId('previewServerPort').value,10);
@@ -3035,6 +3106,7 @@ document.addEventListener('mousedown',function(ev){
 });
 
 byId('save').addEventListener('click',function(){post(payload(),'配置已同步到 Unity',byId('save'));});
+byId('aiModelToggle').addEventListener('click',function(){setAiModelPickerOpen(!aiModelPickerOpen);});
 byId('aiProvider').addEventListener('change',function(){
   dirty.aiProvider=true;refreshDetailVisibility();markSelectedCard();
   setFetchNote('','');
@@ -3045,6 +3117,8 @@ byId('aiProvider').addEventListener('change',function(){
 comboSetup('aiModel','aiModelPanel');
 comboSetup('aiEffort','aiEffortPanel');
 byId('outputMode').addEventListener('change',function(){dirty.outputMode=true;});
+byId('enableGeneratedUiRaycastTargets').addEventListener('change',function(){dirty.enableGeneratedUiRaycastTargets=true;});
+byId('aiOrganizeAnchors').addEventListener('change',function(){dirty.aiOrganizeAnchors=true;});
 byId('autoCropNineSlice').addEventListener('change',function(){
   dirty.autoCropNineSlice=true;updateNineSliceBanner();
 });

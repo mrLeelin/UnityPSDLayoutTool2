@@ -167,7 +167,8 @@ namespace PsdLayoutTool2
             string hierarchySnapshotFingerprint = "",
             string hierarchySnapshotFullPath = "",
             IReadOnlyList<string> assetRenameSourcePaths = null,
-            string sourcePsdInfo = "")
+            string sourcePsdInfo = "",
+            bool organizeAnchors = false)
         {
             this.projectRoot = projectRoot ?? string.Empty;
             this.sourcePsdAssetPath = sourcePsdAssetPath ?? string.Empty;
@@ -180,6 +181,7 @@ namespace PsdLayoutTool2
             this.hierarchySnapshotFingerprint = hierarchySnapshotFingerprint ?? string.Empty;
             this.hierarchySnapshotFullPath = hierarchySnapshotFullPath ?? string.Empty;
             this.sourcePsdInfo = sourcePsdInfo ?? string.Empty;
+            this.organizeAnchors = organizeAnchors;
             hasAuthoritativeAssetRenameSourcePaths = assetRenameSourcePaths != null;
             this.assetRenameSourcePaths = (assetRenameSourcePaths ?? Array.Empty<string>())
                 .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -212,6 +214,7 @@ namespace PsdLayoutTool2
         internal readonly string hierarchySnapshotFingerprint;
         internal readonly string hierarchySnapshotFullPath;
         internal readonly string sourcePsdInfo;
+        internal readonly bool organizeAnchors;
         internal readonly bool hasAuthoritativeAssetRenameSourcePaths;
         internal readonly IReadOnlyList<string> assetRenameSourcePaths;
         internal readonly IReadOnlyList<PsdHierarchyComponentFamilyCandidate> componentFamilyCandidates;
@@ -278,6 +281,7 @@ namespace PsdLayoutTool2
             var builder = new StringBuilder();
             builder.AppendLine("You are assisting with a Unity Prefab hierarchy cleanup from inside the Unity Editor.");
             builder.AppendLine(PsdHierarchyChatClient.SingleAgentCleanupContract);
+            builder.AppendLine(PsdHierarchyChatClient.AnchorOrganizationInstruction(organizeAnchors));
             builder.AppendLine("The user supplied the exact cleanup skill and target Prefab below.");
             builder.AppendLine("Inspect first and provide a complete, reviewable plan. Do not claim to have edited a local asset: the Unity chat window performs the approved update.");
             builder.AppendLine("Do not invoke PowerShell, Python, Unity runners, or file-writing tools yourself.");
@@ -630,6 +634,7 @@ namespace PsdLayoutTool2
                 CollectAssetRenameSourcePaths(prefabAssetPath);
 
             string sourcePsdInfo = BuildSourcePsdInfo(projectRoot, sourcePsdAssetPath);
+            bool organizeAnchors = PsdLayoutProjectSettings.instance.ResolveHierarchyAiSettings().organizeAnchors;
 
             context = new PsdHierarchyChatContext(
                 projectRoot,
@@ -643,7 +648,8 @@ namespace PsdLayoutTool2
                 snapshotFingerprint,
                 hierarchySnapshotFullPath,
                 assetRenameSourcePaths,
-                sourcePsdInfo);
+                sourcePsdInfo,
+                organizeAnchors);
             error = string.Empty;
             return true;
         }
@@ -2021,6 +2027,13 @@ namespace PsdLayoutTool2
             "WORKFLOW BINDING: every plan must also include targetPrefabAssetPath, selectionNodeIds (node:<id> only), operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion. These fields bind the plan to the current selection review and are revalidated immediately before apply.";
         internal const string SingleAgentCleanupContract =
             "SINGLE-AGENT CLEANUP: the primary agent must perform every review, planning, extraction and verification stage itself. Do not spawn, resume or delegate to subagents, teams or external advisor agents, including read-only review. This restriction overrides general workspace delegation permission.";
+
+        internal static string AnchorOrganizationInstruction(bool organizeAnchors)
+        {
+            return organizeAnchors
+                ? "锚点整理开关已开启：把 RectTransform 的 anchorMin、anchorMax、pivot、offset 和父子坐标关系纳入本次审查；只提出有几何证据且不会破坏布局组件、动画、绑定或嵌套 Prefab 的调整。"
+                : "锚点整理开关已关闭：本次只整理层级、命名和已允许的组件/资源操作，保留所有现有 RectTransform 锚点、pivot、offset 和相关布局值，不提出或执行锚点调整。";
+        }
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
             "1. 结合 PSD 与 Prefab 的完整层级、节点几何、组件、同级顺序和重复结构，说明当前结构的主要问题。\n" +
@@ -2123,6 +2136,7 @@ namespace PsdLayoutTool2
             var builder = new StringBuilder();
             builder.AppendLine("You are reviewing one existing Unity Prefab hierarchy from inside a Unity Editor tool.");
             builder.AppendLine(SingleAgentCleanupContract);
+            builder.AppendLine(AnchorOrganizationInstruction(context.organizeAnchors));
             builder.AppendLine("Use the Read tool to inspect exactly these three files before answering:");
             builder.AppendLine("1. Cleanup skill: " + context.skillFullPath);
             builder.AppendLine("2. Executable plan format: " + PsdHierarchyChatContextBuilder.PlanFormatFullPath(context.projectRoot));
@@ -2655,6 +2669,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("Use skill prefab-hierarchy-cleanup. Read these local files:");
             builder.AppendLine("全部使用中文输出。");
             builder.AppendLine(SingleAgentCleanupContract);
+            builder.AppendLine(AnchorOrganizationInstruction(context.organizeAnchors));
             builder.AppendLine("Skill: " + normalizedSkillPath);
             builder.AppendLine("Plan format: " + planFormatFullPath);
             builder.AppendLine("Prefab: " + targetPrefabFullPath);

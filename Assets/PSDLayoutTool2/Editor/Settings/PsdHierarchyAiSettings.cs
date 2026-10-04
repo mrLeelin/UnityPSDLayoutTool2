@@ -1062,18 +1062,21 @@ namespace PsdLayoutTool2
             PsdHierarchyAiProvider provider,
             string customEndpoint,
             string customModel,
-            string reasoningEffort)
+            string reasoningEffort,
+            bool organizeAnchors = false)
         {
             this.provider = provider;
             this.customEndpoint = customEndpoint ?? string.Empty;
             this.customModel = customModel ?? string.Empty;
             this.reasoningEffort = reasoningEffort ?? string.Empty;
+            this.organizeAnchors = organizeAnchors;
         }
 
         internal readonly PsdHierarchyAiProvider provider;
         internal readonly string customEndpoint;
         internal readonly string customModel;
         internal readonly string reasoningEffort;
+        internal readonly bool organizeAnchors;
 
         /// <summary>是否已选择 AI 模型。未选择时 AI 整理不可用。</summary>
         internal bool isConfigured => provider != PsdHierarchyAiProvider.None;
@@ -1160,6 +1163,8 @@ namespace PsdLayoutTool2
     [Serializable]
     internal sealed class PsdHierarchyAiSettings
     {
+        internal const bool DefaultOrganizeAnchors = false;
+
         [SerializeField]
         private PsdHierarchyAiProvider provider = PsdHierarchyAiProvider.None;
 
@@ -1177,9 +1182,17 @@ namespace PsdLayoutTool2
         [SerializeField]
         private string customEndpoint = string.Empty;
 
+        [SerializeField]
+        private bool organizeAnchors = DefaultOrganizeAnchors;
+
         internal PsdHierarchyAiSettingsSnapshot Resolve()
         {
-            return new PsdHierarchyAiSettingsSnapshot(provider, customEndpoint, customModel, reasoningEffort);
+            return new PsdHierarchyAiSettingsSnapshot(
+                provider,
+                customEndpoint,
+                customModel,
+                reasoningEffort,
+                organizeAnchors);
         }
 
         internal bool Set(
@@ -1210,6 +1223,17 @@ namespace PsdLayoutTool2
             customEndpoint = candidate.customEndpoint;
             customModel = candidate.customModel;
             reasoningEffort = candidate.reasoningEffort;
+            return true;
+        }
+
+        internal bool SetAnchorOrganization(bool enabled)
+        {
+            if (organizeAnchors == enabled)
+            {
+                return false;
+            }
+
+            organizeAnchors = enabled;
             return true;
         }
 
