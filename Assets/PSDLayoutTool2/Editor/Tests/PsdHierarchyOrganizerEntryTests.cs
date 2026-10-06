@@ -159,6 +159,55 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ExternalIncrementalPromptUsesTheSameAdjustmentContractAsAiOrganize()
+        {
+            var context = new PsdHierarchyChatContext(
+                "C:/Project",
+                SourceAssetPath,
+                targetPrefabPath,
+                "C:/Project/Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/SKILL.md",
+                string.Empty,
+                string.Empty,
+                hierarchySnapshotFullPath: "C:/Project/Library/current.snapshot.json");
+            context.incrementalReview = true;
+
+            string prompt = PsdHierarchyOrganizerEntry.BuildExternalIncrementalSessionPrompt(
+                context,
+                "C:/Project/Library/PsdHierarchyTerminal/incremental.plan.json",
+                "C:/Project/Library/PsdHierarchyTerminal/incremental.review.md",
+                "C:/Project/Library/PsdHierarchyTerminal/incremental.apply");
+
+            Assert.That(prompt, Does.Contain("先只问用户"));
+            Assert.That(prompt, Does.Contain("operationScope.kind 必须是 incremental_adjustment"));
+            Assert.That(prompt, Does.Contain("This is an analysis and incremental plan session"));
+            Assert.That(prompt, Does.Contain("incremental.plan.json"));
+            Assert.That(prompt, Does.Contain("incremental.review.md"));
+            Assert.That(prompt, Does.Contain("incremental.apply"));
+            Assert.That(prompt, Does.Contain("incremental.apply-result.json"));
+            Assert.That(prompt, Does.Contain("Do not repeat the initial full cleanup"));
+        }
+
+        [Test]
+        public void IncrementalPromptCarriesTheEnabledAnchorSkillPath()
+        {
+            var context = new PsdHierarchyChatContext(
+                "C:/Project",
+                SourceAssetPath,
+                targetPrefabPath,
+                "C:/Project/Assets/UnityPSDLayoutTool2/.agents/skills/prefab-hierarchy-cleanup/SKILL.md",
+                string.Empty,
+                string.Empty,
+                hierarchySnapshotFullPath: "C:/Project/Library/current.snapshot.json",
+                organizeAnchors: true,
+                anchorSkillFullPath: "C:/Project/Assets/UnityPSDLayoutTool2/.agents/skills/recttransform-anchor-cleanup/SKILL.md");
+
+            string prompt = PsdHierarchyOrganizerEntry.BuildIncrementalConversationPrompt(context);
+
+            Assert.That(prompt, Does.Contain("recttransform-anchor-cleanup/SKILL.md"));
+            Assert.That(prompt, Does.Contain("不能伪造字段"));
+        }
+
+        [Test]
         public void IncrementalPlanRequiresARequestedChangeAndRealOperations()
         {
             var plan = new JObject

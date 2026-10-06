@@ -376,6 +376,10 @@ namespace PsdLayoutTool2
                 "当前快照：" + PsdHierarchyChatClient.ToPortableFullPath(context.hierarchySnapshotFullPath) + "\n" +
                 "当前 Prefab：" + root + "/" + context.targetPrefabAssetPath + "\n" +
                 "计划格式和执行规则：" + skill + "；只在开始编写计划时阅读，并以本增量会话约束优先。\n" +
+                (context.organizeAnchors
+                    ? "锚点整理已开启：同时阅读 " + PsdHierarchyChatClient.ToPortableFullPath(context.anchorSkillFullPath) +
+                      "，按其证据规则审查 RectTransform；当前 v2 计划没有可执行的独立锚点操作，不能伪造字段或声称已修改锚点。\n"
+                    : "锚点整理已关闭：保留所有现有 RectTransform 锚点、pivot、位置、尺寸和 offsets，不提出锚点调整。\n") +
                 "每轮审查只覆盖用户要求的变化及其必要依赖。计划文件仍是完整 v2 JSON 文档，" +
                 "但操作数组只包含本轮差异；operationScope.kind 必须是 incremental_adjustment，" +
                 "operationScope.requestedChange 必须记录用户明确提出的修改，selectionNodeIds 指向受影响的当前节点。" +
@@ -795,13 +799,24 @@ namespace PsdLayoutTool2
             try
             {
                 if (!PsdHierarchyChatContextBuilder.TryCreate(
+                    sourcePsdAssetPath,
+                    targetPrefabPath,
+                    out PsdHierarchyChatContext context,
+                    out error))
+                {
+                    return false;
+                }
+
+                if (!TryResolveIncrementalReview(
                         sourcePsdAssetPath,
                         targetPrefabPath,
-                        out PsdHierarchyChatContext context,
+                        out bool incrementalReview,
                         out error))
                 {
                     return false;
                 }
+
+                context.incrementalReview = incrementalReview;
 
                 // 与内置「AI整理」终端共用同一个目录；Apply 哨兵监听会读 session.json 并自动应用。
                 string outputDirectory = Path.Combine(context.projectRoot, "Library", "PsdHierarchyTerminal");
@@ -818,19 +833,26 @@ namespace PsdLayoutTool2
                 string summaryFullPath = PsdHierarchyTerminalConversationStore.BuildSummaryPath(outputDirectory, sessionId);
                 WriteTerminalSession(sessionId, sourcePsdAssetPath, targetPrefabPath, planFullPath, reviewFullPath,
                     context.hierarchySnapshotFingerprint,
+                    incrementalReview: incrementalReview,
                     conversationPath: conversationFullPath,
                     transcriptPath: transcriptFullPath,
                     summaryPath: summaryFullPath);
                 PsdHierarchyTerminalConversationStore.AppendEvent(
                     conversationFullPath,
-                    "external_prompt_created",
+                    incrementalReview ? "external_incremental_prompt_created" : "external_prompt_created",
                     state: "Created");
 
-                string prompt = PsdHierarchyChatClient.BuildExternalSessionPrompt(
-                    context,
-                    planFullPath,
-                    reviewFullPath,
-                    applyFullPath);
+                string prompt = incrementalReview
+                    ? BuildExternalIncrementalSessionPrompt(
+                        context,
+                        planFullPath,
+                        reviewFullPath,
+                        applyFullPath)
+                    : PsdHierarchyChatClient.BuildExternalSessionPrompt(
+                        context,
+                        planFullPath,
+                        reviewFullPath,
+                        applyFullPath);
                 prompt += PsdHierarchyTerminalConversationStore.BuildRecoveryPrompt(
                     conversationFullPath,
                     transcriptFullPath,
@@ -853,6 +875,52 @@ namespace PsdLayoutTool2
                 error = "复制提示词失败：" + exception.Message;
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 外部桌面 AI 的增量会话提示词，与内置 AI整理的增量分支保持同一套约束，
+        /// 只是把计划、复核、Apply 和回执路径补成绝对路径，方便从 Desktop 粘贴执行。
+        /// </summary>
+        internal static string BuildExternalIncrementalSessionPrompt(
+            PsdHierarchyChatContext context,
+            string planFullPath,
+            string reviewFullPath,
+            string applyFullPath)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+            if (string.IsNullOrWhiteSpace(planFullPath))
+                throw new ArgumentException("外部增量会话的计划输出路径不能为空。", nameof(planFullPath));
+            if (string.IsNullOrWhiteSpace(reviewFullPath))
+                throw new ArgumentException("外部增量会话的复核输出路径不能为空。", nameof(reviewFullPath));
+            if (string.IsNullOrWhiteSpace(applyFullPath))
+                throw new ArgumentException("外部增量会话的 Apply 哨兵路径不能为空。", nameof(applyFullPath));
+
+            string projectRoot = PsdHierarchyChatClient.ToPortableFullPath(
+                context.projectRoot.TrimEnd('/', '\\'));
+            string sourcePsdPath = PsdHierarchyChatClient.ToPortableFullPath(
+                projectRoot + "/" + context.sourcePsdAssetPath.TrimStart('/', '\\'));
+            string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyFullPath);
+            var builder = new StringBuilder(
+                BuildIncrementalConversationPrompt(context));
+            builder.AppendLine();
+            builder.AppendLine("===== EXTERNAL INCREMENTAL SESSION CONTRACT =====");
+            builder.AppendLine("Unity project root: " + projectRoot);
+            builder.AppendLine("Source PSD: " + sourcePsdPath);
+            builder.AppendLine("This is an analysis and incremental plan session started outside Unity. Do not modify Unity assets and do not claim that any asset was changed.");
+            builder.AppendLine("Use these exact absolute paths; never resolve them against the current working directory:");
+            builder.AppendLine("Plan JSON: " + PsdHierarchyChatClient.ToPortableFullPath(planFullPath));
+            builder.AppendLine("Review Markdown: " + PsdHierarchyChatClient.ToPortableFullPath(reviewFullPath));
+            builder.AppendLine("Apply sentinel: " + PsdHierarchyChatClient.ToPortableFullPath(applyFullPath));
+            builder.AppendLine("Apply result: " + PsdHierarchyChatClient.ToPortableFullPath(resultPath));
+            builder.AppendLine("Write the complete version 2 incremental JSON plan and Chinese review before asking for approval.");
+            builder.AppendLine(BuildTerminalSessionContract(
+                planFullPath,
+                reviewFullPath,
+                applyFullPath,
+                resultPath,
+                incrementalReview: true));
+            builder.AppendLine("After explicit approval, write the JSON approval record to the Apply sentinel and poll the Apply result file until Unity reports applied, rejected, partial, or uncertain.");
+            return builder.ToString();
         }
 
         /// <summary>

@@ -168,7 +168,9 @@ namespace PsdLayoutTool2
             string hierarchySnapshotFullPath = "",
             IReadOnlyList<string> assetRenameSourcePaths = null,
             string sourcePsdInfo = "",
-            bool organizeAnchors = false)
+            bool organizeAnchors = false,
+            string anchorSkillFullPath = "",
+            string anchorSkillContent = "")
         {
             this.projectRoot = projectRoot ?? string.Empty;
             this.sourcePsdAssetPath = sourcePsdAssetPath ?? string.Empty;
@@ -182,6 +184,8 @@ namespace PsdLayoutTool2
             this.hierarchySnapshotFullPath = hierarchySnapshotFullPath ?? string.Empty;
             this.sourcePsdInfo = sourcePsdInfo ?? string.Empty;
             this.organizeAnchors = organizeAnchors;
+            this.anchorSkillFullPath = anchorSkillFullPath ?? string.Empty;
+            this.anchorSkillContent = anchorSkillContent ?? string.Empty;
             hasAuthoritativeAssetRenameSourcePaths = assetRenameSourcePaths != null;
             this.assetRenameSourcePaths = (assetRenameSourcePaths ?? Array.Empty<string>())
                 .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -215,6 +219,8 @@ namespace PsdLayoutTool2
         internal readonly string hierarchySnapshotFullPath;
         internal readonly string sourcePsdInfo;
         internal readonly bool organizeAnchors;
+        internal readonly string anchorSkillFullPath;
+        internal readonly string anchorSkillContent;
         internal readonly bool hasAuthoritativeAssetRenameSourcePaths;
         internal readonly IReadOnlyList<string> assetRenameSourcePaths;
         internal readonly IReadOnlyList<PsdHierarchyComponentFamilyCandidate> componentFamilyCandidates;
@@ -319,6 +325,7 @@ namespace PsdLayoutTool2
                 builder.AppendLine("The first confirmable response must use Markdown tables for grouping and naming, child Prefab extraction, preserved or ambiguous content, and verification. In the review text you may still point out flat sibling clusters and local-selection work as pending follow-up; containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions are not executable in this initial plan and must never appear there.");
             }
             builder.AppendLine("Never put a hierarchy path or an invented node id anywhere in the plan: every existing node reference must be an exact node:<id> taken from the authoritative snapshot.");
+            builder.AppendLine(PsdHierarchyChatClient.AnchorPlanInstruction(organizeAnchors));
             builder.AppendLine("Return an auditable review, not private chain-of-thought. In Simplified Chinese, use Markdown tables for target, grouping and naming, child Prefab extraction, preservation, and verification. Ground every claim in observable hierarchy, geometry, component, sibling-order, or repeated-structure evidence. Ask for exactly one confirmation of the complete reviewed workflow.");
             builder.AppendLine("Source PSD: " + sourcePsdAssetPath);
             builder.AppendLine("Target Prefab: " + targetPrefabAssetPath);
@@ -341,6 +348,13 @@ namespace PsdLayoutTool2
             builder.AppendLine("===== BEGIN prefab-hierarchy-cleanup/SKILL.md =====");
             builder.AppendLine(skillContent);
             builder.AppendLine("===== END prefab-hierarchy-cleanup/SKILL.md =====");
+            if (organizeAnchors && !string.IsNullOrWhiteSpace(anchorSkillContent))
+            {
+                builder.AppendLine();
+                builder.AppendLine("===== BEGIN recttransform-anchor-cleanup/SKILL.md =====");
+                builder.AppendLine(anchorSkillContent);
+                builder.AppendLine("===== END recttransform-anchor-cleanup/SKILL.md =====");
+            }
             if (!string.IsNullOrWhiteSpace(planFormatContent))
             {
                 builder.AppendLine();
@@ -563,6 +577,9 @@ namespace PsdLayoutTool2
         internal const string DefaultPlanFormatRelativePath =
             ".agents/skills/prefab-hierarchy-cleanup/references/plan-format.md";
 
+        internal const string AnchorSkillRelativePath =
+            ".agents/skills/recttransform-anchor-cleanup/SKILL.md";
+
         private const string LegacyPackageRootRelativePath = "Assets/UnityPSDLayoutTool2";
         private const string ScriptAssetPathMarker = "/Assets/PSDLayoutTool2/";
         private const string ReusableItemFallbackName = "ReusableItem";
@@ -606,6 +623,24 @@ namespace PsdLayoutTool2
                 return false;
             }
 
+            bool organizeAnchors = PsdLayoutProjectSettings.instance.ResolveHierarchyAiSettings().organizeAnchors;
+            string anchorSkillFullPath = string.Empty;
+            string anchorSkillContent = string.Empty;
+            if (organizeAnchors && !TryResolvePackageFilePath(
+                    projectRoot,
+                    FindSourceScriptAssetPath(),
+                    AnchorSkillRelativePath,
+                    out anchorSkillFullPath))
+            {
+                error = "RectTransform 锚点整理技能不存在。请确认 Unity PSD Layout Tool 2 已完整安装：" + anchorSkillFullPath;
+                return false;
+            }
+
+            if (organizeAnchors && !TryReadContextFile(anchorSkillFullPath, "RectTransform 锚点整理技能", out anchorSkillContent, out error))
+            {
+                return false;
+            }
+
             string planFormatFullPath = Path.Combine(
                 Path.GetDirectoryName(skillFullPath),
                 "references",
@@ -634,8 +669,6 @@ namespace PsdLayoutTool2
                 CollectAssetRenameSourcePaths(prefabAssetPath);
 
             string sourcePsdInfo = BuildSourcePsdInfo(projectRoot, sourcePsdAssetPath);
-            bool organizeAnchors = PsdLayoutProjectSettings.instance.ResolveHierarchyAiSettings().organizeAnchors;
-
             context = new PsdHierarchyChatContext(
                 projectRoot,
                 NormalizeAssetPath(sourcePsdAssetPath),
@@ -649,7 +682,9 @@ namespace PsdLayoutTool2
                 hierarchySnapshotFullPath,
                 assetRenameSourcePaths,
                 sourcePsdInfo,
-                organizeAnchors);
+                organizeAnchors,
+                anchorSkillFullPath,
+                anchorSkillContent);
             error = string.Empty;
             return true;
         }
@@ -2031,8 +2066,15 @@ namespace PsdLayoutTool2
         internal static string AnchorOrganizationInstruction(bool organizeAnchors)
         {
             return organizeAnchors
-                ? "锚点整理开关已开启：把 RectTransform 的 anchorMin、anchorMax、pivot、offset 和父子坐标关系纳入本次审查；只提出有几何证据且不会破坏布局组件、动画、绑定或嵌套 Prefab 的调整。"
-                : "锚点整理开关已关闭：本次只整理层级、命名和已允许的组件/资源操作，保留所有现有 RectTransform 锚点、pivot、offset 和相关布局值，不提出或执行锚点调整。";
+                ? "锚点整理开关已开启：读取 recttransform-anchor-cleanup 技能，把 anchorMin、anchorMax、pivot、anchoredPosition、sizeDelta、offset 和父子坐标关系纳入审查；按几何证据区分 point、edge、proportional、stretch、preserve 和 insufficient-evidence，只提出不会破坏当前视觉、布局组件、动画、绑定或嵌套 Prefab 的候选。"
+                : "锚点整理开关已关闭：本次只整理层级、命名和已允许的组件/资源操作，保留所有现有 RectTransform 的 anchorMin、anchorMax、pivot、anchoredPosition、sizeDelta、offsetMin、offsetMax 和相关布局值，不提出或执行锚点调整。";
+        }
+
+        internal static string AnchorPlanInstruction(bool organizeAnchors)
+        {
+            return organizeAnchors
+                ? "锚点计划约束：当前 version 2 计划没有独立的 RectTransform 锚点操作数组；不要发明字段、把锚点字段塞入无关操作，或声称 Apply 已修改锚点。把每个候选的 node:<id>、当前值、建议值、几何证据、父级关系和风险写入评审与 verification；除非执行器已有明确支持，否则锚点调整只作为 review/verification 要求，实际 Prefab 不因该部分改变。"
+                : "锚点计划约束：锚点整理未启用，计划中不得出现锚点调整建议或伪造的锚点操作；保留快照中的所有 RectTransform 布局值。";
         }
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
@@ -2041,6 +2083,7 @@ namespace PsdLayoutTool2
             "3. 对重复视觉单元按整体分组，不要把背景、文本、图标、锁等平铺到按类型命名的大容器中。\n" +
             "4. 标出无法安全推断、存在序列化引用风险或嵌套 Prefab 边界的节点，并说明保持不动的原因。\n" +
             "5. 列出应用前必须验证的布局、组件、引用、激活状态和资源命名不变量。\n" +
+            "6. 如果锚点整理开关开启，按 recttransform-anchor-cleanup 技能逐个列出 RectTransform 的当前值、建议值、几何证据和风险；如果关闭，明确保留现有锚点，不要提出锚点调整。\n" +
             "第一次可确认回复必须使用 Markdown 表格，不要只写段落，也不要输出原始内部推理：\n" +
             "1. 目标表：目标 Prefab、原地输出路径、快照 fingerprint。\n" +
             "2. 分组与命名表：Wrapper/名称、父节点 node:<id>、有序成员、Sibling 顺序、观察证据、推断或未知、风险。\n" +
@@ -2073,6 +2116,10 @@ namespace PsdLayoutTool2
             builder.AppendLine(PrefabRootNameContract);
             builder.AppendLine(VerifyFieldContract);
             builder.AppendLine(PrefabNameContract);
+            if (context != null)
+            {
+                builder.AppendLine(AnchorPlanInstruction(context.organizeAnchors));
+            }
             builder.AppendLine("A reference beginning with @ must be exactly @wrapperId; never write @wrapperId/Child. Every existing-node reference must be node:<id> and must use only node IDs listed in the authoritative snapshot already present in this session. Re-audit every existing-node reference across all operations before returning. A missing ID proves the old operation is invalid: Remove an operation when it cannot be replaced with an exact observed node ID; never invent a node ID, reconstruct one from a name, or emit a raw hierarchy path. Do not ask the user to resend, retry, or confirm.");
             builder.AppendLine("CRITICAL: Every emptyContainerRemovals entry must reference a container that will be COMPLETELY EMPTY after all moves execute. Before adding a container to emptyContainerRemovals, verify that EVERY child node under that container has a corresponding move operation that relocates it elsewhere. If any child remains unmoved, the container is not empty and must NOT be in emptyContainerRemovals. When the error says 'Container is not empty after planned moves', it means you listed a container for removal that still has children—either move ALL its children first, or remove that container from emptyContainerRemovals.");
             builder.AppendLine("CRITICAL: Keep containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions and crossParentPrefabExtractions as EMPTY arrays. The current Unity executor runs wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions, stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents, and it refuses any other non-empty array before a write; repeating an unsupported operation in the replacement plan cannot succeed. Report the blocked work in the review text instead. Keep every reviewed postGroupingExtractionIntents entry byte-identical: its post-grouping paths and states are resolved against a refreshed snapshot after the hierarchy stage is saved, so do not rewrite them into node:<id> references.");
@@ -2137,10 +2184,15 @@ namespace PsdLayoutTool2
             builder.AppendLine("You are reviewing one existing Unity Prefab hierarchy from inside a Unity Editor tool.");
             builder.AppendLine(SingleAgentCleanupContract);
             builder.AppendLine(AnchorOrganizationInstruction(context.organizeAnchors));
-            builder.AppendLine("Use the Read tool to inspect exactly these three files before answering:");
+            builder.AppendLine("Use the Read tool to inspect exactly these files before answering:");
             builder.AppendLine("1. Cleanup skill: " + context.skillFullPath);
-            builder.AppendLine("2. Executable plan format: " + PsdHierarchyChatContextBuilder.PlanFormatFullPath(context.projectRoot));
-            builder.AppendLine("3. Authoritative Prefab node snapshot: " + context.hierarchySnapshotFullPath);
+            int fileNumber = 2;
+            if (context.organizeAnchors && !string.IsNullOrWhiteSpace(context.anchorSkillFullPath))
+            {
+                builder.AppendLine(fileNumber++ + ". RectTransform anchor skill: " + context.anchorSkillFullPath);
+            }
+            builder.AppendLine(fileNumber++ + ". Executable plan format: " + PsdHierarchyChatContextBuilder.PlanFormatFullPath(context.projectRoot));
+            builder.AppendLine(fileNumber + ". Authoritative Prefab node snapshot: " + context.hierarchySnapshotFullPath);
             builder.AppendLine("Do not use any other tool. Do not edit, create, rename, or delete any file.");
             builder.AppendLine("Return a concise, reviewable hierarchy-cleanup plan in Simplified Chinese using Markdown tables for target, grouping and naming, child Prefab extraction, preservation, and verification. Do not return prose-only sections.");
             builder.AppendLine("After those tables, return exactly one complete UTF-8 JSON plan in a fenced ```json code block. The JSON is an executable contract, not illustrative pseudo-JSON.");
@@ -2153,6 +2205,7 @@ namespace PsdLayoutTool2
             builder.AppendLine(PrefabRootNameContract);
             builder.AppendLine(VerifyFieldContract);
             builder.AppendLine(PrefabNameContract);
+            builder.AppendLine(AnchorPlanInstruction(context.organizeAnchors));
             builder.AppendLine("EXECUTABLE OPERATIONS: wrappers, moves, renames, tightBounds, emptyContainerRemovals, componentExtractions (with componentFamilyDecisions mode=component), stateComponentExtractions, variantComponentExtractions, statefulComponentExtractions, textureRenames, spriteAtlasRenames and postGroupingExtractionIntents (executed automatically as a second stage after the grouping is saved and the snapshot is refreshed) are executable. Everything else must stay empty: containmentResolutions, flatSiblingResolutions, selectedPrefabExtractions, crossParentPrefabExtractions. Unity refuses a non-empty unsupported array before any write.");
             builder.AppendLine("Keep prefabName present for schema stability; this version never derives it, and it must not be used to hide conflicting toName values. Every postGroupingExtractionIntents entry uses post-grouping hierarchy paths in templatePath and instances[].path, never node:<id>.");
             builder.AppendLine("The executable plan-format file is authoritative for field names and object shapes; where it still describes an operation as unsupported, this instruction wins.");
@@ -2670,6 +2723,10 @@ namespace PsdLayoutTool2
             builder.AppendLine("全部使用中文输出。");
             builder.AppendLine(SingleAgentCleanupContract);
             builder.AppendLine(AnchorOrganizationInstruction(context.organizeAnchors));
+            if (context.organizeAnchors && !string.IsNullOrWhiteSpace(context.anchorSkillFullPath))
+            {
+                builder.AppendLine("RectTransform anchor skill: " + ToPortableFullPath(context.anchorSkillFullPath));
+            }
             builder.AppendLine("Skill: " + normalizedSkillPath);
             builder.AppendLine("Plan format: " + planFormatFullPath);
             builder.AppendLine("Prefab: " + targetPrefabFullPath);
@@ -2684,6 +2741,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("- Distinguish observed facts, inferences, and unknowns. Cross-check Prefab and snapshot; cite exact node:<id> references for important conclusions.");
             builder.AppendLine("- If evidence conflicts or intent is ambiguous before the review, ask focused questions. Never guess.");
             builder.AppendLine("- Preserve layout, components, bindings, generated assets, and unrelated content. Review all componentFamilyCandidates and flatSiblingFindings.");
+            builder.AppendLine("- When anchor organization is enabled, read recttransform-anchor-cleanup and include anchor candidates in the review and verification tables. The current v2 plan cannot execute anchor changes, so never invent an anchor operation or claim an anchor mutation; when disabled, preserve all RectTransform values.");
             builder.AppendLine("- Efficiency rule: the authoritative snapshot is always complete. Rank image reads by evidence, but never skip an image solely because of a semantic name, narrow size, or background size. Escalate to image or render evidence for conflicts, overlapping candidates, state branches, transparency questions, or incomplete visual-unit closure; record every skip reason and keep before/after visual audit mandatory.");
             builder.AppendLine("- Efficiency rule: after local lint and simulation both pass against the same snapshot, publish the draft by byte-for-byte copy with hash verification. Do not regenerate equivalent JSON or Markdown after validation.");
             builder.AppendLine("- Efficiency rule: run local lint before simulation and stop on lint failure. Complete SKILL.md and plan-format.md remain the default; summary-only reading is allowed only for a proven simple hierarchy-only task, with automatic full-document fallback whenever extraction, state, variant, asset rename, nested Prefab, binding, or unresolved evidence is present.");

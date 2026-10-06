@@ -1,0 +1,7 @@
+interface:
+  display_name: "RectTransform Anchor Cleanup"
+  short_description: "Review Unity UI anchors without breaking layout"
+  default_prompt: "Use $recttransform-anchor-cleanup to review these RectTransform anchors, preserve the current visual bounds, and produce an evidence-based plan."
+
+policy:
+  allow_implicit_invocation: true

@@ -33,6 +33,16 @@ namespace PsdLayoutTool2.Tests
                 Assert.That(context.sourcePsdAssetPath, Is.EqualTo(SourcePsdPath));
                 Assert.That(context.targetPrefabAssetPath, Is.EqualTo(TargetPrefabPath));
                 Assert.That(context.skillContent, Does.Contain("prefab-hierarchy-cleanup"));
+                if (context.organizeAnchors)
+                {
+                    Assert.That(context.anchorSkillFullPath, Does.EndWith("recttransform-anchor-cleanup\\SKILL.md").Or.EndWith("recttransform-anchor-cleanup/SKILL.md"));
+                    Assert.That(context.anchorSkillContent, Does.Contain("RectTransform Anchor Cleanup"));
+                }
+                else
+                {
+                    Assert.That(context.anchorSkillFullPath, Is.Empty);
+                    Assert.That(context.anchorSkillContent, Is.Empty);
+                }
                 Assert.That(context.prefabContent, Does.Contain("%YAML"));
                 Assert.That(context.BuildInstructions(), Does.Contain("===== BEGIN TARGET PREFAB NODE SNAPSHOT ====="));
                 Assert.That(context.BuildInstructions(), Does.Contain("ExampleView"));
@@ -484,6 +494,41 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void AnchorPromptContractIsExplicitAndPlanSafe()
+        {
+            Assert.That(
+                PsdHierarchyChatClient.AnchorOrganizationInstruction(true),
+                Does.Contain("point").And.Contain("stretch").And.Contain("insufficient-evidence"));
+            Assert.That(
+                PsdHierarchyChatClient.AnchorPlanInstruction(true),
+                Does.Contain("没有独立的 RectTransform 锚点操作数组").And.Contain("不要发明字段"));
+            Assert.That(
+                PsdHierarchyChatClient.AnchorPlanInstruction(false),
+                Does.Contain("不得出现锚点调整建议").And.Contain("保留快照中的所有 RectTransform 布局值"));
+        }
+
+        [Test]
+        public void EnabledAnchorContextInjectsTheCompanionSkillIntoApiInstructions()
+        {
+            var context = new PsdHierarchyChatContext(
+                "E:/Project/Demo/monsterhunter",
+                "Assets/UI/Source.psd",
+                "Assets/UI/ExampleView.prefab",
+                "E:/Project/Demo/monsterhunter/.agents/skills/prefab-hierarchy-cleanup/SKILL.md",
+                "prefab-hierarchy-cleanup",
+                "Prefab",
+                organizeAnchors: true,
+                anchorSkillFullPath: "E:/Project/Demo/monsterhunter/.agents/skills/recttransform-anchor-cleanup/SKILL.md",
+                anchorSkillContent: "recttransform-anchor-cleanup evidence contract");
+
+            string instructions = context.BuildInstructions();
+
+            Assert.That(instructions, Does.Contain("BEGIN recttransform-anchor-cleanup/SKILL.md"));
+            Assert.That(instructions, Does.Contain("recttransform-anchor-cleanup evidence contract"));
+            Assert.That(instructions, Does.Contain("当前 version 2 计划没有独立的 RectTransform 锚点操作数组"));
+        }
+
+        [Test]
         public void PortablePromptRequiresOneTableBasedConfirmationThenAutomaticCompletion()
         {
             string fullSnapshot = new JObject
@@ -552,7 +597,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt, Does.Not.Contain("FULL PLAN FORMAT MUST NOT BE COPIED"));
             Assert.That(prompt, Does.Not.Contain("FULL PSD INFO MUST NOT BE COPIED"));
             Assert.That(prompt.Length, Is.GreaterThanOrEqualTo(1400));
-            Assert.That(prompt.Length, Is.LessThanOrEqualTo(4000));
+            // 当前提示词包含完整的单 Agent、快照、提取和锚点合同；保持一个可观察的上限，避免无界膨胀。
+            Assert.That(prompt.Length, Is.LessThanOrEqualTo(7000));
         }
 
         [Test]
