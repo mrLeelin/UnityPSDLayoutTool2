@@ -1,0 +1,11 @@
+# Python dependencies for the prefab-hierarchy-cleanup scripts.
+#
+# Only the image work needs Pillow:
+#   * prefab_visual_audit.py compare
+#   * capture_roundtrip.py compare
+#   * audit_prefab_preservation.py image checks
+# All plan validation, payload generation and candidate prediction run on the standard library:
+#   * validate_plan_locally.py, simulate_and_verify_plan.py, preflight_v2.py
+#   * prefab_visual_audit.py capture-payload / ownership-payload
+#   * capture_roundtrip.py prepare
+Pillow>=9.0

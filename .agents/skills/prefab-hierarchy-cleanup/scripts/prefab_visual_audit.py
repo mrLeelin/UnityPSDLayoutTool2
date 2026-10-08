@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
-from PIL import Image, ImageChops
+# Pillow is only needed by `compare`. Importing it at module level would also break
+# payload generation on a python without Pillow, which has no image work to do at all.
 
 
 DEFAULT_OWNER_EXTENSIONS = (".prefab", ".unity", ".asset", ".mat", ".spriteatlas")
@@ -251,6 +252,12 @@ def write_payload(payload: str, output: Path | None) -> None:
 
 
 def compare_images(before_path: Path, after_path: Path, diff_output: Path | None) -> dict[str, object]:
+    try:
+        from PIL import Image, ImageChops
+    except ImportError as exc:  # pragma: no cover - depends on the caller's interpreter
+        raise ValueError(
+            "compare needs Pillow (pip install Pillow); payload generation does not. "
+            "Original error: %s" % exc) from exc
     with Image.open(before_path) as before_source, Image.open(after_path) as after_source:
         before = before_source.convert("RGBA")
         after = after_source.convert("RGBA")

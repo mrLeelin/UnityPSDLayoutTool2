@@ -2,6 +2,20 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.4.0] - 2026-10-08
+
+### Added
+
+- Added `preflight_v2.py`, the read-only preflight a version 2 plan has to survive before it is published. It re-checks the plan against the snapshot it was built from (fingerprint, target Prefab, selection nodes, operation scope, expected node count and hierarchy, direct children, absent paths, preserve requirements, review version) and rejects an unknown root field, an array where a scalar or map belongs, a root rename, a verify key outside the five allowed ones, a verify path that does not start with the unchanged root name, a leftover non-semantic name, a move whose destination is not a declared wrapper, a move source used twice, a texture rename whose target already exists or whose `prefabName` prefix is wrong, a removal target that still carries a component other than `Transform`, a removal without its exact `absentPaths` entry, a rename of a node an earlier entry removes, and a snapshot candidate whose `componentFamilyDecisions` entry is missing or names the wrong parent. It then builds the planned wrappers in memory, predicts the post-grouping snapshot, and reports the component-family candidates and flat-sibling findings that the second stage will see, so a predicted family an intent does not cover is refused before any write. Findings are split into rejections, would-be-partial risks and quality gaps, and notes explain why an empty array is legitimate.
+- Added `capture_roundtrip.py`, which makes the before/after visual audit reproducible: `prepare` writes one frozen framing block plus a `.before.capture.cs` and an `.after.capture.cs` that differ only in their output path, so the two renders are pixel-comparable, and `compare` writes the diff image and a JSON report for that pair.
+- Added `tests/mutation_gate_coverage.py`, which mutates a known-good plan with a catalogue of realistic mistakes and records which gate catches each one (local lint, simulation, draw order, preflight). A mistake no gate catches becomes visible instead of assumed, so the union over the mutants is the coverage claim rather than the number of rules.
+- Added `tests/test_preflight_v2.py` and `tests/test_capture_roundtrip.py`. Both run on the standard library alone (`python tests/test_preflight_v2.py`), so the gates are regression-checked without pytest. The preflight suite pairs each rejection rule with a mutant that must trip it, and its integration case counts the renames an already executed apply consumed, so a plan that really was applied is refused for exactly those renames instead of turning the assertion into a stale expectation.
+- Added `requirements.txt`, which records that only the image work needs Pillow (`prefab_visual_audit.py compare`, `capture_roundtrip.py compare`, the image checks in `audit_prefab_preservation.py`) and that plan validation, payload generation and candidate prediction run on the standard library.
+
+### Changed
+
+- `prefab_visual_audit.py` imports Pillow inside `compare` instead of at module level, so payload generation runs on an interpreter without Pillow, and `compare` reports `compare needs Pillow (pip install Pillow)` rather than failing while importing the module.
+
 ## [0.3.0] - 2026-10-08
 
 ### Added
