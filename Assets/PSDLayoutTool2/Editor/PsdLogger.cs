@@ -24,6 +24,24 @@ namespace PsdLayoutTool2
         private static bool hasError;
         private static bool writeFailureReported;
         private static bool logSizeLimitReached;
+        private static long processMemoryAtStart;
+        private static long managedMemoryAtStart;
+        private static long unityAllocatedMemoryAtStart;
+        private static long unityReservedMemoryAtStart;
+        private static int[] gcCollectionsAtStart;
+        private static string activeStep;
+        private static Stopwatch activeStepStopwatch;
+        private static readonly System.Collections.Generic.Dictionary<string, PhaseSummary> phaseSummaries =
+            new System.Collections.Generic.Dictionary<string, PhaseSummary>(StringComparer.Ordinal);
+        private static readonly System.Collections.Generic.Dictionary<string, string> sessionMetrics =
+            new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
+
+        private sealed class PhaseSummary
+        {
+            public int Count;
+            public long TotalMilliseconds;
+            public long MaximumMilliseconds;
+        }
 
         /// <summary>
         /// Gets the directory that stores diagnostic logs.
@@ -60,6 +78,15 @@ namespace PsdLayoutTool2
             hasError = false;
             writeFailureReported = false;
             logSizeLimitReached = false;
+            processMemoryAtStart = GetProcessMemoryBytes();
+            managedMemoryAtStart = GC.GetTotalMemory(false);
+            unityAllocatedMemoryAtStart = GetUnityMemoryBytes(false);
+            unityReservedMemoryAtStart = GetUnityMemoryBytes(true);
+            gcCollectionsAtStart = CaptureGcCollectionCounts();
+            activeStep = null;
+            activeStepStopwatch = null;
+            phaseSummaries.Clear();
+            sessionMetrics.Clear();
 
             WriteRawLine("============================================================");
             WriteRawLine("PSDLayoutTool2 Import Log");
@@ -69,6 +96,8 @@ namespace PsdLayoutTool2
             WriteRawLine("Asset: " + assetPath);
             WriteRawLine("Mode: " + mode);
             WriteRawLine("Skip conflict prompt: " + skipConflictPrompt);
+            WriteRawLine("Baseline process memory: " + FormatBytes(processMemoryAtStart));
+            WriteRawLine("Baseline managed memory: " + FormatBytes(managedMemoryAtStart));
             WriteRawLine("Max log file size: " + FormatBytes(MaxLogBytes));
             WriteRawLine("Max log folder size: " + FormatBytes(MaxLogBytes));
             WriteRawLine("============================================================");
@@ -86,7 +115,9 @@ namespace PsdLayoutTool2
             }
 
             string status = hasError ? "FAILED" : "FINISHED";
+            FinishActiveStep();
             Info("Session " + status + ": " + result);
+            WritePerformanceSummary();
             WriteRawLine("Ended: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"));
             WriteRawLine("Elapsed: " + sessionStopwatch.Elapsed);
             WriteRawLine("Log file: " + currentLogPath);
@@ -97,6 +128,13 @@ namespace PsdLayoutTool2
             sessionStopwatch = null;
             currentLogPath = null;
             currentLogBytes = 0;
+            unityAllocatedMemoryAtStart = 0;
+            unityReservedMemoryAtStart = 0;
+            activeStep = null;
+            activeStepStopwatch = null;
+            gcCollectionsAtStart = null;
+            phaseSummaries.Clear();
+            sessionMetrics.Clear();
         }
 
         /// <summary>
@@ -114,7 +152,25 @@ namespace PsdLayoutTool2
         /// <param name="message">Message to write.</param>
         public static void Step(string message)
         {
+            FinishActiveStep();
+            activeStep = string.IsNullOrEmpty(message) ? "(unnamed)" : message;
+            activeStepStopwatch = Stopwatch.StartNew();
             Write("STEP", message);
+        }
+
+        /// <summary>
+        /// Records a low-cost key/value metric in the current import session.
+        /// Metrics are emitted once at the end of the session to avoid adding
+        /// file I/O to the hot import path.
+        /// </summary>
+        public static void Metric(string name, object value)
+        {
+            if (sessionStopwatch == null || string.IsNullOrEmpty(name))
+            {
+                return;
+            }
+
+            sessionMetrics[name] = value == null ? "null" : value.ToString();
         }
 
         /// <summary>
@@ -138,6 +194,33 @@ namespace PsdLayoutTool2
             Write("ERROR", message);
             Write("ERROR", exception != null ? exception.ToString() : "Unknown exception");
             Debug.LogError("[PSDLayoutTool2] " + message + "\n" + exception);
+        }
+
+        /// <summary>
+        /// Writes a standalone diagnostic record for opt-in tools that do not run
+        /// through the PSD import session.
+        /// </summary>
+        public static string WriteStandalone(string title, string details)
+        {
+            try
+            {
+                Directory.CreateDirectory(LogDirectory);
+                CleanupOldLogs();
+                string safeTitle = MakeSafeFileName(string.IsNullOrEmpty(title) ? "Diagnostic" : title);
+                string path = Path.Combine(LogDirectory, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + safeTitle + ".log");
+                File.WriteAllText(path,
+                    "PSDLayoutTool2 Diagnostic Log" + Environment.NewLine +
+                    "Started: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + Environment.NewLine +
+                    "Title: " + title + Environment.NewLine +
+                    (details ?? string.Empty) + Environment.NewLine,
+                    LogEncoding);
+                return path;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[PSDLayoutTool2] Failed to write standalone diagnostic log: " + exception.Message);
+                return string.Empty;
+            }
         }
 
         /// <summary>
@@ -194,6 +277,126 @@ namespace PsdLayoutTool2
             {
                 WriteRawLine(prefix + line);
             }
+        }
+
+        private static void FinishActiveStep()
+        {
+            if (string.IsNullOrEmpty(activeStep) || activeStepStopwatch == null)
+            {
+                return;
+            }
+
+            long elapsedMilliseconds = Math.Max(0L, activeStepStopwatch.ElapsedMilliseconds);
+            PhaseSummary summary;
+            if (!phaseSummaries.TryGetValue(activeStep, out summary))
+            {
+                summary = new PhaseSummary();
+                phaseSummaries.Add(activeStep, summary);
+            }
+
+            summary.Count++;
+            summary.TotalMilliseconds += elapsedMilliseconds;
+            summary.MaximumMilliseconds = Math.Max(summary.MaximumMilliseconds, elapsedMilliseconds);
+            activeStep = null;
+            activeStepStopwatch = null;
+        }
+
+        private static void WritePerformanceSummary()
+        {
+            long processMemoryAtEnd = GetProcessMemoryBytes();
+            long managedMemoryAtEnd = GC.GetTotalMemory(false);
+            long unityAllocatedMemoryAtEnd = GetUnityMemoryBytes(false);
+            long unityReservedMemoryAtEnd = GetUnityMemoryBytes(true);
+            int[] gcCollectionsAtEnd = CaptureGcCollectionCounts();
+            WriteRawLine("PERFORMANCE_BASELINE totalElapsedMs=" + sessionStopwatch.ElapsedMilliseconds +
+                         " processMemoryStartBytes=" + processMemoryAtStart +
+                         " processMemoryEndBytes=" + processMemoryAtEnd +
+                         " processMemoryDeltaBytes=" + FormatDeltaBytes(processMemoryAtStart, processMemoryAtEnd) +
+                         " managedMemoryStartBytes=" + managedMemoryAtStart +
+                         " managedMemoryEndBytes=" + managedMemoryAtEnd +
+                         " managedMemoryDeltaBytes=" + (managedMemoryAtEnd - managedMemoryAtStart) +
+                         " unityAllocatedMemoryStartBytes=" + unityAllocatedMemoryAtStart +
+                         " unityAllocatedMemoryEndBytes=" + unityAllocatedMemoryAtEnd +
+                         " unityAllocatedMemoryDeltaBytes=" + FormatDeltaBytes(unityAllocatedMemoryAtStart, unityAllocatedMemoryAtEnd) +
+                         " unityReservedMemoryStartBytes=" + unityReservedMemoryAtStart +
+                         " unityReservedMemoryEndBytes=" + unityReservedMemoryAtEnd +
+                         " unityReservedMemoryDeltaBytes=" + FormatDeltaBytes(unityReservedMemoryAtStart, unityReservedMemoryAtEnd) +
+                         " gcGen0Delta=" + GetGcDelta(gcCollectionsAtStart, gcCollectionsAtEnd, 0) +
+                         " gcGen1Delta=" + GetGcDelta(gcCollectionsAtStart, gcCollectionsAtEnd, 1) +
+                         " gcGen2Delta=" + GetGcDelta(gcCollectionsAtStart, gcCollectionsAtEnd, 2));
+
+            foreach (var metric in sessionMetrics.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                WriteRawLine("METRIC " + metric.Key + "=" + metric.Value);
+            }
+
+            foreach (var phase in phaseSummaries
+                         .OrderByDescending(pair => pair.Value.TotalMilliseconds)
+                         .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+                         .Take(20))
+            {
+                WriteRawLine("PHASE_SUMMARY name=" + phase.Key +
+                             " count=" + phase.Value.Count +
+                             " totalMs=" + phase.Value.TotalMilliseconds +
+                             " maxMs=" + phase.Value.MaximumMilliseconds);
+            }
+        }
+
+        private static long GetProcessMemoryBytes()
+        {
+            try
+            {
+                using (Process process = Process.GetCurrentProcess())
+                {
+                    long privateMemorySize = process.PrivateMemorySize64;
+                    return privateMemorySize > 0 ? privateMemorySize : -1L;
+                }
+            }
+            catch
+            {
+                return -1L;
+            }
+        }
+
+        private static int[] CaptureGcCollectionCounts()
+        {
+            return new[]
+            {
+                GC.CollectionCount(0),
+                GC.CollectionCount(1),
+                GC.CollectionCount(2)
+            };
+        }
+
+        private static long GetUnityMemoryBytes(bool reserved)
+        {
+            try
+            {
+                long value = reserved
+                    ? UnityEngine.Profiling.Profiler.GetTotalReservedMemoryLong()
+                    : UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
+                return value > 0 ? value : -1L;
+            }
+            catch
+            {
+                return -1L;
+            }
+        }
+
+        private static string FormatDeltaBytes(long start, long end)
+        {
+            return start < 0 || end < 0 ? "unknown" : (end - start).ToString();
+        }
+
+        private static int GetGcDelta(int[] start, int[] end, int generation)
+        {
+            if (start == null || end == null || generation < 0 || generation >= start.Length ||
+                generation >= end.Length)
+            {
+                return -1;
+            }
+
+            return end[generation] - start[generation];
         }
 
         private static void WriteRawLine(string line)
@@ -365,6 +568,11 @@ namespace PsdLayoutTool2
 
         private static string FormatBytes(long bytes)
         {
+            if (bytes < 0)
+            {
+                return "unknown";
+            }
+
             return (bytes / 1024f / 1024f).ToString("0.#") + " MB";
         }
     }

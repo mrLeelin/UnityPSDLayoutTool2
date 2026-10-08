@@ -1427,6 +1427,15 @@
             finally
             {
                 EditorUtility.ClearProgressBar();
+                PsdLogger.Metric("import.layers.total", progressTotalLayers);
+                PsdLogger.Metric("import.layers.exported", progressExportedLayers);
+                PsdLogger.Metric("import.png.uniqueContentCount",
+                    currentPngPathByContentHash == null ? 0 : currentPngPathByContentHash.Count);
+                PsdLogger.Metric("import.png.pendingRedundantCount",
+                    currentPendingRedundantTexturePaths == null ? 0 : currentPendingRedundantTexturePaths.Count);
+                PsdLogger.Metric("import.createPrefab", CreatePrefab);
+                PsdLogger.Metric("import.layoutInScene", LayoutInScene);
+                PsdLogger.Metric("import.useUnityUi", UseUnityUI);
                 ClearCurrentImportSelection();
                 currentLayerInfos = null;
                 EndGeneratedUiNodeRegistry();

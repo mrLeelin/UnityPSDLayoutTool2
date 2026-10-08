@@ -330,15 +330,32 @@ damage, so they are rules, not tips.
 | `scripts/read_unity_selection.py` | read the user's live Editor selection / Prefab Stage / nested-instance links (read-only, `--mode selection|instance-links|prefab-stage`) |
 | `scripts/find_prefab_component_candidates.py` | optional extra discovery of repeated component families from the JSON snapshot (advisory only) |
 | `scripts/prefab_visual_audit.py` | render-capture payloads plus a strict RGBA comparison for before/after visual proof |
+| `scripts/unity_prefab_yaml.py` | read a text-serialized `.prefab` into a normalised model: GameObject names, **ordered** tree, `stripped` PrefabInstance root transforms, component kinds, instance overrides, guid -> asset resolution. Disk ground truth, independent of Unity's snapshot. Raises `UnityYamlError` instead of guessing |
+| `scripts/check_snapshot_freshness.py` | snapshot freshness gate. `--snapshot <s.json>` asserts `fingerprint == sha256(prefab)`; `--survey` lists every snapshot for the prefab, newest first, and marks the fresh one(s). Run before authoring a plan and again after every apply |
+| `scripts/check_draw_order.py` | **cheap draw-order proof, no renderer.** Enumerates overlapping drawable pairs from the snapshot and proves no pair flips its relative order (`--plan` simulates the grouping; `--snapshot-after` compares a second capture). Run this before reaching for any pixel diff: if it is clean, a grouping-only plan cannot have changed the picture at the overlaps |
+| `scripts/verify_applied_prefab.py` | post-apply assertions read straight off the saved Prefab: bytes actually changed, root name rename-locked, no script components added, node + drawable conservation vs the plan's extraction intents, every wrapper present, each child-prefab `assetPath` on disk, PrefabInstances match the intent's instance list and parents |
 | `scripts/payloads/read_selection.cs` | the eval_file payload behind it (template for R5) |
 | `scripts/payloads/audit_prefab_dump.cs` | the read-only tree+fingerprint dump behind the preservation audit (marker `DUMP_BEGIN`/`DUMP_END`) |
 
 All read-only diagnostics accept only the Unity JSON snapshot and version 2 `node:<id>` plans; none of
 them writes to the Prefab.
 
+Cost order matters. Authoring a plan should not stall on pixel evidence:
+
+1. `check_snapshot_freshness.py --snapshot <snap>` — cheap, mandatory, and the single most common
+   cause of a wasted session is planning against a stale snapshot.
+2. `check_draw_order.py --snapshot <snap> --plan <plan>` — cheap and usually sufficient to prove the
+   grouping preserves what gets drawn. Only escalate to `prefab_visual_audit.py` capture + compare
+   when this is inconclusive (per-instance state branches, transparency/ordering questions the
+   snapshot cannot answer, or a requirement that a visual audit run regardless).
+3. `verify_applied_prefab.py` — run as soon as `apply-result.json` appears. Never report a result as
+   applied on the strength of the sentinel alone.
+
 Typical session order: read the current JSON snapshot -> semantics -> plan -> `validate_plan_locally.py` ->
-`simulate_and_verify_plan.py` -> `audit_prefab_preservation.py --mode capture` (BEFORE, per stage) ->
+`simulate_and_verify_plan.py` -> `check_draw_order.py --plan` ->
+`audit_prefab_preservation.py --mode capture` (BEFORE, per stage) ->
 user approval -> one `.apply` (Unity preflights and applies) ->
-read-only verification (`check_extraction_result.py`, `audit_prefab_preservation.py --mode compare`,
-`read_unity_selection.py --mode instance-links`) -> record evidence in the review file -> read a fresh
+read-only verification (`verify_applied_prefab.py`, `check_extraction_result.py`,
+`audit_prefab_preservation.py --mode compare`, `read_unity_selection.py --mode instance-links`) ->
+record evidence in the review file -> `check_snapshot_freshness.py --survey` and read a fresh
 snapshot before any further plan.

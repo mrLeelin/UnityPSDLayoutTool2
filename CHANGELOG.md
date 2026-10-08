@@ -2,6 +2,20 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.3.0] - 2026-10-08
+
+### Added
+
+- Added an offline, read-only verification toolset for the `prefab-hierarchy-cleanup` skill, so a cleanup session can be checked without Unity and without hand-writing throw-away scripts each time. `unity_prefab_yaml.py` reads a text-serialized Prefab directly, independently of Unity's snapshot: it reattaches `stripped` PrefabInstance root transforms to their owning instance (their RectTransform carries no `m_GameObject`, only an `m_PrefabInstance` back-reference, so missing the `stripped` marker silently drops those nodes from the tree), decodes `\uXXXX`/`\UXXXXXXXX`/`\xXX` escapes by hand and raises on a malformed one instead of returning the escaped text, reads multi-line `m_text` scalars with a scalar scanner, tells an `Image` from a gameplay script by `m_EditorClassIdentifier` (both are MonoBehaviours), and preserves `m_Children` order because that order is the draw order. `check_snapshot_freshness.py` asserts `snapshotFingerprint == sha256(prefab)` before a plan is authored and inventories every snapshot for a Prefab afterwards, since a successful apply always invalidates the snapshot it was built against, and the newest snapshot on disk can be an intermediate stage of a two-stage apply. `check_draw_order.py` enumerates every overlapping drawable pair and proves no pair flips its relative order; it needs only the snapshot, so it answers the draw-order question from geometry alone and a rendered pixel diff becomes optional supporting evidence instead of the primary gate. `verify_applied_prefab.py` reads the saved Prefab and checks it against the approved plan: the bytes actually changed, the root is still rename-locked, no script components were introduced, node and drawable counts are conserved after subtracting what the extraction intents absorb, every wrapper is present, each child-prefab `assetPath` exists on disk (the executor's ledger can report `newAssetPaths: []` even when it did create the asset), and the PrefabInstances match the intent's instance list, root names and parents.
+- Added `references/local-toolset.md`, which records when each offline tool applies, the cost gap between the topological draw-order check and a rendered diff, the two ways a cross-snapshot comparison can silently mislead, and the serialization facts that are easy to get wrong.
+- Added import diagnostics. Every import log now carries a phase summary (`PHASE_SUMMARY`), a performance baseline with process, managed and Unity memory deltas plus GC counts (`PERFORMANCE_BASELINE`), and end-of-session metrics (`METRIC`) covering total and exported layer counts, unique and pending-redundant PNG counts, and the create-prefab / layout-in-scene / Unity-UI switches. `PsdLogger.Metric` collects values during the session and writes them once at the end, so measuring does not add a log line per layer.
+- Added an on-demand visual comparison in the PSD Inspector. It is never part of the normal import path: it renders the generated Prefab, diffs it against the PSD composite, and writes `source.png`, `render.png`, `diff.png` and a JSON report to `Library/PSDLayoutTool2/VisualComparison`, recording the result and error metrics in the diagnostic log.
+
+### Changed
+
+- `PsdCommonAssetPreviewServer.CaptureUiPrefab` is now `internal`, so the on-demand visual comparison reuses the existing preview capture instead of duplicating the render path.
+- Updated the `prefab-hierarchy-cleanup` skill to register the new offline toolset and to state the cost order explicitly: run the snapshot freshness gate first, then the topological draw-order check, and escalate to `prefab_visual_audit.py` capture plus compare only when the topology cannot answer the question or a visual audit is required regardless. The post-apply step now names `verify_applied_prefab.py` and states that a result must never be reported as applied on the strength of `apply-result.json` alone.
+
 ## [0.2.1] - 2026-09-28
 
 ### Fixed

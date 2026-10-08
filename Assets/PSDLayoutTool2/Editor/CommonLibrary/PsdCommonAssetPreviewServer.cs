@@ -371,7 +371,7 @@ namespace PsdLayoutTool2
             catch (Exception exception) { Error = item.path + ": " + exception.Message; }
         }
 
-        private static byte[] CaptureUiPrefab(GameObject prefab)
+        internal static byte[] CaptureUiPrefab(GameObject prefab)
         {
             var scene = EditorSceneManager.NewPreviewScene();
             RenderTexture target = null;
