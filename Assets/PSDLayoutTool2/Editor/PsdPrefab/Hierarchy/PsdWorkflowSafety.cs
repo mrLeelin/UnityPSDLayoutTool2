@@ -168,7 +168,7 @@ namespace PsdLayoutTool2
                 error = "只有明确批准当前 JSON 计划的语句才能创建 .apply。";
                 return false;
             }
-            if (File.Exists(applyPath))
+            if (File.Exists(applyPath) || File.Exists(PsdHierarchyTerminalApplyWatcher.BuildClaimPath(applyPath)))
             {
                 error = "当前请求已经创建过 .apply，禁止重复创建。";
                 return false;
@@ -187,6 +187,7 @@ namespace PsdLayoutTool2
             try
             {
                 JObject plan = JObject.Parse(planJson);
+                PsdHierarchyChatCleanupExecution.ValidatePreserveRequirements(plan);
                 string planReviewVersion = ReadStringField(plan, "reviewVersion");
                 if (string.IsNullOrWhiteSpace(planReviewVersion))
                 {
@@ -257,7 +258,7 @@ namespace PsdLayoutTool2
             if (bindingMismatches.Count > 0)
             {
                 error = bindingMismatches.Contains("planSha256")
-                    ? "审批后的 JSON 计划内容已改变（planSha256 不匹配）；当前请求必须重新生成 review/plan 和新的审批会话。"
+                    ? "审批后的 JSON 计划内容已改变（planSha256 不匹配）；请在当前对话修订 review/plan，重新审批当前版本。"
                     : "审批凭证绑定不匹配：" + string.Join("、", bindingMismatches) + "。";
                 return false;
             }
@@ -270,6 +271,7 @@ namespace PsdLayoutTool2
             try
             {
                 JObject plan = JObject.Parse(planJson ?? string.Empty);
+                PsdHierarchyChatCleanupExecution.ValidatePreserveRequirements(plan);
                 string planFingerprint = ReadStringField(plan, "snapshotFingerprint");
                 string planTarget = ReadStringField(plan, "targetPrefabAssetPath") ?? ReadStringField(plan, "prefabAssetPath");
                 if (!string.Equals(planFingerprint, snapshotFingerprint, StringComparison.Ordinal))
@@ -364,10 +366,33 @@ namespace PsdLayoutTool2
             return token.Value<string>();
         }
 
-        private static bool HasTerminalAttempted(string applyPath, out string error)
+        internal static bool IsResumablePrewriteRejection(string resultPath)
+        {
+            try
+            {
+                if (!File.Exists(resultPath)) return false;
+                var result = JsonConvert.DeserializeObject<PsdHierarchyTerminalApplyWatcher.ApplyResultRecord>(
+                    File.ReadAllText(resultPath, Encoding.UTF8));
+                return result != null && !result.success &&
+                    result.version == PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion &&
+                    string.Equals(result.status, PsdHierarchyTerminalApplyWatcher.StatusRejected, StringComparison.OrdinalIgnoreCase) &&
+                    new[] { "session", "plan", "approval", "context", "scope", "snapshot", "binding", "naming", "prepare", "preflight", "preflight-cleanup" }
+                        .Contains(result.stage, StringComparer.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        internal static bool HasTerminalAttempted(string applyPath, out string error)
         {
             error = string.Empty;
             string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
+            string prefix = resultPath.Substring(0, resultPath.Length - ".apply-result.json".Length);
+            if (File.Exists(prefix + ".applied") || File.Exists(prefix + ".apply-uncertain") ||
+                (File.Exists(prefix + ".apply-failed") && !File.Exists(resultPath)))
+            {
+                error = "当前 Apply 会话已有完成或不确定的执行标记；必须核验实际资产后创建新的审批请求。";
+                return true;
+            }
             if (!File.Exists(resultPath)) return false;
 
             try
@@ -375,9 +400,7 @@ namespace PsdLayoutTool2
                 JObject result = JObject.Parse(File.ReadAllText(resultPath, Encoding.UTF8));
                 string status = result.Value<string>("status") ?? string.Empty;
                 string stage = result.Value<string>("stage") ?? string.Empty;
-                bool approvalOnly = string.Equals(status, PsdHierarchyTerminalApplyWatcher.StatusRejected, StringComparison.OrdinalIgnoreCase) &&
-                                    string.Equals(stage, "approval", StringComparison.OrdinalIgnoreCase);
-                if (approvalOnly) return false;
+                if (IsResumablePrewriteRejection(resultPath)) return false;
 
                 error = "当前 Apply 会话已经结束（" + status + "/" + stage + "）；计划或 JSON 发生变化后必须重新生成 review/plan，并创建新的审批会话。";
                 return true;

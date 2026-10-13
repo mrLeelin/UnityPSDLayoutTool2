@@ -2059,7 +2059,9 @@ namespace PsdLayoutTool2
         internal const string SnapshotRefreshContract =
             "SNAPSHOT FRESHNESS: snapshotFingerprint is the hash of the Prefab file, so it changes after every successful apply. Re-read the current snapshot before planning again and never reuse an old fingerprint or node id.";
         internal const string WorkflowBindingContract =
-            "WORKFLOW BINDING: every plan must also include targetPrefabAssetPath, selectionNodeIds (node:<id> only), operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion. These fields bind the plan to the current selection review and are revalidated immediately before apply.";
+            "WORKFLOW BINDING: every plan must also include targetPrefabAssetPath, selectionNodeIds (node:<id> only), operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion. Write preserveRequirements as an object (for example {\"visualResult\":\"unchanged\"}); strings and legacy arrays of strings are read-only metadata. These fields bind the plan to the current selection review and are revalidated immediately before apply.";
+        internal const string PrewriteRejectionContract =
+            "- rejected: Unity refused the request BEFORE any asset write. Quote the full error and continue in this same conversation and session. Repair the complete review/plan at the existing paths, validate again, change reviewVersion when the content changes, and obtain explicit approval for the revised version before creating a new .apply. Never reuse an old approval hash. If stage=approval and the plan is unchanged, repair only the approval record. Before retrying record the previous receipt; Unity archives it when claiming the retry. Wait for .apply to be consumed and a new receipt with a different finishedAtUtc and the current planHash; do not treat the previous receipt as the retry result. If the snapshot or target changed, refresh the authoritative snapshot and session binding before approval; do not reuse stale node IDs.";
         internal const string SingleAgentCleanupContract =
             "SINGLE-AGENT CLEANUP: the primary agent must perform every review, planning, extraction and verification stage itself. Do not spawn, resume or delegate to subagents, teams or external advisor agents, including read-only review. This restriction overrides general workspace delegation permission.";
 
@@ -2841,7 +2843,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("After writing .apply, poll this result file (about every 2s, up to ~3 minutes): " + ToPortableFullPath(applyResultFullPath));
             builder.AppendLine("The result JSON has success, status, stage and message; status is one of applied, rejected, partial, uncertain.");
             builder.AppendLine("- applied: Unity saved the Prefab and verified it. Report that to the human.");
-            builder.AppendLine("- rejected: the plan was refused BEFORE any write, so nothing changed. JSON may be edited before approval. If stage=approval, only the approval record was invalid; recreate that record and reuse the same plan. If the plan or review is edited after approval, or if stage=binding, naming, preflight, partial, or uncertain, create a new complete review/plan and new approval session; do not reuse the old session.");
+            builder.AppendLine(PrewriteRejectionContract);
             builder.AppendLine("- partial or uncertain: Unity may already have written to the Prefab. Do NOT write another .apply and do NOT claim success. Quote the full message, tell the human the on-disk Prefab must be verified, and ask for a new review before any further apply.");
             builder.AppendLine("Do not claim Unity assets changed until the result file has success=true and status applied.");
             return builder.ToString();

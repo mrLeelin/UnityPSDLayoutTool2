@@ -167,7 +167,7 @@ namespace PsdLayoutTool2
         }
 
         [Test]
-        public void CompletedOrPreflightRejectedSessionRequiresNewApprovalSession()
+        public void PreflightRejectedSessionCanApproveARevisedPlanInTheSameConversation()
         {
             string applyPath = Path.Combine(Path.GetTempPath(), "psd-terminal-state-" + Guid.NewGuid().ToString("N") + ".apply");
             string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
@@ -177,14 +177,77 @@ namespace PsdLayoutTool2
                 string plan = BuildPlan("snap-a", "node:root", includeMetadata: true);
                 Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
                     applyPath, "Assets/Diary.plan.json", plan, "snap-a", "review-a", "Assets/Diary.prefab",
-                    PsdWorkflowPlanBinding.ExplicitApprovalPhrase, out string error), Is.False);
-                Assert.That(error, Does.Contain("必须重新生成 review/plan"));
+                    PsdWorkflowPlanBinding.ExplicitApprovalPhrase, out string error), Is.True, error);
+                Assert.That(PsdWorkflowPlanBinding.TryReadApproval(applyPath, out var approval, out error), Is.True, error);
+                Assert.That(approval.planSha256, Is.EqualTo(PsdWorkflowPlanBinding.Sha256(plan)));
+                Assert.That(File.Exists(resultPath), Is.True, "Keep the failed receipt until the retry is claimed.");
             }
             finally
             {
                 if (File.Exists(applyPath)) File.Delete(applyPath);
                 if (File.Exists(resultPath)) File.Delete(resultPath);
             }
+        }
+
+        [TestCase("applied")]
+        [TestCase("partial")]
+        [TestCase("uncertain")]
+        public void WrittenOrUncertainSessionsCannotApproveAnotherApply(string status)
+        {
+            string applyPath = Path.Combine(Path.GetTempPath(), "psd-no-retry-" + Guid.NewGuid().ToString("N") + ".apply");
+            string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
+            try
+            {
+                File.WriteAllText(resultPath, new JObject { ["status"] = status, ["stage"] = "verify" }.ToString());
+                Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
+                    applyPath, "Assets/Diary.plan.json", BuildPlan("snap-a", "node:root", true),
+                    "snap-a", "review-a", "Assets/Diary.prefab", PsdWorkflowPlanBinding.ExplicitApprovalPhrase,
+                    out _), Is.False);
+                Assert.That(File.Exists(applyPath), Is.False);
+            }
+            finally { File.Delete(applyPath); File.Delete(resultPath); }
+        }
+
+        [Test]
+        public void PreservationMetadataAcceptsStringArraysWithoutChangingApprovedBytes()
+        {
+            JObject planObject = JObject.Parse(BuildPlan("snap-a", "node:root", true));
+            planObject["preserveRequirements"] = new JArray("keep visual result", "keep references");
+            string plan = planObject.ToString(Formatting.None);
+            string review = Path.GetTempFileName();
+            try
+            {
+                Assert.That(PsdHierarchyChatCleanupExecution.IsKnownPlanArray("preserveRequirements"), Is.True);
+                Assert.That(PsdWorkflowPlanBinding.TryValidate(plan,
+                    "{\"nodes\":[{\"id\":\"root\"}]}", "snap-a", "Assets/Diary.prefab",
+                    "Assets/Diary.plan.json", review, BuildApproval(plan, "snap-a", "Assets/Diary.prefab"),
+                    out string error), Is.True, error);
+                planObject["preserveRequirements"] = new JArray(new JObject { ["operation"] = "unexpected" });
+                plan = planObject.ToString(Formatting.None);
+                Assert.That(PsdWorkflowPlanBinding.TryValidate(plan,
+                    "{\"nodes\":[{\"id\":\"root\"}]}", "snap-a", "Assets/Diary.prefab",
+                    "Assets/Diary.plan.json", review, BuildApproval(plan, "snap-a", "Assets/Diary.prefab"),
+                    out error), Is.False);
+                Assert.That(error, Does.Contain("preserveRequirements"));
+            }
+            finally { File.Delete(review); }
+        }
+
+        [TestCase(".applied")]
+        [TestCase(".apply-uncertain")]
+        [TestCase(".apply-failed")]
+        public void MissingReceiptDoesNotPermitReplayOfAnExistingExecutionMarker(string suffix)
+        {
+            string prefix = Path.Combine(Path.GetTempPath(), "psd-marker-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                File.WriteAllText(prefix + suffix, "{}");
+                Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
+                    prefix + ".apply", "Assets/Diary.plan.json", BuildPlan("snap-a", "node:root", true),
+                    "snap-a", "review-a", "Assets/Diary.prefab", PsdWorkflowPlanBinding.ExplicitApprovalPhrase,
+                    out _), Is.False);
+            }
+            finally { File.Delete(prefix + suffix); File.Delete(prefix + ".apply"); }
         }
 
         [Test]

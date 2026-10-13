@@ -65,7 +65,7 @@ SUPPORTED_ROOT_ARRAY_PROPERTIES = set(REQUIRED_ARRAY_PROPERTIES) | {
     "selectedPrefabExtractions", "crossParentPrefabExtractions", "postGroupingExtractionIntents",
 }
 
-REVIEW_METADATA_ARRAY_PROPERTIES = {"selectionNodeIds", "expectedHierarchy", "directChildren", "absentPaths"}
+REVIEW_METADATA_ARRAY_PROPERTIES = {"selectionNodeIds", "expectedHierarchy", "directChildren", "absentPaths", "preserveRequirements"}
 
 SUPPORTED_ROOT_PROPERTIES = SUPPORTED_ROOT_ARRAY_PROPERTIES | {
     "version", "snapshotFingerprint", "prefabAssetPath", "targetPrefabAssetPath",
@@ -555,8 +555,13 @@ def check_root_contract(report, plan, snapshot_fingerprint, target_prefab_asset_
     for key in ("preserveRequirements", "expectedHierarchy", "directChildren", "absentPaths"):
         if plan.get(key) is None:
             report.error("缺少 %s" % key)
-    if isinstance(plan.get("preserveRequirements"), list):
-        report.error("preserveRequirements 必须写成对象，不能是数组（否则会被判 Unknown operation array）")
+    preservation = plan.get("preserveRequirements")
+    if preservation is not None and not (
+        isinstance(preservation, dict)
+        or isinstance(preservation, str) and preservation.strip()
+        or isinstance(preservation, list) and all(isinstance(item, str) and item.strip() for item in preservation)
+    ):
+        report.error("preserveRequirements 必须是对象、非空字符串或字符串数组")
 
     selection = plan.get("selectionNodeIds")
     if not isinstance(selection, list) or not selection:

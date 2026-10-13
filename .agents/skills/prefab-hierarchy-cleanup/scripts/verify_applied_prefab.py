@@ -131,7 +131,8 @@ def main():
             else 'before %s -> after %s' % (fp[:12], doc.sha256[:12]))
 
     # 2 -------------------------------------------------------------------------
-    expect_root = ((plan.get('preserveRequirements') or {}).get('rootName')
+    preservation = plan.get('preserveRequirements')
+    expect_root = ((preservation if isinstance(preservation, dict) else {}).get('rootName')
                    or (plan.get('output') or {}).get('rootName'))
     renamed_targets = {r.get('target') for r in plan.get('renames', [])}
     if expect_root:

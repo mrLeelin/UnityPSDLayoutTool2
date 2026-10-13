@@ -23,3 +23,18 @@ Every terminal review now keeps three additional files beside its existing sessi
 - `<session>.summary.md` is an optional AI-maintained decision summary for long conversations.
 
 Reopening `AI整理` still requires the same PSD, Prefab and snapshot fingerprint. A session can be resumed before a plan exists when one of the durable conversation files is present. Existing apply, partial and uncertain protections remain authoritative; conversation recovery never creates or retries an Apply sentinel. A truncated final JSONL line or transcript tail is ignored during recovery.
+
+## Pre-write rejection recovery
+
+`rejected` is terminal for that attempt, not for the conversation. A known pre-write stage
+(`session`, `plan`, `approval`, `context`, `scope`, `snapshot`, `binding`, `naming`, `prepare`, `preflight`, `preflight-cleanup`)
+can resume the same session. Repair the complete review/plan, validate it, update `reviewVersion`
+when content changes, and explicitly approve the current bytes again. The watcher rechecks the
+snapshot, target, scope and approval hash. Changed targets require a fresh authoritative binding.
+Active claims, applied/partial/uncertain results and unreadable receipts cannot be replayed.
+
+The previous receipt remains available until a retry is claimed, then moves to
+`<session>.apply-result.<unique-id>.json`. Poll the new receipt for the current `planHash`.
+`preserveRequirements` is metadata: generate an object; non-empty strings and arrays of
+non-empty strings are accepted without changing the approved JSON. Unknown operation arrays
+and malformed preservation entries still fail validation before asset writes.

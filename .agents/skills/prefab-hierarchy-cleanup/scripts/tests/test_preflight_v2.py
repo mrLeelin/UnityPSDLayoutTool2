@@ -144,11 +144,17 @@ class Baseline(PreflightHarness):
         report = self.run_preflight(plan)
         self.assert_error_contains(report, "operationScope 必须写成对象")
 
-    def test_preserve_requirements_as_array_is_rejected(self):
+    def test_preserve_requirements_as_string_array_is_metadata(self):
         plan = base_plan()
         plan["preserveRequirements"] = ["keep everything"]
         report = self.run_preflight(plan)
-        self.assert_error_contains(report, "preserveRequirements 必须写成对象")
+        self.assertEqual([], report.errors, msg="\n".join(report.errors))
+
+    def test_preserve_requirements_as_operation_array_is_rejected(self):
+        plan = base_plan()
+        plan["preserveRequirements"] = [{"operation": "unexpected"}]
+        report = self.run_preflight(plan)
+        self.assert_error_contains(report, "preserveRequirements 必须是对象")
 
     def test_unknown_root_field_is_rejected(self):
         plan = base_plan()

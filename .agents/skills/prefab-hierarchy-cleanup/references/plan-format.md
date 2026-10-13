@@ -2,6 +2,11 @@
 
 Use one UTF-8 JSON plan per cleanup operation. Treat it as the reviewed execution contract.
 
+`preserveRequirements` is read-only review metadata. Generate an object such as
+`{"rootName":"MainView","visualResult":"unchanged"}`. Non-empty strings and legacy
+arrays containing only non-empty strings are also accepted without rewriting the approved
+document. Arrays of operation objects are invalid; unknown operation arrays remain refused.
+
 ## Accuracy-preserving efficiency
 
 - Keep the complete authoritative snapshot and final Unity preflight. Image evidence is selected by risk: names and geometry can reduce redundant reads only when all serialized, neighboring, TMP, and asset-path evidence agrees. Conflicts, state/overlap questions, transparency questions, and incomplete visual-unit closure require image or render evidence.

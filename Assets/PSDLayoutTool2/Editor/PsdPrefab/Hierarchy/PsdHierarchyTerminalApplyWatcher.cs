@@ -249,7 +249,13 @@ namespace PsdLayoutTool2
                     return false;
                 }
 
-                DeleteIfExists(claimPath);
+                if (File.Exists(claimPath)) return false;
+                if (PsdWorkflowPlanBinding.HasTerminalAttempted(applyPath, out string terminalError))
+                {
+                    File.Move(applyPath, applyPath + ".blocked-" + Guid.NewGuid().ToString("N"));
+                    Debug.LogWarning("[PSDLayoutTool2] " + terminalError);
+                    return false;
+                }
                 File.Move(applyPath, claimPath);
                 return true;
             }
@@ -464,8 +470,11 @@ namespace PsdLayoutTool2
             ApplyClaimRecord claim = null;
             try
             {
-                // 新一轮应用前清掉旧回执，避免 AI 读到上一次结果。
-                DeleteIfExists(BuildResultPath(applyPath));
+                // A rejected attempt is immutable evidence; move it aside before polling the retry.
+                string resultPath = BuildResultPath(applyPath);
+                if (File.Exists(resultPath))
+                    File.Move(resultPath, StripStateExtension(applyPath) + ".apply-result." +
+                        Guid.NewGuid().ToString("N") + ".json");
 
                 if (!TryLoadSession(applyPath, out session, out string error))
                 {
@@ -881,6 +890,8 @@ namespace PsdLayoutTool2
                     StripStateExtension(applyPath) + ".ledger.json",
                     JsonConvert.SerializeObject(ledger, Formatting.Indented),
                     new UTF8Encoding(false));
+                PsdHierarchyTerminalConversationStore.AppendEvent(
+                    session?.conversationPath, "apply_result", content: verification, state: result);
             }
             catch (Exception exception)
             {

@@ -242,12 +242,26 @@ namespace PsdLayoutTool2
                 "expectedHierarchy",
                 "directChildren",
                 "absentPaths",
+                "preserveRequirements",
             };
 
         internal static bool IsKnownPlanArray(string propertyName)
         {
             return SupportedRootArrayProperties.Contains(propertyName) ||
                    ReviewMetadataArrayProperties.Contains(propertyName);
+        }
+
+        internal static void ValidatePreserveRequirements(JObject plan)
+        {
+            JToken value = plan["preserveRequirements"];
+            if (value == null || value is JObject ||
+                (value.Type == JTokenType.String && !string.IsNullOrWhiteSpace(value.Value<string>())) ||
+                (value is JArray entries && entries.All(entry =>
+                    entry.Type == JTokenType.String && !string.IsNullOrWhiteSpace(entry.Value<string>()))))
+                return;
+
+            throw new InvalidDataException("preserveRequirements 必须是对象、非空字符串或字符串数组；实际类型为 " +
+                value.Type + "。该字段仅描述保留要求，不执行操作。");
         }
 
         internal static bool IsExplicitConfirmation(string input)
@@ -835,6 +849,7 @@ namespace PsdLayoutTool2
             {
                 ReadRequiredString(plan, "prefabName");
             }
+            ValidatePreserveRequirements(plan);
             foreach (string property in RequiredArrayProperties)
             {
                 if (!(plan[property] is JArray))

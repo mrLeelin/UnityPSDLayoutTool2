@@ -233,6 +233,7 @@ namespace PsdLayoutTool2
                     : "Write the complete executable JSON plan (and no partial patch) to: ") +
                 planPath.Replace('\\', '/') + "\n" +
                 "The plan must be version 2 using node:<id> references from the snapshot. It must also include snapshotFingerprint, targetPrefabAssetPath, selectionNodeIds, operationScope, expectedNodeCount, expectedHierarchy, directChildren, absentPaths, preserveRequirements, and reviewVersion.\n" +
+                PsdHierarchyChatClient.WorkflowBindingContract + "\n" +
                 "Unity validates and applies the reviewed plan itself after .apply; never run a script to modify the Prefab.\n" +
                 PsdHierarchyChatClient.PrefabRootNameContract + "\n" +
                 PsdHierarchyChatClient.VerifyFieldContract + "\n" +
@@ -265,8 +266,7 @@ namespace PsdLayoutTool2
                 applyResultPath.Replace('\\', '/') + "\n" +
                 "The result JSON has success, status, stage and message; status is one of applied, rejected, partial, uncertain.\n" +
                 "- applied: Unity saved the Prefab and verified it. Report that to the human.\n" +
-                "- rejected: the plan was refused BEFORE any write, so nothing changed. JSON may be edited before approval. If stage=approval, only the approval record was invalid; recreate that record and reuse the same plan. If the plan or review is edited after approval, or if stage=binding, naming, preflight, partial, or uncertain, create a new complete review/plan and new approval session; do not reuse the old session. " +
-                "Quote the FULL message to the human and stop.\n" +
+                PsdHierarchyChatClient.PrewriteRejectionContract + "\n" +
                 "- partial or uncertain: Unity may already have written to the Prefab. Do NOT write another .apply and do NOT claim success. " +
                 "Quote the full message, tell the human the on-disk Prefab must be verified, and ask for a new review before any further apply.\n" +
                 "Do not claim Unity assets changed until the result file has success=true and status applied.\n";
@@ -630,7 +630,7 @@ namespace PsdLayoutTool2
                     : "Read the UTF-8 task file at " + promptPath.Replace('\\', '/') +
                       (localRepair
                           ? ". Review only the locked Unity selection against the current Prefab snapshot, then save a scoped review and complete JSON plan to the paths in that file. Wait for explicit approval before writing .apply."
-                          : ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file. JSON may be edited before approval. After I explicitly approve, write .apply and poll .apply-result.json. If Unity rejects at approval only, repair the approval record and reuse the same plan. If the plan or review is edited after approval, or if the rejection is binding, naming, preflight, partial, or uncertain, require a new complete review/plan and new approval session; do not reuse the old session. If the result is partial or uncertain, stop and tell me to verify the Prefab instead.");
+                          : ". Start the complete PSD hierarchy review now, save the review and full JSON plan to the exact paths specified in that file. After explicit approval, write .apply and poll .apply-result.json. " + PsdHierarchyChatClient.PrewriteRejectionContract + " If the result is partial or uncertain, stop and tell me to verify the Prefab instead.");
                 PsdHierarchyTerminalConversationStore.AppendEvent(
                     conversationPath,
                     "terminal_prompt",
@@ -722,14 +722,8 @@ namespace PsdLayoutTool2
                     if (hasReviewAndPlan)
                     {
                         string applyPath = BuildApplySentinelPath(record.planPath);
-                        string resultPath = PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath);
-                        bool resultExists = File.Exists(resultPath);
-                        bool resumablePrewriteRejection = IsResumablePrewriteRejection(resultPath);
-                        bool failedPathExists = File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-failed");
                         if (File.Exists(applyPath) || File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".applying") ||
-                            (failedPathExists && !resumablePrewriteRejection) ||
-                            File.Exists(applyPath.Substring(0, applyPath.Length - ".apply".Length) + ".apply-uncertain") ||
-                            (resultExists && !resumablePrewriteRejection))
+                            PsdWorkflowPlanBinding.HasTerminalAttempted(applyPath, out _))
                             continue;
                     }
                     DateTime write = File.GetLastWriteTimeUtc(sessionPath);
@@ -745,23 +739,6 @@ namespace PsdLayoutTool2
                 catch { }
             }
             return !string.IsNullOrEmpty(bestPath);
-        }
-
-        private static bool IsResumablePrewriteRejection(string resultPath)
-        {
-            try
-            {
-                if (!File.Exists(resultPath)) return false;
-                JObject result = JObject.Parse(File.ReadAllText(resultPath, Encoding.UTF8));
-                if (!string.Equals((string)result["status"], PsdHierarchyTerminalApplyWatcher.StatusRejected, StringComparison.OrdinalIgnoreCase))
-                    return false;
-                string stage = (string)result["stage"];
-                return string.Equals(stage, "approval", StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return false;
-            }
         }
 
         public static bool TryOpenLocalRepair(string sourcePsdAssetPath, out string error)

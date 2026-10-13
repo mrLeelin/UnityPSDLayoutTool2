@@ -101,7 +101,7 @@ When the task depends on the user's current Unity Editor GameObject selection, u
    do not hand-compose `planPath`. The helper resolves the existing plan to a platform-native absolute path
    (Windows drive path with `\\`; macOS/Linux path with `/`), derives the current SHA-256, snapshot fingerprint,
    target Prefab and review version from that exact plan, and refuses an existing `.apply` or result file.
-6. If the receipt reports `rejected`, report the complete error and stop. A correction must be emitted as a complete new review and plan under a new request, then receive explicit human approval before its own `.apply` is written.
+6. If the receipt reports `rejected`, report the complete error and continue in the same conversation and session. Correct the complete review and plan at the existing paths, validate again, change `reviewVersion` when content changes, and obtain explicit approval for the revised version before creating a new `.apply`. Never reuse an old approval hash. Refresh snapshot/session bindings when the target changed. Unity archives the previous receipt when claiming the retry; poll for the current `planHash`. `partial`/`uncertain` still require on-disk verification before any new plan.
 7. If the receipt reports `partial` or `uncertain`, do not apply again: verify the saved state and require a new review.
 8. After every successful apply the Prefab file, and therefore the snapshot fingerprint, has changed. Read the current snapshot again before authoring any further plan; never reuse an old `snapshotFingerprint` or old node IDs.
 

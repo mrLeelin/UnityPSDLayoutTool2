@@ -2,6 +2,19 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.4.1] - 2026-10-13
+
+### Fixed
+
+- Treat `preserveRequirements` objects, strings and legacy string arrays as review metadata instead of executable operations, while rejecting malformed values.
+- Allow proven pre-write Apply rejections to be corrected and explicitly approved again in the same terminal conversation and session, with fresh plan hash and snapshot validation.
+- Archive failed Apply receipts before retrying and reject replay of active, completed, partial, uncertain or unreadable attempts, including attempts whose execution markers remain after a receipt is lost.
+
+### Changed
+
+- Aligned terminal prompts, cleanup instructions, approval helpers, offline preflight and saved-Prefab verification with the metadata and recovery rules.
+- Record Apply outcomes in the persistent conversation lifecycle log.
+
 ## [0.4.0] - 2026-10-08
 
 ### Added

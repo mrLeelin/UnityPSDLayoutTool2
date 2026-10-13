@@ -112,6 +112,72 @@ namespace PsdLayoutTool2.Tests
             Assert.That(PendingApplyFiles(), Is.Empty, "已完成的请求必须移出待执行集合。");
         }
 
+        [TestCase("prepare")]
+        [TestCase("preflight")]
+        public async Task PrewriteRejectionCanBeCorrectedAndAppliedInTheSameSession(string stage)
+        {
+            JObject plan = JObject.Parse(planJson);
+            plan["preserveRequirements"] = new JArray("keep references", "keep visuals");
+            if (stage == "prepare")
+                plan["unknownOperations"] = new JArray(new JObject { ["target"] = "unexpected" });
+            else
+                plan["verify"] = new JObject { ["hierarchy"] = new JArray(
+                    new JObject { ["path"] = "TerminalView/Missing", ["childCount"] = 0 }) };
+            planJson = plan.ToString(Formatting.None);
+            WriteSession(PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion);
+            WritePlanFile();
+            WriteApplySentinel();
+            byte[] before = File.ReadAllBytes(ToFullPath(Target));
+            LogAssert.Expect(LogType.Error, new Regex("自动应用 AI 计划未成功"));
+            Assert.That(await PsdHierarchyTerminalApplyWatcher.RunPendingApplyOnceForTestsAsync(), Is.True);
+            JObject rejected = ReadReceipt();
+            Assert.That(rejected.Value<string>("status"), Is.EqualTo("rejected"));
+            Assert.That(rejected.Value<string>("stage"), Is.EqualTo(stage));
+            Assert.That(rejected.Value<string>("message"), Does.Contain(stage == "prepare" ? "unknownOperations" : "Missing"));
+            Assert.That(File.ReadAllBytes(ToFullPath(Target)), Is.EqualTo(before));
+
+            plan.Remove("unknownOperations");
+            plan["verify"] = new JObject();
+            plan["reviewVersion"] = "review-b";
+            planJson = plan.ToString(Formatting.None);
+            WritePlanFile();
+            Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
+                ApplyPath(), PlanPath(), planJson, plan.Value<string>("snapshotFingerprint"),
+                "review-b", Target, PsdWorkflowPlanBinding.ExplicitApprovalPhrase, out string error), Is.True, error);
+            Assert.That(ReadReceipt().ToString(), Is.EqualTo(rejected.ToString()));
+            Assert.That(await PsdHierarchyTerminalApplyWatcher.RunPendingApplyOnceForTestsAsync(), Is.True);
+
+            JObject applied = ReadReceipt();
+            Assert.That(applied.Value<bool>("success"), Is.True, applied.ToString());
+            Assert.That(applied.Value<string>("sessionId"), Is.EqualTo(sessionId));
+            Assert.That(applied.Value<string>("planHash"), Is.EqualTo(PsdHierarchyTerminalApplyWatcher.ComputePlanHash(planJson)));
+            string[] history = Directory.GetFiles(terminalDirectory, sessionId + ".apply-result.*.json");
+            Assert.That(history.Length, Is.EqualTo(1));
+            Assert.That(JObject.Parse(File.ReadAllText(history[0])).ToString(), Is.EqualTo(rejected.ToString()));
+            GameObject root = PrefabUtility.LoadPrefabContents(Target);
+            try { Assert.That(root.transform.Find("[Rows]").childCount, Is.EqualTo(2)); }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+            Assert.That(File.ReadAllBytes(ToFullPath(Target)), Is.Not.EqualTo(before));
+        }
+
+        [TestCase("applied")]
+        [TestCase("partial")]
+        [TestCase("uncertain")]
+        public async Task DirectSentinelCannotReplayAWrittenOrUncertainAttempt(string status)
+        {
+            WriteSession(PsdHierarchyTerminalApplyWatcher.CurrentProtocolVersion);
+            WritePlanFile();
+            WriteApplySentinel();
+            string receipt = new JObject { ["status"] = status, ["stage"] = "verify" }.ToString();
+            File.WriteAllText(ResultPath(), receipt);
+            byte[] before = File.ReadAllBytes(ToFullPath(Target));
+            LogAssert.Expect(LogType.Warning, new Regex("当前 Apply 会话"));
+            Assert.That(await PsdHierarchyTerminalApplyWatcher.RunPendingApplyOnceForTestsAsync(), Is.False);
+            Assert.That(File.ReadAllText(ResultPath()), Is.EqualTo(receipt));
+            Assert.That(File.ReadAllBytes(ToFullPath(Target)), Is.EqualTo(before));
+            Assert.That(File.Exists(ApplyPath()), Is.False);
+        }
+
         [Test]
         public async Task InterruptedClaimOnlyProducesAnUncertainReadOnlyReceipt()
         {
@@ -245,6 +311,15 @@ namespace PsdLayoutTool2.Tests
                 ["snapshotFingerprint"] = JObject.Parse(snapshotJson).Value<string>("fingerprint"),
                 ["prefabName"] = "TerminalView",
                 ["prefabAssetPath"] = Target,
+                ["targetPrefabAssetPath"] = Target,
+                ["selectionNodeIds"] = new JArray("node:" + ReadNodeId("TerminalView")),
+                ["operationScope"] = "group rows",
+                ["expectedNodeCount"] = ((JArray)JObject.Parse(snapshotJson)["nodes"]).Count + 1,
+                ["expectedHierarchy"] = new JArray(),
+                ["directChildren"] = new JArray(),
+                ["absentPaths"] = new JArray(),
+                ["preserveRequirements"] = new JObject { ["visualResult"] = "unchanged" },
+                ["reviewVersion"] = "review-a",
                 ["output"] = new JObject { ["mode"] = "in_place", ["assetPath"] = Target },
                 ["verify"] = new JObject(),
                 ["wrappers"] = new JArray(new JObject
@@ -322,11 +397,13 @@ namespace PsdLayoutTool2.Tests
                 targetPrefabPath = Target,
                 planPath = PlanPath(),
                 reviewPath = Path.Combine(terminalDirectory, sessionId + ".review.md"),
+                snapshotFingerprint = JObject.Parse(snapshotJson).Value<string>("fingerprint"),
             };
             File.WriteAllText(
                 PsdHierarchyTerminalApplyWatcher.BuildSessionPath(ApplyPath()),
                 JsonConvert.SerializeObject(session, Formatting.Indented),
                 new UTF8Encoding(false));
+            File.WriteAllText(session.reviewPath, "Reviewed row grouping.", new UTF8Encoding(false));
         }
 
         private void WritePlanFile()
@@ -336,7 +413,17 @@ namespace PsdLayoutTool2.Tests
 
         private void WriteApplySentinel()
         {
-            File.WriteAllText(ApplyPath(), string.Empty, new UTF8Encoding(false));
+            var plan = JObject.Parse(planJson);
+            File.WriteAllText(ApplyPath(), JsonConvert.SerializeObject(new PsdWorkflowApproval
+            {
+                approvalText = PsdWorkflowPlanBinding.ExplicitApprovalPhrase,
+                planPath = PlanPath(),
+                planSha256 = PsdWorkflowPlanBinding.Sha256(planJson),
+                snapshotFingerprint = plan.Value<string>("snapshotFingerprint"),
+                reviewVersion = plan.Value<string>("reviewVersion"),
+                targetPrefabPath = Target,
+                approvedAtUtc = DateTime.UtcNow.ToString("o"),
+            }), new UTF8Encoding(false));
         }
 
         private JObject ReadReceipt()

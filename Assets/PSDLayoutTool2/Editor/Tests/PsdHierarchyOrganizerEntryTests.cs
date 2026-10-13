@@ -117,8 +117,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(contract, Does.Contain("status is one of applied, rejected, partial, uncertain"));
             Assert.That(
                 contract,
-                Does.Contain("JSON may be edited before approval"));
-            Assert.That(contract, Does.Contain("If the plan or review is edited after approval"));
+                Does.Contain("Repair the complete review/plan at the existing paths"));
+            Assert.That(contract, Does.Contain("continue in this same conversation and session"));
             Assert.That(contract, Does.Not.Contain("no extra human approval"));
             Assert.That(contract, Does.Not.Contain("Max 3 fix-and-reapply cycles"));
             Assert.That(contract, Does.Contain("partial or uncertain"));
@@ -342,8 +342,13 @@ namespace PsdLayoutTool2.Tests
             Assert.That(foundFingerprint, Is.EqualTo("snapshot-a"));
         }
 
-        [Test]
-        public void ApprovalOnlyRejectionKeepsTheExistingPlanResumable()
+        [TestCase("approval")]
+        [TestCase("binding")]
+        [TestCase("preflight")]
+        [TestCase("naming")]
+        [TestCase("prepare")]
+        [TestCase("preflight-cleanup")]
+        public void PrewriteRejectionKeepsTheExistingConversationResumable(string stage)
         {
             string resumableId = "approval-retry-" + Guid.NewGuid().ToString("N");
             string plan = Path.Combine(terminalDirectory, resumableId + ".plan.json");
@@ -355,12 +360,12 @@ namespace PsdLayoutTool2.Tests
             sessionId = resumableId;
             string applyPath = PsdHierarchyOrganizerEntry.BuildApplySentinelPath(plan);
             File.WriteAllText(
-                applyPath + ".apply-failed",
+                Path.ChangeExtension(applyPath, ".apply-failed"),
                 "{}",
                 new UTF8Encoding(false));
             File.WriteAllText(
                 PsdHierarchyTerminalApplyWatcher.BuildResultPath(applyPath),
-                new JObject { ["status"] = "rejected", ["stage"] = "approval" }.ToString(),
+                new JObject { ["status"] = "rejected", ["stage"] = stage }.ToString(),
                 new UTF8Encoding(false));
 
             Assert.That(
@@ -389,7 +394,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(prompt.text, Does.Contain(Path.GetFileName(prompt.applyFullPath)));
             Assert.That(
                 prompt.text,
-                Does.Contain("If the plan or review is edited after approval"));
+                Does.Contain("continue in this same conversation and session"));
             Assert.That(prompt.text, Does.Not.Contain("re-apply automatically"));
             Assert.That(File.Exists(prompt.promptFullPath), Is.True, "提示词必须落盘留档。");
 
@@ -416,7 +421,12 @@ namespace PsdLayoutTool2.Tests
                 prompt.planFullPath,
                 BuildPlan(snapshotJson).ToString(Newtonsoft.Json.Formatting.None),
                 new UTF8Encoding(false));
-            File.WriteAllText(prompt.applyFullPath, string.Empty, new UTF8Encoding(false));
+            string approvedPlan = File.ReadAllText(prompt.planFullPath, Encoding.UTF8);
+            File.WriteAllText(prompt.reviewFullPath, "Reviewed row grouping.", new UTF8Encoding(false));
+            Assert.That(PsdWorkflowPlanBinding.TryCreateApplySentinel(
+                prompt.applyFullPath, prompt.planFullPath, approvedPlan,
+                session.Value<string>("snapshotFingerprint"), "review-a", targetPrefabPath,
+                PsdWorkflowPlanBinding.ExplicitApprovalPhrase, out string approvalError), Is.True, approvalError);
 
             Assert.That(
                 await PsdHierarchyTerminalApplyWatcher.RunPendingApplyOnceForTestsAsync(),
@@ -474,6 +484,15 @@ namespace PsdLayoutTool2.Tests
                 ["snapshotFingerprint"] = snapshot.Value<string>("fingerprint"),
                 ["prefabName"] = "Source",
                 ["prefabAssetPath"] = targetPrefabPath,
+                ["targetPrefabAssetPath"] = targetPrefabPath,
+                ["selectionNodeIds"] = new JArray("node:" + ReadNodeId(snapshot, "Source")),
+                ["operationScope"] = "group rows",
+                ["expectedNodeCount"] = ((JArray)snapshot["nodes"]).Count + 1,
+                ["expectedHierarchy"] = new JArray(),
+                ["directChildren"] = new JArray(),
+                ["absentPaths"] = new JArray(),
+                ["preserveRequirements"] = new JObject { ["visualResult"] = "unchanged" },
+                ["reviewVersion"] = "review-a",
                 ["output"] = new JObject { ["mode"] = "in_place", ["assetPath"] = targetPrefabPath },
                 ["verify"] = new JObject(),
                 ["wrappers"] = new JArray(new JObject
