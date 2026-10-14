@@ -113,6 +113,14 @@ namespace PsdLayoutTool2.Tests
             UnityEngine.Object.DestroyImmediate(source);
 
             PsdPrefabTargetBinding.Persist(BindingSourceGuid, TargetPath);
+            string cachePath = Path.GetFullPath(Path.Combine(
+                Directory.GetParent(Application.dataPath).FullName,
+                PsdPrefabTargetBinding.GetProfilePath(BindingSourceGuid)));
+            Assert.That(File.Exists(cachePath), Is.True);
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(
+                    "Assets/PSDLayoutTool2Settings/PrefabTargetBindings/" + BindingSourceGuid + ".asset"),
+                Is.Null);
+
             Assert.That(AssetDatabase.MoveAsset(TargetPath, SameNamePath), Is.Empty);
 
             Assert.That(PsdPrefabTargetBinding.TryResolveMovedTargetPrefabPath(
@@ -121,10 +129,47 @@ namespace PsdLayoutTool2.Tests
             Assert.That(resolvedPath, Is.EqualTo(SameNamePath));
         }
 
+        [Test]
+        public void LegacyBindingAssetMigratesToLibraryAndIsRemoved()
+        {
+            GameObject source = Root("Root");
+            PrefabUtility.SaveAsPrefabAsset(source, TargetPath);
+            UnityEngine.Object.DestroyImmediate(source);
+
+            const string legacyFolder = "Assets/PSDLayoutTool2Settings/PrefabTargetBindings";
+            if (!AssetDatabase.IsValidFolder("Assets/PSDLayoutTool2Settings"))
+                AssetDatabase.CreateFolder("Assets", "PSDLayoutTool2Settings");
+            if (!AssetDatabase.IsValidFolder(legacyFolder))
+                AssetDatabase.CreateFolder("Assets/PSDLayoutTool2Settings", "PrefabTargetBindings");
+
+            PsdPrefabTargetBinding legacy = ScriptableObject.CreateInstance<PsdPrefabTargetBinding>();
+            var serialized = new SerializedObject(legacy);
+            serialized.FindProperty("sourcePsdGuid").stringValue = BindingSourceGuid;
+            serialized.FindProperty("targetPrefabGuid").stringValue = AssetDatabase.AssetPathToGUID(TargetPath);
+            serialized.FindProperty("targetPrefabPath").stringValue = TargetPath;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            string legacyPath = legacyFolder + "/" + BindingSourceGuid + ".asset";
+            AssetDatabase.CreateAsset(legacy, legacyPath);
+
+            PsdPrefabTargetBinding.MigrateLegacyBindings();
+
+            string cachePath = Path.GetFullPath(Path.Combine(
+                Directory.GetParent(Application.dataPath).FullName,
+                PsdPrefabTargetBinding.GetProfilePath(BindingSourceGuid)));
+            Assert.That(File.Exists(cachePath), Is.True);
+            Assert.That(File.ReadAllText(cachePath), Does.Contain(AssetDatabase.AssetPathToGUID(TargetPath)));
+            Assert.That(AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(legacyPath), Is.Null);
+        }
+
         [TearDown]
         public void TearDown()
         {
-            AssetDatabase.DeleteAsset(PsdPrefabTargetBinding.GetProfilePath(BindingSourceGuid));
+            string cachePath = Path.GetFullPath(Path.Combine(
+                Directory.GetParent(Application.dataPath).FullName,
+                PsdPrefabTargetBinding.GetProfilePath(BindingSourceGuid)));
+            if (File.Exists(cachePath)) File.Delete(cachePath);
+            AssetDatabase.DeleteAsset(
+                "Assets/PSDLayoutTool2Settings/PrefabTargetBindings/" + BindingSourceGuid + ".asset");
             AssetDatabase.DeleteAsset(Folder);
         }
 

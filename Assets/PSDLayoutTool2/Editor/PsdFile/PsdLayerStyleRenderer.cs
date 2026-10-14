@@ -28,10 +28,10 @@ namespace PhotoshopFile
                 rebuiltShape = true;
             }
 
+            if (style.GradientOverlay != null && !rebuiltShape)
+                ApplyGradientOverlay(layer, style, colors);
             if (style.ColorOverlayEnabled && !rebuiltShape)
-            {
                 ApplyColorOverlay(style, colors);
-            }
 
             float[] coverage = ImageDecoder.GetMaskedCoverage(layer, colors);
             ImageDecoder.ApplyUserMask(layer, colors);
@@ -96,7 +96,7 @@ namespace PhotoshopFile
             }
 
             // 普通位图层本就全透明（如点击热区）不算问题；只有 Photoshop 会画出内容时才报告。
-            bool photoshopDrawsSomething = style.HasVectorMask || style.ColorOverlayEnabled ||
+            bool photoshopDrawsSomething = style.HasVectorMask || style.ColorOverlayEnabled || (style.GradientOverlay != null) ||
                                            style.UnrenderedEffects.Count > 0 ||
                                            !string.IsNullOrEmpty(style.UnsupportedShapeFill);
             if (photoshopDrawsSomething && decodedColors != null && decodedColors.Length > 0 &&
@@ -131,7 +131,7 @@ namespace PhotoshopFile
                 return "导出结果为空（像素全透明，外观只来自图层样式）";
             }
 
-            if (!style.ColorOverlayEnabled && !style.ShapeFillEnabled)
+            if (!style.ColorOverlayEnabled && style.GradientOverlay == null && !style.ShapeFillEnabled)
             {
                 return "导出结果为空（矢量形状的填充已关闭，且没有颜色叠加）";
             }
@@ -143,7 +143,7 @@ namespace PhotoshopFile
         {
             Color fill;
             float fillAlpha;
-            if (style.ColorOverlayEnabled)
+            if (style.ColorOverlayEnabled && style.GradientOverlay == null)
             {
                 // 形状填充关闭时 Photoshop 仍以矢量形状作为图层区域，颜色叠加按自身不透明度画在上面。
                 bool hasBase = style.ShapeFillEnabled && style.HasShapeFillColor;
@@ -156,6 +156,11 @@ namespace PhotoshopFile
             {
                 fill = style.ShapeFillColor;
                 fillAlpha = 1f;
+            }
+            else if (style.GradientOverlay != null)
+            {
+                fill = Color.clear;
+                fillAlpha = 0f;
             }
             else
             {
@@ -171,14 +176,29 @@ namespace PhotoshopFile
             int width = (int)layer.Rect.width;
             int height = (int)layer.Rect.height;
             float[] coverage = shape.Rasterize(layer.Rect);
-            Color32 rgb = fill;
             for (int row = 0; row < height; row++)
             {
                 int textureRow = (height - 1 - row) * width;
                 for (int column = 0; column < width; column++)
                 {
-                    float alpha = coverage[row * width + column] * fillAlpha;
-                    colors[textureRow + column] = new Color32(rgb.r, rgb.g, rgb.b, (byte)Mathf.RoundToInt(alpha * 255f));
+                    Color pixel = fill;
+                    pixel.a = fillAlpha;
+                    if (style.GradientOverlay != null)
+                    {
+                        Color gradient = SampleGradient(layer, style, column, row);
+                        float alpha = gradient.a + fillAlpha * (1f - gradient.a);
+                        if (alpha > 0f)
+                            pixel = (gradient * gradient.a + fill * (fillAlpha * (1f - gradient.a))) / alpha;
+                        pixel.a = alpha;
+                        // Color overlays sit above gradient overlays in Photoshop.
+                        if (style.ColorOverlayEnabled)
+                        {
+                            pixel = Color.Lerp(pixel, style.ColorOverlayColor, style.ColorOverlayOpacity);
+                            pixel.a = alpha;
+                        }
+                    }
+                    pixel.a *= coverage[row * width + column];
+                    colors[textureRow + column] = pixel;
                 }
             }
         }
@@ -192,6 +212,27 @@ namespace PhotoshopFile
                 Color32 source = colors[index];
                 Color blended = Color.Lerp(source, overlay, opacity);
                 Color32 result = blended;
+                result.a = source.a;
+                colors[index] = result;
+            }
+        }
+
+        private static Color SampleGradient(Layer layer, PsdLayerShapeStyle style, int column, int topRow)
+        {
+            return style.GradientOverlay.Sample(layer.Rect.x + column + 0.5f, layer.Rect.y + topRow + 0.5f,
+                layer.Rect, layer.PsdFile.Width, layer.PsdFile.Height);
+        }
+
+        private static void ApplyGradientOverlay(Layer layer, PsdLayerShapeStyle style, Color32[] colors)
+        {
+            int width = (int)layer.Rect.width;
+            int height = (int)layer.Rect.height;
+            for (int row = 0; row < height; row++) for (int column = 0; column < width; column++)
+            {
+                int index = row * width + column;
+                Color32 source = colors[index];
+                Color gradient = SampleGradient(layer, style, column, height - 1 - row);
+                Color32 result = Color.Lerp(source, gradient, gradient.a);
                 result.a = source.a;
                 colors[index] = result;
             }

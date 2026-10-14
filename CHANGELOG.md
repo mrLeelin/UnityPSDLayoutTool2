@@ -2,6 +2,21 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.4.3] - 2026-10-14
+
+### Added
+
+- Added Photoshop linear RGB gradient overlay parsing and rendering for raster and vector-shape layers, including independent transparency stops, opacity, angle, scale, reverse, alignment and offset settings. Unsupported gradient descriptors are reported as export issues instead of being silently ignored.
+- Added Scene22 regression coverage for gradient color and transparency output, reverse-direction behavior and the shared PSD fixture lookup helper.
+- Added Prefab binding migration coverage for moving legacy `Assets/PSDLayoutTool2Settings/PrefabTargetBindings` records into the editor cache.
+
+### Changed
+
+- Store PSD-to-Prefab move bindings as atomic JSON records under `Library/PSDLayoutTool2/PrefabTargetBindings`, keeping generated editor state out of imported assets while preserving automatic resolution after a Prefab is moved.
+- Migrate valid legacy ScriptableObject bindings on editor load or first access, remove migrated legacy assets and retain the existing source/target GUID validation.
+- Compose gradient overlays with shape fills, color overlays and pixel coverage during texture export, and include gradient-only layers in empty-output and diagnostic decisions.
+- Document the new binding cache location in the package README.
+
 ## [0.4.2] - 2026-10-14
 
 ### Fixed

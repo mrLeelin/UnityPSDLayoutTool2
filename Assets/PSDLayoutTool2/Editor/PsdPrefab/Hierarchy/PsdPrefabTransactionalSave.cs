@@ -4,6 +4,7 @@ namespace PsdLayoutTool2
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Text;
     using UnityEditor;
     using UnityEngine;
 
@@ -548,17 +549,47 @@ namespace PsdLayoutTool2
     }
 
     /// <summary>
-    /// Stores only the durable PSD-to-Prefab identity created by a normal
-    /// generation. It intentionally contains no hierarchy or AI decisions.
+    /// Caches the PSD-to-Prefab identity in Library. The ScriptableObject
+    /// fields are retained only to migrate legacy Assets records.
     /// </summary>
     public sealed class PsdPrefabTargetBinding : ScriptableObject
     {
         private const string ProfileFolder =
+            "Library/PSDLayoutTool2/PrefabTargetBindings";
+        private const string LegacyProfileFolder =
             "Assets/PSDLayoutTool2Settings/PrefabTargetBindings";
 
         [SerializeField] private string sourcePsdGuid = string.Empty;
         [SerializeField] private string targetPrefabGuid = string.Empty;
         [SerializeField] private string targetPrefabPath = string.Empty;
+
+        [InitializeOnLoadMethod]
+        private static void ScheduleLegacyMigration()
+        {
+            EditorApplication.delayCall += MigrateLegacyBindings;
+        }
+
+        internal static void MigrateLegacyBindings()
+        {
+            if (!AssetDatabase.IsValidFolder(LegacyProfileFolder)) return;
+            foreach (string assetGuid in AssetDatabase.FindAssets(string.Empty, new[] { LegacyProfileFolder }))
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(assetGuid);
+                if (!assetPath.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    string sourceGuid = Path.GetFileNameWithoutExtension(assetPath);
+                    BindingRecord record = LoadRecord(sourceGuid);
+                    if (record != null && record.sourcePsdGuid == sourceGuid &&
+                        !string.IsNullOrEmpty(record.targetPrefabGuid))
+                        DeleteLegacyAsset(sourceGuid);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning("PSD Prefab binding migration retained " + assetPath + ": " + exception.Message);
+                }
+            }
+        }
 
         public static string GetProfilePath(string sourceGuid)
         {
@@ -568,7 +599,7 @@ namespace PsdLayoutTool2
             if (normalizedSourceGuid.Any(character =>
                     !char.IsLetterOrDigit(character) && character != '-' && character != '_'))
                 throw new ArgumentException("Source PSD GUID contains unsafe path characters.", nameof(sourceGuid));
-            return ProfileFolder + "/" + normalizedSourceGuid + ".asset";
+            return ProfileFolder + "/" + normalizedSourceGuid + ".json";
         }
 
         public static void Persist(string sourceGuid, string prefabPath)
@@ -581,20 +612,13 @@ namespace PsdLayoutTool2
                 throw new InvalidOperationException(
                     "Cannot bind a PSD to a missing Prefab: " + normalizedPrefabPath);
 
-            string profilePath = GetProfilePath(normalizedSourceGuid);
-            PsdPrefabTargetBinding profile = AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(profilePath);
-            if (profile == null)
+            SaveRecord(new BindingRecord
             {
-                EnsureProfileFolder();
-                profile = CreateInstance<PsdPrefabTargetBinding>();
-                AssetDatabase.CreateAsset(profile, profilePath);
-            }
-
-            profile.sourcePsdGuid = normalizedSourceGuid;
-            profile.targetPrefabGuid = prefabGuid;
-            profile.targetPrefabPath = normalizedPrefabPath;
-            EditorUtility.SetDirty(profile);
-            AssetDatabase.SaveAssetIfDirty(profile);
+                sourcePsdGuid = normalizedSourceGuid,
+                targetPrefabGuid = prefabGuid,
+                targetPrefabPath = normalizedPrefabPath
+            });
+            DeleteLegacyAsset(normalizedSourceGuid);
         }
 
         /// <summary>
@@ -610,18 +634,18 @@ namespace PsdLayoutTool2
             prefabPath = string.Empty;
             if (string.IsNullOrEmpty((sourceGuid ?? string.Empty).Trim())) return false;
 
-            PsdPrefabTargetBinding profile;
+            string normalizedSourceGuid = (sourceGuid ?? string.Empty).Trim();
+            BindingRecord profile;
             try
             {
-                profile = AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(GetProfilePath(sourceGuid));
+                profile = LoadRecord(normalizedSourceGuid);
             }
             catch (ArgumentException)
             {
                 return false;
             }
-
             if (profile == null ||
-                !string.Equals(profile.sourcePsdGuid, (sourceGuid ?? string.Empty).Trim(), StringComparison.Ordinal) ||
+                !string.Equals(profile.sourcePsdGuid, normalizedSourceGuid, StringComparison.Ordinal) ||
                 string.IsNullOrEmpty(profile.targetPrefabGuid))
                 return false;
 
@@ -633,26 +657,94 @@ namespace PsdLayoutTool2
             if (!string.Equals(profile.targetPrefabPath, resolvedPath, StringComparison.Ordinal))
             {
                 profile.targetPrefabPath = resolvedPath;
-                EditorUtility.SetDirty(profile);
-                AssetDatabase.SaveAssetIfDirty(profile);
+                SaveRecord(profile);
             }
 
             prefabPath = resolvedPath;
             return true;
         }
 
-        private static void EnsureProfileFolder()
+        private static BindingRecord LoadRecord(string sourceGuid)
         {
-            const string settingsFolder = "Assets/PSDLayoutTool2Settings";
-            if (!AssetDatabase.IsValidFolder(settingsFolder))
-                AssetDatabase.CreateFolder("Assets", "PSDLayoutTool2Settings");
-            if (!AssetDatabase.IsValidFolder(ProfileFolder))
-                AssetDatabase.CreateFolder(settingsFolder, "PrefabTargetBindings");
+            if (string.IsNullOrEmpty(sourceGuid)) return null;
+
+            string fullPath = ToProjectPath(GetProfilePath(sourceGuid));
+            if (File.Exists(fullPath))
+            {
+                try
+                {
+                    return JsonUtility.FromJson<BindingRecord>(File.ReadAllText(fullPath, Encoding.UTF8));
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning("PSD Prefab binding cache could not be read: " + fullPath + "\n" + exception.Message);
+                    return null;
+                }
+            }
+
+            string legacyPath = LegacyProfileFolder + "/" + sourceGuid + ".asset";
+            PsdPrefabTargetBinding legacy = AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(legacyPath);
+            if (legacy == null || legacy.sourcePsdGuid != sourceGuid ||
+                string.IsNullOrEmpty(legacy.targetPrefabGuid)) return null;
+
+            BindingRecord migrated = new BindingRecord
+            {
+                sourcePsdGuid = legacy.sourcePsdGuid,
+                targetPrefabGuid = legacy.targetPrefabGuid,
+                targetPrefabPath = legacy.targetPrefabPath
+            };
+            SaveRecord(migrated);
+            DeleteLegacyAsset(sourceGuid);
+            return migrated;
+        }
+
+        private static void SaveRecord(BindingRecord record)
+        {
+            string fullPath = ToProjectPath(GetProfilePath(record.sourcePsdGuid));
+            string directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            string temporaryPath = fullPath + ".tmp";
+            try
+            {
+                File.WriteAllText(temporaryPath, JsonUtility.ToJson(record, true), new UTF8Encoding(false));
+                if (File.Exists(fullPath)) File.Replace(temporaryPath, fullPath, null);
+                else File.Move(temporaryPath, fullPath);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+        }
+
+        private static void DeleteLegacyAsset(string sourceGuid)
+        {
+            string legacyPath = LegacyProfileFolder + "/" + sourceGuid + ".asset";
+            if (AssetDatabase.LoadAssetAtPath<PsdPrefabTargetBinding>(legacyPath) != null)
+                AssetDatabase.DeleteAsset(legacyPath);
+            string fullFolder = ToProjectPath(LegacyProfileFolder);
+            if (Directory.Exists(fullFolder) && !Directory.EnumerateFileSystemEntries(fullFolder).Any())
+                AssetDatabase.DeleteAsset(LegacyProfileFolder);
+        }
+
+        private static string ToProjectPath(string relativePath)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
+            if (string.IsNullOrEmpty(projectRoot))
+                throw new InvalidOperationException("Unity project root could not be resolved.");
+            return Path.GetFullPath(Path.Combine(projectRoot, relativePath));
         }
 
         private static string NormalizeAssetPath(string path)
         {
             return (path ?? string.Empty).Replace('\\', '/').Trim();
+        }
+
+        [Serializable]
+        private sealed class BindingRecord
+        {
+            public string sourcePsdGuid = string.Empty;
+            public string targetPrefabGuid = string.Empty;
+            public string targetPrefabPath = string.Empty;
         }
     }
 }

@@ -16,8 +16,6 @@ namespace PhotoshopFile
             new KeyValuePair<string, string>("OrGl", "外发光"),
             new KeyValuePair<string, string>("ebbl", "斜面和浮雕"),
             new KeyValuePair<string, string>("ChFX", "光泽"),
-            new KeyValuePair<string, string>("GrFl", "渐变叠加"),
-            new KeyValuePair<string, string>("gradientFillMulti", "渐变叠加"),
             new KeyValuePair<string, string>("patternFill", "图案叠加"),
         };
 
@@ -43,6 +41,8 @@ namespace PhotoshopFile
 
         /// <summary>无法重建的形状填充类型（渐变填充 / 图案填充），为空表示没有。</summary>
         internal string UnsupportedShapeFill { get; private set; } = string.Empty;
+
+        internal PsdGradientOverlay GradientOverlay { get; private set; }
 
         internal bool ColorOverlayEnabled { get; private set; }
 
@@ -185,6 +185,7 @@ namespace PhotoshopFile
             }
 
             ReadStroke(data);
+            ReadGradientOverlay(data);
             ReadShadow(data, "DrSh", false);
             ReadShadow(data, "dsdw", false);
             ReadShadow(data, "IrSh", true);
@@ -198,6 +199,17 @@ namespace PhotoshopFile
                     AddUnrendered(effect.Value);
                 }
             }
+        }
+
+        private void ReadGradientOverlay(byte[] data)
+        {
+            string issue;
+            GradientOverlay = PsdGradientOverlay.Read(data, "GrFl", out issue);
+            if (issue != null) AddUnrendered(issue);
+            string multiIssue;
+            PsdGradientOverlay multi = PsdGradientOverlay.Read(data, "gradientFillMulti", out multiIssue);
+            if (multi != null) GradientOverlay = multi;
+            if (multiIssue != null) AddUnrendered(multiIssue);
         }
 
         private void ReadStroke(byte[] data)

@@ -13,6 +13,57 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdFileImportTests
     {
         [Test]
+        public void Scene22RectangleCopyExportsGradientColorAndTransparency()
+        {
+            Layer layer = FindSceneLayer("场景22.psd", 362);
+            Texture2D texture = ImageDecoder.DecodeImage(layer);
+            try
+            {
+                Assert.That(texture.width, Is.EqualTo(1091));
+                Assert.That(texture.height, Is.EqualTo(772));
+                // Pixel values independently checked against the PSD's saved composite:
+                // purple/transparent at the top, green/173 alpha at the bottom.
+                Color32 bottom = texture.GetPixel(545, 1);
+                Assert.That(bottom.r, Is.InRange(154, 155));
+                Assert.That(bottom.g, Is.InRange(182, 183));
+                Assert.That(bottom.b, Is.InRange(42, 43));
+                Assert.That(bottom.a, Is.InRange(172, 173));
+                Color32 quarter = texture.GetPixel(545, 193);
+                Assert.That(quarter.r, Is.InRange(127, 129));
+                Assert.That(quarter.g, Is.InRange(143, 146));
+                Assert.That(quarter.a, Is.InRange(135, 137));
+                Color32 middle = texture.GetPixel(545, 386);
+                Assert.That(middle.a, Is.InRange(85, 87));
+                Color32 top = texture.GetPixel(545, 760);
+                Assert.That(top.a, Is.LessThanOrEqualTo(2));
+                var renderer = typeof(ImageDecoder).Assembly.GetType("PhotoshopFile.PsdLayerStyleRenderer");
+                var issues = (List<string>)renderer.GetMethod("DescribeExportIssues",
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+                    .Invoke(null, new object[] { layer, texture.GetPixels32() });
+                Assert.That(issues, Is.Empty);
+            }
+            finally { Object.DestroyImmediate(texture); }
+        }
+
+        [Test]
+        public void Scene22GradientReverseSwapsColorAndTransparency()
+        {
+            Layer layer = FindSceneLayer("场景22.psd", 362);
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            object style = typeof(Layer).GetProperty("ShapeStyle", flags).GetValue(layer);
+            object gradient = style.GetType().GetProperty("GradientOverlay", flags).GetValue(style);
+            gradient.GetType().GetProperty("Reverse", flags).SetValue(gradient, true);
+            Texture2D texture = ImageDecoder.DecodeImage(layer);
+            try
+            {
+                Assert.That(texture.GetPixel(545, 1).a, Is.LessThan(0.01f));
+                Assert.That(texture.GetPixel(545, 760).a, Is.GreaterThan(0.66f));
+            }
+            finally { Object.DestroyImmediate(texture); }
+        }
+
+        [Test]
         public void Scene33LockUsesEnabledShadowAfterDisabledShadow()
         {
             Layer layer = FindScene33Layer(387);
@@ -196,8 +247,13 @@ namespace PsdLayoutTool2.Tests
 
         private static Layer FindScene33Layer(uint id)
         {
-            string path = Path.Combine(Application.dataPath, "PSDLayoutTool2", "TestData", "场景33.psd");
-            if (!File.Exists(path)) Assert.Ignore("Scene33 PSD fixture is unavailable.");
+            return FindSceneLayer("场景33.psd", id);
+        }
+
+        private static Layer FindSceneLayer(string fileName, uint id)
+        {
+            string path = Path.Combine(Application.dataPath, "PSDLayoutTool2", "TestData", fileName);
+            if (!File.Exists(path)) Assert.Ignore(fileName + " PSD fixture is unavailable.");
             var queue = new Queue<Layer>(new PsdFile(path).Layers);
             while (queue.Count > 0)
             {
@@ -205,7 +261,7 @@ namespace PsdLayoutTool2.Tests
                 if (layer.Id == id) return layer;
                 foreach (Layer child in layer.Children) queue.Enqueue(child);
             }
-            Assert.Fail("Scene33 layer " + id + " is missing.");
+            Assert.Fail(fileName + " layer " + id + " is missing.");
             return null;
         }
 
