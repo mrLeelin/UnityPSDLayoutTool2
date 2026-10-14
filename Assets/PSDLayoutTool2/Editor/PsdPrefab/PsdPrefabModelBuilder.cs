@@ -114,6 +114,7 @@ namespace PsdLayoutTool2
             string parentId,
             int siblingIndex)
         {
+            if (layer.ClippingBase != null) return;
             string stableId = PsdStableLayerIdUtility.Create(layer.Id, parentId, siblingIndex, layer.Name).value;
             var node = new PsdPrefabNodeModel
             {
@@ -125,7 +126,7 @@ namespace PsdLayoutTool2
                     (layer.Children != null && layer.Children.Count > 0 ? PsdPrefabNodeKind.Group : PsdPrefabNodeKind.Image),
                 visible = layer.Visible,
                 opacity = Mathf.Clamp01(layer.Opacity / 255f),
-                bounds = layer.Rect
+                bounds = layer.RenderRect
             };
 
             if (layer.IsTextLayer)
@@ -169,6 +170,28 @@ namespace PsdLayoutTool2
             // invisible because the first Content call sees an empty asset value.
             node.assetFingerprint = PsdHierarchyFingerprints.Asset(layer.Channels.Select(channel =>
                 new KeyValuePair<short, byte[]>(channel.ID, channel.ImageData)));
+            if (layer.ClippedLayers.Count > 0)
+            {
+                var dependencies = new List<KeyValuePair<short, byte[]>>
+                {
+                    new KeyValuePair<short, byte[]>(-1, System.Text.Encoding.UTF8.GetBytes(node.assetFingerprint))
+                };
+                for (int index = 0; index < layer.ClippedLayers.Count; index++)
+                {
+                    Layer clipped = layer.ClippedLayers[index];
+                    string pixels = PsdHierarchyFingerprints.Asset(clipped.Channels.Select(channel =>
+                        new KeyValuePair<short, byte[]>(channel.ID, channel.ImageData)));
+                    string mask = PsdHierarchyFingerprints.Asset(new[] {
+                        new KeyValuePair<short, byte[]>(-2, clipped.MaskData.ImageData) });
+                    string effects = PsdHierarchyFingerprints.Asset(clipped.AdjustmentInfo.Select((info, i) =>
+                        new KeyValuePair<short, byte[]>((short)i, info.RawData)));
+                    string geometry = PsdHierarchyFingerprints.Geometry(new PsdPrefabNodeModel { bounds = clipped.RenderRect });
+                    string value = clipped.Id + ":" + clipped.Visible + ":" + clipped.Opacity + ":" +
+                        clipped.BlendModeKey + ":" + geometry + ":" + pixels + ":" + mask + ":" + effects;
+                    dependencies.Add(new KeyValuePair<short, byte[]>((short)index, System.Text.Encoding.UTF8.GetBytes(value)));
+                }
+                node.assetFingerprint = PsdHierarchyFingerprints.Asset(dependencies);
+            }
             node.contentFingerprint = PsdHierarchyFingerprints.Content(node);
             model.nodes.Add(node);
 

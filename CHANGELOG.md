@@ -2,6 +2,20 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.4.2] - 2026-10-14
+
+### Fixed
+
+- Bake supported raster clipping layers into their base layer, respecting document coordinates, visibility, opacity and user masks. Clipped photos no longer export as separate textures or enlarge the generated Prefab hierarchy; normal, multiply and screen blends are supported, with diagnostics for unsupported modes.
+- Render raster strokes from contour coverage while preserving fractional mask alpha and correct color compositing. Outside and centered strokes retain their full extent instead of being cut off at the source layer bounds.
+- Trim transparent padding from styled and clipped raster exports, retaining one transparent pixel for filtering. Texture export, Prefab layout and nine-slice preview share the resulting document-space bounds, preserving visible pixel size and position.
+- Include clipped-layer pixels, masks, effects, opacity and geometry in the base asset fingerprint so incremental imports regenerate the composed texture when its dependencies change.
+- Skip disabled text shadows when resolving the active Photoshop shadow, and restore TMP shader ratios for shadow materials to prevent sampling adjacent atlas glyphs.
+
+### Added
+
+- Regression coverage using the Scene33 PSD for clipping composition, rendered bounds, masks, stroke coverage, crop-coordinate preservation and incremental fingerprints, plus TMP shadow-material checks.
+
 ## [0.4.1] - 2026-10-13
 
 ### Fixed

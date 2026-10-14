@@ -282,6 +282,13 @@ namespace PsdLayoutTool2
             SetMaterialColor(material, "_UnderlayColor", hasShadow ? effect.shadowColor : Color.black);
             SetKeyword(material, "OUTLINE_ON", hasOutline);
             SetKeyword(material, "UNDERLAY_ON", hasShadow);
+            if (hasShadow)
+            {
+                // Inherited RATIOS_OFF can make an offset shadow sample adjacent
+                // atlas glyphs. TMP ratios keep the effects within SDF padding.
+                SetKeyword(material, "RATIOS_OFF", false);
+                ShaderUtilities.UpdateShaderRatios(material);
+            }
         }
 
         internal static bool CanUseBaseMaterialDirectly(

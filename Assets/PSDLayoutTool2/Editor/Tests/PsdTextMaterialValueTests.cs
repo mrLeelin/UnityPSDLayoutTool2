@@ -12,6 +12,36 @@ namespace PsdLayoutTool2.Tests
     /// </summary>
     public sealed class PsdTextMaterialValueTests
     {
+        [TestCase(true)]
+        [TestCase(false)]
+        public void ShadowUsesSafeAtlasRatiosWithoutChangingOutlineOnlyMaterials(bool hasShadow)
+        {
+            Material material = CreateTmpMaterial();
+            try
+            {
+                material.SetFloat("_GradientScale", 11f);
+                material.shaderKeywords = new[] { "RATIOS_OFF" };
+                ApplyMaterialProperties(material, new PsdPrefabTextEffectModel
+                {
+                    hasOutline = true,
+                    outlineWidth = 6f,
+                    hasShadow = hasShadow,
+                    shadowOffsetY = -9f,
+                    shadowDilate = 4f,
+                    shadowColor = new Color32(24, 73, 20, 255)
+                }, 60f);
+
+                Assert.That(System.Array.IndexOf(material.shaderKeywords, "RATIOS_OFF") >= 0, Is.EqualTo(!hasShadow));
+                Assert.That(material.IsKeywordEnabled("UNDERLAY_ON"), Is.EqualTo(hasShadow));
+                if (hasShadow)
+                {
+                    Assert.That(material.GetFloat("_ScaleRatioC"), Is.GreaterThan(0f).And.LessThan(1f));
+                    Assert.That(material.GetFloat("_UnderlayOffsetY"), Is.LessThan(0f));
+                }
+            }
+            finally { Object.DestroyImmediate(material); }
+        }
+
         [Test]
         public void ThreePixelOutlineMatchesFigmaBridgeConversion()
         {

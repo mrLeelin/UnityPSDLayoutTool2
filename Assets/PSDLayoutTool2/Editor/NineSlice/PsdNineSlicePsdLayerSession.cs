@@ -23,12 +23,12 @@ namespace PsdLayoutTool2
         public string DisplayName { get; private set; }
         public int Depth { get; private set; }
         public uint LayerId { get { return Layer == null ? 0U : Layer.Id; } }
-        public Rect Rect { get { return Layer == null ? default(Rect) : Layer.Rect; } }
+        public Rect Rect { get { return Layer == null ? default(Rect) : Layer.RenderRect; } }
         public bool IsVisibleRasterLeaf
         {
             get
             {
-                return Layer != null && Layer.Visible && !Layer.IsTextLayer &&
+                return Layer != null && Layer.ClippingBase == null && Layer.Visible && !Layer.IsTextLayer &&
                     Layer.Children != null && Layer.Children.Count == 0 &&
                     !Layer.IsPixelDataIrrelevant && Layer.Rect.width > 0f && Layer.Rect.height > 0f;
             }
@@ -132,7 +132,7 @@ namespace PsdLayoutTool2
 
                 bool visible = ancestorsVisible && layer.Visible;
                 bool isLeaf = layer.Children == null || layer.Children.Count == 0;
-                if (visible && isLeaf && !layer.IsTextLayer && !layer.IsPixelDataIrrelevant &&
+                if (visible && isLeaf && layer.ClippingBase == null && !layer.IsTextLayer && !layer.IsPixelDataIrrelevant &&
                     layer.Rect.width > 0f && layer.Rect.height > 0f)
                 {
                     string name = string.IsNullOrEmpty(layer.Name) ? "<unnamed layer>" : layer.Name;

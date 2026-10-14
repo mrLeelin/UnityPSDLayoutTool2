@@ -55,6 +55,7 @@ namespace PhotoshopFile
         internal float StrokeWidth { get; private set; }
         internal Color StrokeColor { get; private set; }
         internal float StrokeOpacity { get; private set; } = 1f;
+        internal string StrokePosition { get; private set; } = "OutF";
         internal bool DropShadowEnabled { get; private set; }
         internal float DropShadowDistance { get; private set; }
         internal float DropShadowAngle { get; private set; } = 120f;
@@ -205,6 +206,13 @@ namespace PhotoshopFile
             if (!Layer.TryReadEffectEnabled(data, "FrFX", out enabled, out start, true) &&
                 !Layer.TryReadEffectEnabled(data, "frameFXMulti", out enabled, out start, true)) return;
             StrokeEnabled = true;
+            // Photoshop stores the position as the Styl / FStl enum.
+            int position = Layer.FindAscii(data, "FStl", start, Math.Min(data.Length, start + 256));
+            if (position >= 0 && position + 12 <= data.Length)
+            {
+                string positionValue = System.Text.Encoding.ASCII.GetString(data, position + 8, 4);
+                if (positionValue == "OutF" || positionValue == "InsF" || positionValue == "CtrF") StrokePosition = positionValue;
+            }
             double value;
             StrokeWidth = Layer.TryReadUnitValue(data, "Sz  ", start, out value) ? Mathf.Max(0f, (float)value) : 1f;
             StrokeOpacity = Layer.TryReadUnitValue(data, "Opct", start, out value) ? Mathf.Clamp01((float)value / 100f) : 1f;

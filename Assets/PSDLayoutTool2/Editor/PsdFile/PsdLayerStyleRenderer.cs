@@ -10,14 +10,15 @@ namespace PhotoshopFile
     internal static class PsdLayerStyleRenderer
     {
         /// <summary>
-        /// 就地修改像素（Unity 纹理行序：第 0 行是图层底边），在用户蒙版与图层不透明度之前调用。
+        /// 重建填充、应用用户蒙版后渲染样式并扩展边界；第 0 行是底边，图层不透明度在返回后应用。
         /// </summary>
-        internal static void Apply(Layer layer, Color32[] colors)
+        internal static Color32[] Apply(Layer layer, Color32[] colors)
         {
             PsdLayerShapeStyle style = layer?.ShapeStyle;
             if (style == null || layer.IsTextLayer || colors == null || colors.Length == 0)
             {
-                return;
+                ImageDecoder.ApplyUserMask(layer, colors);
+                return colors;
             }
 
             bool rebuiltShape = false;
@@ -32,7 +33,53 @@ namespace PhotoshopFile
                 ApplyColorOverlay(style, colors);
             }
 
-            ApplyRasterEffects(style, colors, (int)layer.Rect.width, (int)layer.Rect.height);
+            float[] coverage = ImageDecoder.GetMaskedCoverage(layer, colors);
+            ImageDecoder.ApplyUserMask(layer, colors);
+            ImageDecoder.ApplyClippingLayers(layer, colors);
+            Rect renderRect = GetRenderRect(layer);
+            int width = (int)renderRect.width;
+            int height = (int)renderRect.height;
+            if (renderRect != layer.Rect)
+            {
+                var expanded = new Color32[width * height];
+                var expandedCoverage = new float[width * height];
+                int offsetX = (int)(layer.Rect.x - renderRect.x);
+                int offsetY = (int)(renderRect.yMax - layer.Rect.yMax);
+                for (int row = 0; row < (int)layer.Rect.height; row++)
+                {
+                    int source = row * (int)layer.Rect.width, target = (row + offsetY) * width + offsetX;
+                    System.Array.Copy(colors, source, expanded, target, (int)layer.Rect.width);
+                    System.Array.Copy(coverage, source, expandedCoverage, target, (int)layer.Rect.width);
+                }
+                colors = expanded;
+                coverage = expandedCoverage;
+            }
+            ApplyRasterEffects(style, colors, coverage, width, height);
+            return colors;
+        }
+
+        internal static Rect GetRenderRect(Layer layer)
+        {
+            if (layer == null) return default(Rect);
+            Rect rect = layer.Rect;
+            PsdLayerShapeStyle style = layer.ShapeStyle;
+            if (style == null || layer.IsTextLayer || rect.width <= 0 || rect.height <= 0) return rect;
+            float stroke = style.StrokePosition == "InsF" ? 0f :
+                style.StrokeWidth * (style.StrokePosition == "CtrF" ? 0.5f : 1f);
+            int padding = style.StrokeEnabled && style.StrokeOpacity > 0f && stroke > 0f
+                ? Mathf.CeilToInt(stroke) + 1 : 0;
+            int left = padding, right = padding, top = padding, bottom = padding;
+            if (style.DropShadowEnabled && style.DropShadowColor.a > 0f)
+            {
+                int blur = Mathf.Clamp(Mathf.CeilToInt(style.DropShadowBlur), 0, 32) + 1;
+                int dx = Mathf.RoundToInt(Mathf.Cos(style.DropShadowAngle * Mathf.Deg2Rad) * style.DropShadowDistance);
+                int dy = Mathf.RoundToInt(Mathf.Sin(style.DropShadowAngle * Mathf.Deg2Rad) * style.DropShadowDistance);
+                left = Mathf.Max(left, blur - dx);
+                right = Mathf.Max(right, blur + dx);
+                top = Mathf.Max(top, blur + dy);
+                bottom = Mathf.Max(bottom, blur - dy);
+            }
+            return new Rect(rect.x - left, rect.y - top, rect.width + left + right, rect.height + top + bottom);
         }
 
         /// <summary>
@@ -66,6 +113,12 @@ namespace PhotoshopFile
             if (style.UnrenderedEffects.Count > 0)
             {
                 issues.Add("未导出的图层样式：" + string.Join("、", style.UnrenderedEffects));
+            }
+
+            foreach (Layer clipped in layer.ClippedLayers)
+            {
+                if (clipped.Visible && !ImageDecoder.SupportsClippingBlend(clipped.BlendModeKey))
+                    issues.Add("剪贴图层「" + clipped.Name + "」使用未支持的混合模式：" + clipped.BlendModeKey);
             }
 
             return issues;
@@ -144,15 +197,19 @@ namespace PhotoshopFile
             }
         }
 
-        private static void ApplyRasterEffects(PsdLayerShapeStyle style, Color32[] colors, int width, int height)
+        private static void ApplyRasterEffects(PsdLayerShapeStyle style, Color32[] colors, float[] coverage, int width, int height)
         {
             if (width <= 0 || height <= 0) return;
             byte[] alpha = new byte[colors.Length];
             for (int i = 0; i < colors.Length; i++) alpha[i] = colors[i].a;
             if (style.StrokeEnabled && style.StrokeWidth > 0f)
             {
-                byte[] expanded = Dilate(alpha, width, height, Mathf.CeilToInt(style.StrokeWidth));
-                CompositeMask(colors, Subtract(expanded, alpha, width, height), style.StrokeColor, style.StrokeOpacity, alpha, false);
+                float lo = style.StrokePosition == "OutF" ? 0f :
+                    -style.StrokeWidth * (style.StrokePosition == "CtrF" ? 0.5f : 1f);
+                float hi = style.StrokePosition == "InsF" ? 0f :
+                    style.StrokeWidth * (style.StrokePosition == "CtrF" ? 0.5f : 1f);
+                CompositeStroke(colors, StrokeCoverage(coverage, width, height, lo, hi),
+                    style.StrokeColor, style.StrokeOpacity, style.StrokePosition == "OutF");
             }
             if (style.DropShadowEnabled)
             {
@@ -171,12 +228,82 @@ namespace PhotoshopFile
             }
         }
 
-        private static byte[] Dilate(byte[] source, int width, int height, int radius)
+        // Alpha describes how the contour crosses an edge pixel. Expanding
+        // alpha values themselves incorrectly carries weak coverage outward.
+        private static byte[] StrokeCoverage(float[] alpha, int width, int height, float lo, float hi)
         {
-            var result = new byte[source.Length];
+            float reach = Mathf.Max(Mathf.Abs(lo), Mathf.Abs(hi)) + 1f;
+            int extent = Mathf.CeilToInt(reach);
+            var offsets = new List<Vector3>();
+            for (int y = -extent; y <= extent; y++) for (int x = -extent; x <= extent; x++)
+            {
+                float distance = Mathf.Sqrt(x * x + y * y);
+                if (distance <= reach) offsets.Add(new Vector3(x, y, distance));
+            }
+            var hard = new bool[alpha.Length];
             for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
-            { byte max = 0; for (int yy = -radius; yy <= radius; yy++) for (int xx = -radius; xx <= radius; xx++) { int px = x + xx, py = y + yy; if (px >= 0 && px < width && py >= 0 && py < height) max = (byte)Mathf.Max(max, source[py * width + px]); } result[y * width + x] = max; }
+            {
+                float a = alpha[y * width + x];
+                if (a != 0f && a != 1f) continue;
+                for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (Mathf.Abs(dx) + Mathf.Abs(dy) != 1) continue;
+                    int px = x + dx, py = y + dy;
+                    if (px >= 0 && px < width && py >= 0 && py < height &&
+                        alpha[py * width + px] == 1f - a) hard[y * width + x] = true;
+                }
+            }
+            var result = new byte[alpha.Length];
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+            {
+                int index = y * width + x;
+                float coverage = alpha[index];
+                float distance = 0.5f - coverage;
+                if (alpha[index] == 0f || alpha[index] == 1f)
+                {
+                    bool inside = alpha[index] == 1f;
+                    float partialDistance = float.PositiveInfinity, hardDistance = float.PositiveInfinity;
+                    float oppositeDistance = float.PositiveInfinity;
+                    distance = inside ? float.NegativeInfinity : float.PositiveInfinity;
+                    foreach (Vector3 offset in offsets)
+                    {
+                        int px = x + (int)offset.x, py = y + (int)offset.y;
+                        if (px < 0 || px >= width || py < 0 || py >= height) continue;
+                        int neighbor = py * width + px;
+                        float a = alpha[neighbor];
+                        if (hard[neighbor]) hardDistance = Mathf.Min(hardDistance, offset.z);
+                        if ((a >= 0.5f) != inside) oppositeDistance = Mathf.Min(oppositeDistance, offset.z);
+                        if (a == 0f || a == 1f) continue;
+                        partialDistance = Mathf.Min(partialDistance, offset.z);
+                        float stated = 0.5f - a + (inside ? -offset.z : offset.z);
+                        distance = inside ? Mathf.Max(distance, stated) : Mathf.Min(distance, stated);
+                    }
+                    if (hardDistance < partialDistance || float.IsPositiveInfinity(partialDistance))
+                        distance = (inside ? -1f : 1f) * Mathf.Max(oppositeDistance - 0.5f, 0f);
+                }
+                float band = Mathf.Clamp01(hi - distance + 0.5f) * Mathf.Clamp01(distance - lo + 0.5f);
+                result[index] = (byte)Mathf.RoundToInt(band * 255f);
+            }
             return result;
+        }
+
+        private static void CompositeStroke(Color32[] colors, byte[] coverage, Color color, float opacity, bool behind)
+        {
+            for (int i = 0; i < colors.Length; i++)
+            {
+                float alpha = coverage[i] / 255f * Mathf.Clamp01(opacity) * color.a;
+                if (alpha <= 0f) continue;
+                Color source = colors[i];
+                // Outside stroke is behind the layer's antialiased pixels;
+                // keep their photograph color rather than painting over it.
+                float strokeAlpha = alpha * (1f - source.a);
+                float resultAlpha = source.a + strokeAlpha;
+                Color result = behind
+                    ? (source * source.a + color * strokeAlpha) / resultAlpha
+                    : (color * alpha + source * source.a * (1f - alpha)) / resultAlpha;
+                result.a = resultAlpha;
+                colors[i] = result;
+            }
         }
 
         private static byte[] Erode(byte[] source, int width, int height, int radius)
@@ -200,9 +327,29 @@ namespace PhotoshopFile
             return result;
         }
 
-        private static void CompositeMask(Color32[] colors, byte[] mask, Color color, float opacity, byte[] originalAlpha, bool outsideOnly)
+        private static void CompositeMask(Color32[] colors, byte[] mask, Color color, float opacity, byte[] originalAlpha, bool behind)
         {
-            for (int i = 0; i < colors.Length; i++) { if (outsideOnly && originalAlpha[i] > 0) continue; float a = mask[i] / 255f * Mathf.Clamp01(opacity) * color.a; if (a <= 0f) continue; Color dst = colors[i]; Color blended = Color.Lerp(new Color(dst.r / 255f, dst.g / 255f, dst.b / 255f, 1f), color, a); colors[i] = new Color32((byte)Mathf.RoundToInt(blended.r * 255f), (byte)Mathf.RoundToInt(blended.g * 255f), (byte)Mathf.RoundToInt(blended.b * 255f), (byte)Mathf.Max(dst.a, Mathf.RoundToInt(a * 255f))); }
+            for (int i = 0; i < colors.Length; i++)
+            {
+                float a = mask[i] / 255f * Mathf.Clamp01(opacity) * color.a;
+                if (a <= 0f) continue;
+                Color dst = colors[i]; // Color32 -> Color already normalizes all four channels.
+                if (behind)
+                {
+                    float effectAlpha = a * (1f - dst.a);
+                    float outputAlpha = dst.a + effectAlpha;
+                    Color output = (dst * dst.a + color * effectAlpha) / outputAlpha;
+                    output.a = outputAlpha;
+                    colors[i] = output;
+                }
+                else
+                {
+                    // Inner effects change color while retaining the layer's coverage.
+                    Color output = Color.Lerp(dst, color, a);
+                    output.a = originalAlpha[i] / 255f;
+                    colors[i] = output;
+                }
+            }
         }
 
         private static bool IsFullyTransparent(Color32[] colors)

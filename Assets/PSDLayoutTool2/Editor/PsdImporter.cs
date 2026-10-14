@@ -2443,7 +2443,7 @@
             LayerImportInfo info = new LayerImportInfo(layer)
             {
                 Parent = parent,
-                EffectiveVisible = parentVisible && layer.Visible,
+                EffectiveVisible = parentVisible && layer.Visible && layer.ClippingBase == null,
                 IsFolderLike = layer.Children.Count > 0 || layer.Rect.width == 0,
                 AnimationFps = GetAnimationFps(layer.Name)
             };
@@ -2488,7 +2488,7 @@
             {
                 if (info.Layer.Rect.width > 0f && info.Layer.Rect.height > 0f)
                 {
-                    layoutRect = info.Layer.Rect;
+                    layoutRect = info.Layer.RenderRect;
                     return true;
                 }
 
@@ -3087,7 +3087,7 @@
         /// <returns>True if the layer exports a texture file.</returns>
         private static bool ShouldLayerEmitTextureFile(LayerImportInfo info)
         {
-            if (info == null || info.IsFolderLike || info.Layer.Rect.width <= 0 || info.Layer.Rect.height <= 0)
+            if (info == null || info.Layer.ClippingBase != null || info.IsFolderLike || info.Layer.Rect.width <= 0 || info.Layer.Rect.height <= 0)
             {
                 return false;
             }
@@ -3123,7 +3123,7 @@
         /// <returns>True if a texture should be exported.</returns>
         private static bool ShouldButtonGroupChildEmitTexture(LayerImportInfo childInfo)
         {
-            if (childInfo == null || childInfo.IsFolderLike)
+            if (childInfo == null || childInfo.Layer.ClippingBase != null || childInfo.IsFolderLike)
             {
                 return false;
             }
@@ -4091,6 +4091,7 @@
         /// <param name="layer">The layer to export.</param>
         private static void ExportLayer(Layer layer)
         {
+            if (layer.ClippingBase != null) return;
             UpdateExportProgress(layer.Name);
             PsdLogger.Step("Export layer: " + DescribeLayerForLog(layer));
             LayerImportInfo info = GetLayerInfo(layer);
@@ -4295,6 +4296,7 @@
         /// <param name="layer">The art layer to export.</param>
         private static void ExportArtLayer(Layer layer)
         {
+            if (layer.ClippingBase != null) return;
             LayerImportInfo info = GetLayerInfo(layer);
             if (info == null)
             {
@@ -4356,6 +4358,7 @@
         /// <param name="layer">Layer to export.</param>
         private static void ExportLayerTexturesOnly(Layer layer)
         {
+            if (layer.ClippingBase != null) return;
             // A Prefab import owns only the sprites referenced by the generated
             // hierarchy, Button states, or animation. This traversal exists for
             // texture-only and scene-layout imports, so it must not create
@@ -4464,6 +4467,7 @@
         /// <returns>The filepath to the created PNG file.</returns>
         private static string CreatePNG(Layer layer, bool allowTextLayer = false)
         {
+            if (layer.ClippingBase != null) return string.Empty;
             string file = string.Empty;
 
             if (layer.Children.Count == 0 && layer.Rect.width > 0 && layer.Rect.height > 0 &&
@@ -5055,11 +5059,12 @@
         /// <returns>The <see cref="SpriteRenderer"/> component attached to the new sprite <see cref="GameObject"/>.</returns>
         private static SpriteRenderer CreateSpriteGameObject(Layer layer)
         {
-            float x = layer.Rect.x / PixelsToUnits;
-            float y = layer.Rect.y / PixelsToUnits;
+            Rect renderRect = layer.RenderRect;
+            float x = renderRect.x / PixelsToUnits;
+            float y = renderRect.y / PixelsToUnits;
             y = (CanvasSize.y / PixelsToUnits) - y;
-            float width = layer.Rect.width / PixelsToUnits;
-            float height = layer.Rect.height / PixelsToUnits;
+            float width = renderRect.width / PixelsToUnits;
+            float height = renderRect.height / PixelsToUnits;
 
             GameObject gameObject = new GameObject(GetRuntimeObjectName(layer));
             gameObject.transform.position = new Vector3(x + (width / 2), y - (height / 2), currentDepth);
@@ -6869,7 +6874,7 @@
                 return info.LayoutRect;
             }
 
-            return layer != null ? layer.Rect : default(Rect);
+            return layer != null ? layer.RenderRect : default(Rect);
         }
 
         /// <summary>

@@ -90,8 +90,6 @@
                 return null;
             }
 
-            Texture2D texture = new Texture2D((int)layer.Rect.width, (int)layer.Rect.height, TextureFormat.ARGB32, false);
-
             Color32[] colors = new Color32[(int)(layer.Rect.width * layer.Rect.height)];
 
             for (int y = 0; y < layer.Rect.height; ++y)
@@ -107,36 +105,116 @@
                 }
             }
 
-            PsdLayerStyleRenderer.Apply(layer, colors);
+            colors = PsdLayerStyleRenderer.Apply(layer, colors);
 
-            for (int y = 0; y < layer.Rect.height; ++y)
+            for (int index = 0; index < colors.Length; index++)
             {
-                int textureRow = ((int)layer.Rect.height - 1 - y) * (int)layer.Rect.width;
-
-                for (int x = 0; x < layer.Rect.width; ++x)
-                {
-                    int texturePosition = textureRow + x;
-
-                    // set the alpha
-                    if (layer.SortedChannels.ContainsKey(-2))
-                    {
-                        byte maskAlpha = GetColor(layer.MaskData, x, y);
-                        int maskedAlpha = (colors[texturePosition].a * maskAlpha) / byte.MaxValue;
-                        colors[texturePosition].a = (byte)maskedAlpha;
-                    }
-
-                    // apply layer opacity (0-255) from Photoshop.
-                    int layeredAlpha = (colors[texturePosition].a * layer.Opacity) / byte.MaxValue;
-                    colors[texturePosition].a = (byte)layeredAlpha;
-                }
+                colors[index].a = (byte)(colors[index].a * layer.Opacity / byte.MaxValue);
+                // PSD often leaves arbitrary RGB values under zero alpha.
+                if (colors[index].a == 0) colors[index] = new Color32(0, 0, 0, 0);
             }
 
+            Rect renderRect = PsdLayerStyleRenderer.GetRenderRect(layer);
+            if (!layer.IsTextLayer && (layer.ClippedLayers.Count > 0 ||
+                layer.ShapeStyle.StrokeEnabled || layer.ShapeStyle.DropShadowEnabled))
+                colors = CropTransparentPadding(colors, ref renderRect);
+            layer.DecodedRenderRect = renderRect;
+            Texture2D texture = new Texture2D((int)renderRect.width, (int)renderRect.height, TextureFormat.ARGB32, false);
             texture.SetPixels32(colors);
             // SetPixels32 updates the CPU-side pixel buffer. Editor previews
             // render from the GPU texture, so apply the buffer before this
             // decoded layer is handed to the PSD nine-slice editor window.
             texture.Apply(false, false);
             return texture;
+        }
+
+        /// <summary>Trim rendered padding in pixel space, retaining one clear texel for filtering.</summary>
+        internal static Color32[] CropTransparentPadding(Color32[] colors, ref Rect rect)
+        {
+            int width = (int)rect.width, height = (int)rect.height;
+            int minX = width, minY = height, maxX = -1, maxY = -1;
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+            {
+                if (colors[y * width + x].a == 0) continue;
+                minX = Mathf.Min(minX, x); minY = Mathf.Min(minY, y);
+                maxX = Mathf.Max(maxX, x); maxY = Mathf.Max(maxY, y);
+            }
+            // Preserve intentional fully transparent layers and their layout.
+            if (maxX < 0) return colors;
+            minX = Mathf.Max(0, minX - 1); minY = Mathf.Max(0, minY - 1);
+            maxX = Mathf.Min(width - 1, maxX + 1); maxY = Mathf.Min(height - 1, maxY + 1);
+            int croppedWidth = maxX - minX + 1, croppedHeight = maxY - minY + 1;
+            if (croppedWidth == width && croppedHeight == height) return colors;
+            var cropped = new Color32[croppedWidth * croppedHeight];
+            for (int y = 0; y < croppedHeight; y++)
+                Array.Copy(colors, (y + minY) * width + minX, cropped, y * croppedWidth, croppedWidth);
+            rect = new Rect(rect.x + minX, rect.y + height - maxY - 1, croppedWidth, croppedHeight);
+            return cropped;
+        }
+
+        internal static float[] GetMaskedCoverage(Layer layer, Color32[] colors)
+        {
+            int width = (int)layer.Rect.width, height = (int)layer.Rect.height;
+            bool hasMask = layer.SortedChannels.ContainsKey(-2);
+            var alpha = new float[colors.Length];
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+            {
+                int index = (height - 1 - y) * width + x;
+                alpha[index] = colors[index].a / 255f * (hasMask ? GetColor(layer.MaskData, x, y) / 255f : 1f);
+            }
+            return alpha;
+        }
+
+        internal static void ApplyUserMask(Layer layer, Color32[] colors)
+        {
+            if (layer == null || colors == null || !layer.SortedChannels.ContainsKey(-2)) return;
+            int width = (int)layer.Rect.width;
+            int height = (int)layer.Rect.height;
+            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+            {
+                int index = (height - 1 - y) * width + x;
+                colors[index].a = (byte)(colors[index].a * GetColor(layer.MaskData, x, y) / byte.MaxValue);
+            }
+        }
+
+        internal static bool SupportsClippingBlend(string blendMode)
+        {
+            return blendMode == "norm" || blendMode == "mul " || blendMode == "scrn";
+        }
+
+        internal static void ApplyClippingLayers(Layer layer, Color32[] colors)
+        {
+            foreach (Layer clipped in layer.ClippedLayers)
+            {
+                if (!clipped.Visible || clipped.Opacity == 0 || !SupportsClippingBlend(clipped.BlendModeKey)) continue;
+                Texture2D texture = DecodeImage(clipped);
+                if (texture == null) continue;
+                try
+                {
+                    Color32[] source = texture.GetPixels32();
+                    Rect sourceRect = clipped.RenderRect;
+                    int width = (int)layer.Rect.width, height = (int)layer.Rect.height;
+                    for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+                    {
+                        int index = (height - 1 - y) * width + x;
+                        if (colors[index].a == 0) continue;
+                        int sourceX = (int)(layer.Rect.x + x - sourceRect.x);
+                        int sourceY = (int)(layer.Rect.y + y - sourceRect.y);
+                        if (sourceX < 0 || sourceY < 0 || sourceX >= texture.width || sourceY >= texture.height) continue;
+                        Color src = source[(texture.height - 1 - sourceY) * texture.width + sourceX];
+                        Color dst = colors[index];
+                        Color blend = src;
+                        if (clipped.BlendModeKey == "mul ") blend = dst * src;
+                        else if (clipped.BlendModeKey == "scrn") blend = Color.white - (Color.white - dst) * (Color.white - src);
+                        Color result = Color.Lerp(dst, blend, src.a);
+                        // The base owns coverage. Applying it a second time
+                        // would darken the antialiased silhouette.
+                        result.a = dst.a;
+                        colors[index] = result;
+                    }
+                }
+                finally { UnityEngine.Object.DestroyImmediate(texture); }
+            }
         }
 
         /// <summary>

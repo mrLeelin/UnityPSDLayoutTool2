@@ -50,6 +50,7 @@
         public Layer(BinaryReverseReader reader, PsdFile psdFile)
         {
             Children = new List<Layer>();
+            ClippedLayers = new List<Layer>();
             PsdFile = psdFile;
             SectionType = -1;
             Id = 0U;
@@ -79,14 +80,12 @@
                 throw new IOException("Layer Channelheader error!");
             }
 
-            // read the blend mode key (unused) (defaults to "norm")
-            reader.ReadChars(4);
+            BlendModeKey = new string(reader.ReadChars(4));
 
             // read the opacity
             Opacity = reader.ReadByte();
 
-            // read the clipping (unused) (< 0 = base, > 0 = non base)
-            reader.ReadByte();
+            IsClipping = reader.ReadByte() != 0;
 
             // read all of the flags (protectTrans, visible, obsolete, ver5orLater, pixelDataIrrelevant)
             flags = new BitVector32(reader.ReadByte());
@@ -235,6 +234,13 @@
         /// </summary>
         public List<Layer> Children { get; private set; }
 
+        /// <summary>True when Photoshop clips this layer to the raster layer below it.</summary>
+        public bool IsClipping { get; private set; }
+        public string BlendModeKey { get; private set; }
+        public Layer ClippingBase { get; internal set; }
+        /// <summary>Bottom-to-top clipping stack baked into this layer's exported pixels.</summary>
+        public List<Layer> ClippedLayers { get; private set; }
+
         /// <summary>
         /// Gets or sets a value indicating whether this layer has Effects/Styles or not.
         /// </summary>
@@ -244,6 +250,25 @@
         /// Gets the rectangle containing the contents of the layer.
         /// </summary>
         public Rect Rect { get; private set; }
+
+        /// <summary>Document-space bounds of the exported pixels, including raster layer effects.</summary>
+        internal Rect? DecodedRenderRect { get; set; }
+
+        public Rect RenderRect
+        {
+            get
+            {
+                // Parsed layers are immutable during an import. Decode only
+                // styled/clipped raster layers when layout requests bounds first.
+                if (!DecodedRenderRect.HasValue && !IsTextLayer && Rect.width > 0 && Rect.height > 0 &&
+                    (ClippedLayers.Count > 0 || ShapeStyle.StrokeEnabled || ShapeStyle.DropShadowEnabled))
+                {
+                    Texture2D texture = ImageDecoder.DecodeImage(this);
+                    if (texture != null) UnityEngine.Object.DestroyImmediate(texture);
+                }
+                return DecodedRenderRect ?? PsdLayerStyleRenderer.GetRenderRect(this);
+            }
+        }
 
         /// <summary>
         /// Gets a list of the Channel information.
@@ -329,7 +354,7 @@
         /// <summary>
         /// Gets or sets the list of adjustment information for this layer.
         /// </summary>
-        private List<AdjustmentLayerInfo> AdjustmentInfo { get; set; }
+        internal List<AdjustmentLayerInfo> AdjustmentInfo { get; private set; }
 
         #endregion
 
@@ -567,8 +592,10 @@
                 }
             }
 
-            if (TryReadEffectEnabled(data, "DrSh", out enabled, out effectStart) ||
-                TryReadEffectEnabled(data, "dsdw", out enabled, out effectStart))
+            // Multi-effect descriptors can retain disabled shadows before the
+            // active one. Skip them just as we do for enabled strokes.
+            if (TryReadEffectEnabled(data, "DrSh", out enabled, out effectStart, true) ||
+                TryReadEffectEnabled(data, "dsdw", out enabled, out effectStart, true))
             {
                 TextStyle.ShadowEnabled = enabled;
                 if (TryReadUnitValue(data, "Dstn", effectStart, out value))

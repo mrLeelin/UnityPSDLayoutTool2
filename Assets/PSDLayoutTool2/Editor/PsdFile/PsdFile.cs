@@ -51,6 +51,31 @@
                 LoadImageResources(reader);
                 LoadLayerAndMaskInfo(reader);
                 LoadImage(reader);
+                BindClippingLayers();
+            }
+        }
+
+        private void BindClippingLayers()
+        {
+            // This parser preserves PSD records in bottom-to-top order. Group
+            // dividers interrupt a clipping chain; layers in another folder
+            // must never acquire a base from the preceding folder.
+            Layer clippingBase = null;
+            foreach (Layer layer in Layers)
+            {
+                if (layer.IsGroupStart || layer.IsGroupEnd)
+                {
+                    clippingBase = null;
+                }
+                else if (!layer.IsClipping)
+                {
+                    clippingBase = layer.IsTextLayer || layer.IsPixelDataIrrelevant ? null : layer;
+                }
+                else if (clippingBase != null && !layer.IsTextLayer && !layer.IsPixelDataIrrelevant)
+                {
+                    layer.ClippingBase = clippingBase;
+                    clippingBase.ClippedLayers.Add(layer);
+                }
             }
         }
 
