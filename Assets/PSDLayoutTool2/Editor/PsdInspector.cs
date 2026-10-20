@@ -1,7 +1,9 @@
 namespace PsdLayoutTool2
 {
     using System;
+    using System.Reflection;
     using UnityEditor;
+    using UnityEditor.AssetImporters;
     using UnityEngine;
 
     /// <summary>
@@ -120,7 +122,12 @@ namespace PsdLayoutTool2
         /// <summary>
         /// The native Unity editor used to render the <see cref="TextureImporter"/>'s Inspector.
         /// </summary>
-        private UnityEditor.Editor nativeEditor;
+        private AssetImporterEditor nativeEditor;
+
+        /// <summary>
+        /// The asset-side editor required by Unity's importer initialization and preview lifecycle.
+        /// </summary>
+        private UnityEditor.Editor nativeAssetEditor;
 
         /// <summary>
         /// The style used to draw the section header text.
@@ -147,6 +154,7 @@ namespace PsdLayoutTool2
         /// </summary>
         public void OnEnable()
         {
+            nativeEditorCreationFailed = false;
             showNativeInspector = PersistNativeInspectorFoldout
                 ? EditorPrefs.GetBool(ShowNativeInspectorPrefKey, DefaultShowNativeInspector)
                 : DefaultShowNativeInspector;
@@ -196,6 +204,32 @@ namespace PsdLayoutTool2
         public void OnDisable()
         {
             DisposeNativeEditor();
+        }
+
+        /// <summary>
+        /// Lets Unity's Inspector save prompt use the native importer save and reimport path.
+        /// </summary>
+        public override void SaveChanges()
+        {
+            if (nativeEditor != null)
+            {
+                nativeEditor.SaveChanges();
+            }
+
+            base.SaveChanges();
+        }
+
+        /// <summary>
+        /// Lets Unity's Inspector discard prompt restore the native importer's saved settings.
+        /// </summary>
+        public override void DiscardChanges()
+        {
+            if (nativeEditor != null)
+            {
+                nativeEditor.DiscardChanges();
+            }
+
+            base.DiscardChanges();
         }
 
         /// <summary>
@@ -675,10 +709,7 @@ namespace PsdLayoutTool2
                     EditorPrefs.SetBool(ShowNativeInspectorPrefKey, showNativeInspector);
                 }
 
-                if (!showNativeInspector)
-                {
-                    DisposeNativeEditor();
-                }
+                // Keep pending settings alive while hidden. Destroying an importer editor can save them.
             }
 
             if (!showNativeInspector)
@@ -707,7 +738,18 @@ namespace PsdLayoutTool2
         {
             if (EnsureNativeEditor())
             {
-                nativeEditor.OnInspectorGUI();
+                try
+                {
+                    nativeEditor.OnInspectorGUI();
+                }
+                finally
+                {
+                    // The Inspector tracks this outer editor when prompting on selection/window changes.
+                    if (nativeEditor != null)
+                    {
+                        hasUnsavedChanges = nativeEditor.HasModified();
+                    }
+                }
                 return;
             }
 
@@ -739,11 +781,40 @@ namespace PsdLayoutTool2
 
             try
             {
-                nativeEditor = CreateEditor(target, type);
+                MethodInfo setAssetEditor = typeof(AssetImporterEditor).GetMethod(
+                    "InternalSetAssetImporterTargetEditor",
+                    BindingFlags.Instance | BindingFlags.NonPublic,
+                    null,
+                    new[] { typeof(UnityEngine.Object) },
+                    null);
+                if (setAssetEditor == null)
+                {
+                    throw new MissingMethodException(typeof(AssetImporterEditor).FullName, "InternalSetAssetImporterTargetEditor");
+                }
+
+                UnityEngine.Object asset = AssetDatabase.LoadMainAssetAtPath(((TextureImporter)target).assetPath);
+                if (asset == null)
+                {
+                    throw new InvalidOperationException("The texture importer's asset could not be loaded.");
+                }
+
+                nativeAssetEditor = CreateEditor(asset);
+                if (nativeAssetEditor == null)
+                {
+                    throw new InvalidOperationException("The texture asset editor could not be created.");
+                }
+
+                nativeEditor = (AssetImporterEditor)CreateEditor(target, type);
+                // Match Unity's importer/asset editor association after OnEnable, before the first GUI.
+                // Unity owns instant-apply policy, Apply/Revert, saved settings and reimport behavior.
+                setAssetEditor.Invoke(nativeEditor, new object[] { nativeAssetEditor });
+                saveChangesMessage = nativeEditor.saveChangesMessage;
+                hasUnsavedChanges = nativeEditor.HasModified();
             }
             catch (Exception exception)
             {
                 nativeEditorCreationFailed = true;
+                DisposeNativeEditor();
                 Debug.LogWarning("PSDLayoutTool2 failed to create Unity's TextureImporterInspector: " + exception.Message);
             }
 
@@ -755,13 +826,26 @@ namespace PsdLayoutTool2
         /// </summary>
         private void DisposeNativeEditor()
         {
-            if (nativeEditor == null)
-            {
-                return;
-            }
-
-            UnityEngine.Object.DestroyImmediate(nativeEditor);
+            // Clear ownership before native OnDisable: saving/reimporting there can rebuild Inspectors.
+            AssetImporterEditor importerEditor = nativeEditor;
+            UnityEditor.Editor assetEditor = nativeAssetEditor;
             nativeEditor = null;
+            nativeAssetEditor = null;
+            try
+            {
+                if (importerEditor != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(importerEditor);
+                }
+            }
+            finally
+            {
+                // The asset editor must outlive the importer editor's native teardown/save path.
+                if (assetEditor != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(assetEditor);
+                }
+            }
         }
 
         /// <summary>

@@ -2,6 +2,14 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.4.4] - 2026-10-20
+
+### Fixed
+
+- Initialize the nested TextureImporterInspector through Unity's native importer-to-asset editor association so texture import settings can display and use the native Apply/Revert buttons.
+- Forward unsaved settings and Inspector save/discard requests to the native importer editor, retaining Unity's existing apply, revert and reimport behavior.
+- Keep the native editor alive while the PSD texture settings foldout is collapsed, and dispose the importer editor before its asset editor during Inspector teardown. Clean up both editors if initialization fails.
+
 ## [0.4.3] - 2026-10-14
 
 ### Added
