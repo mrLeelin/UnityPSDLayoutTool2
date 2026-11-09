@@ -81,8 +81,7 @@ namespace PsdLayoutTool2
         }
 
         /// <summary>
-        /// Crops a confirmed source PNG and stores its reusable recipe in the
-        /// TextureImporter's userData. The caller is responsible for reimporting.
+        /// 从 PNG 记录的源 PSD 解码完整图层后裁剪，调用方负责导入与失败回滚。
         /// </summary>
         public static bool TryCropAndPersist(
             string assetPath,
@@ -98,9 +97,36 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            PsdNineSliceRaster source;
-            if (!TryReadSourceRaster(assetPath, out source, out error))
+            string psdPath;
+            uint recordedId;
+            if (!PsdNineSliceAssetState.TryReadSourcePsdIdentity(textureImporter.userData, out psdPath) ||
+                !PsdNineSliceAssetState.TryReadLayerIdentity(textureImporter.userData, out recordedId) ||
+                recordedId != layerId || layerId == 0U)
             {
+                error = "PNG 缺少匹配的源 PSD 或 Photoshop 图层 ID，不能裁剪旧 PNG。";
+                return false;
+            }
+
+            PsdNineSliceRaster source;
+            if (!PsdNineSlicePsdLayerSession.TryReadOriginalRaster(psdPath, layerId, out source, out error))
+            {
+                return false;
+            }
+
+            return TryCropAndPersist(assetPath, textureImporter, layerId, border, source, out error);
+        }
+
+        /// <summary>
+        /// 从完整原始像素重建 PNG；像素和配方保持现有自下而上的哈希约定。
+        /// 调用方负责失败回滚及导入设置的持久化。
+        /// </summary>
+        internal static bool TryCropAndPersist(string assetPath, TextureImporter textureImporter,
+            uint layerId, PsdNineSliceBorder border, PsdNineSliceRaster source, out string error)
+        {
+            error = string.Empty;
+            if (textureImporter == null || source == null)
+            {
+                error = "缺少纹理导入器或完整原始图层像素。";
                 return false;
             }
 
@@ -110,7 +136,7 @@ namespace PsdLayoutTool2
                 return false;
             }
 
-            PsdNineSliceRaster cropped = PsdNineSliceCropper.CropToMinimum(source, border);
+            PsdNineSliceRaster cropped = CropTextureRaster(source, border);
             try
             {
                 WriteRaster(assetPath, cropped);
@@ -183,7 +209,7 @@ namespace PsdLayoutTool2
 
             try
             {
-                WriteRaster(assetPath, PsdNineSliceCropper.CropToMinimum(source, state.Border));
+                WriteRaster(assetPath, CropTextureRaster(source, state.Border));
                 unityBorder = ToUnityBorder(state.Border);
                 return true;
             }
@@ -201,6 +227,38 @@ namespace PsdLayoutTool2
         public static Vector4 ToUnityBorder(PsdNineSliceBorder border)
         {
             return new Vector4(border.Left, border.Bottom, border.Right, border.Top);
+        }
+
+        private static PsdNineSliceRaster CropTextureRaster(PsdNineSliceRaster source, PsdNineSliceBorder border)
+        {
+            // 与自动生成链路一样，在左上原点中裁剪，再恢复 Unity 像素顺序。
+            // 不能只交换上下边距，否则两像素中心样本的位置与自动生成链路不同。
+            return FlipRows(PsdNineSliceCropper.CropToMinimum(FlipRows(source), border));
+        }
+
+        private static PsdNineSliceRaster FlipRows(PsdNineSliceRaster source)
+        {
+            int rowBytes = source.Width * 4;
+            byte[] pixels = new byte[source.Pixels.Length];
+            for (int y = 0; y < source.Height; y++)
+                Buffer.BlockCopy(source.Pixels, y * rowBytes, pixels, (source.Height - 1 - y) * rowBytes, rowBytes);
+            return new PsdNineSliceRaster(source.Width, source.Height, pixels);
+        }
+
+        internal static PsdNineSliceRaster ReadTextureRaster(Texture2D texture)
+        {
+            Color32[] colors = texture.GetPixels32();
+            byte[] pixels = new byte[colors.Length * 4];
+            for (int index = 0; index < colors.Length; index++)
+            {
+                int offset = index * 4;
+                pixels[offset] = colors[index].r;
+                pixels[offset + 1] = colors[index].g;
+                pixels[offset + 2] = colors[index].b;
+                pixels[offset + 3] = colors[index].a;
+            }
+
+            return new PsdNineSliceRaster(texture.width, texture.height, pixels);
         }
 
         private static bool TryReadSourceRaster(string assetPath, out PsdNineSliceRaster raster, out string error)
@@ -230,18 +288,7 @@ namespace PsdLayoutTool2
                     return false;
                 }
 
-                Color32[] colors = texture.GetPixels32();
-                byte[] pixels = new byte[colors.Length * 4];
-                for (int index = 0; index < colors.Length; index++)
-                {
-                    int offset = index * 4;
-                    pixels[offset] = colors[index].r;
-                    pixels[offset + 1] = colors[index].g;
-                    pixels[offset + 2] = colors[index].b;
-                    pixels[offset + 3] = colors[index].a;
-                }
-
-                raster = new PsdNineSliceRaster(texture.width, texture.height, pixels);
+                raster = ReadTextureRaster(texture);
                 return true;
             }
             catch (Exception exception)

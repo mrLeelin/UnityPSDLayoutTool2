@@ -429,8 +429,8 @@ namespace PsdLayoutTool2.Tests
 
     /// <summary>
     /// Integration coverage for the PSD editor's "Apply to exported PNG now" action:
-    /// the border must reach the PNG immediately and the nodes that use that texture
-    /// must end up Sliced, otherwise nothing visible would change.
+    /// the source PSD must be resolved before writing and referencing components
+    /// must remain unchanged.
     /// </summary>
     public sealed class PsdNineSliceExportedBorderApplierTests
     {
@@ -468,38 +468,20 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public void ApplyCropsThePngAndSwitchesThePrefabImageToSliced()
+        public void ApplyRejectsPngWithoutSourcePsdAndPreservesPrefab()
         {
+            // 旧 PNG 没有可证明的原始 PSD 来源，必须拒绝，不能继续累积裁剪。
+            byte[] original = File.ReadAllBytes(PngPath);
             PsdNineSliceApplyReport report = PsdNineSliceExportedBorderApplier.Apply(
-                PngPath,
-                932U,
-                new PsdNineSliceBorder(2, 1, 2, 1));
+                PngPath, 932U, new PsdNineSliceBorder(2, 1, 2, 1));
 
-            Assert.That(report.Succeeded, Is.True, report.Error);
-            Assert.That(report.ImageCount, Is.EqualTo(1));
-            Assert.That(report.PrefabCount, Is.EqualTo(1));
-
-            // 8x8 with left/right 2 and top/bottom 1 keeps two protected edges plus the
-            // two-pixel stretch sample: 2+2+2 by 1+2+1.
-            Assert.That(report.WasCropped, Is.True);
-            Assert.That(report.SourceWidth, Is.EqualTo(8));
-            Assert.That(report.SourceHeight, Is.EqualTo(8));
-            Assert.That(report.Width, Is.EqualTo(6));
-            Assert.That(report.Height, Is.EqualTo(4));
-
-            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(PngPath);
-            Assert.That(texture.width, Is.EqualTo(6));
-            Assert.That(texture.height, Is.EqualTo(4));
-
-            // Unity order is left, bottom, right, top.
-            var importer = (TextureImporter)AssetImporter.GetAtPath(PngPath);
-            Assert.That(importer.spriteBorder, Is.EqualTo(new Vector4(2f, 1f, 2f, 1f)));
-            Assert.That(PsdNineSliceAssetState.TryRead(importer.userData, out PsdNineSliceAssetState state), Is.True);
-            Assert.That(state.LayerId, Is.EqualTo(932U));
-            Assert.That(state.Border.Left, Is.EqualTo(2));
-
+            Assert.That(report.Succeeded, Is.False);
+            Assert.That(report.Error, Does.Contain("源 PSD"));
+            Assert.That(File.ReadAllBytes(PngPath), Is.EqualTo(original));
+            Assert.That(report.ImageCount, Is.Zero);
+            Assert.That(report.PrefabCount, Is.Zero);
             Image prefabImage = AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath).GetComponent<Image>();
-            Assert.That(prefabImage.type, Is.EqualTo(Image.Type.Sliced));
+            Assert.That(prefabImage.type, Is.EqualTo(Image.Type.Simple));
         }
 
         [Test]

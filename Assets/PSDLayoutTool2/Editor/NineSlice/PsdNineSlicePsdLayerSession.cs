@@ -95,6 +95,44 @@ namespace PsdLayoutTool2
             return preview;
         }
 
+        /// <summary>
+        /// 从当前磁盘 PSD 按稳定 ID 解码完整图层，不使用窗口缓存或导出的 PNG。
+        /// </summary>
+        internal static bool TryReadOriginalRaster(string assetPath, uint layerId,
+            out PsdNineSliceRaster raster, out string error)
+        {
+            raster = null;
+            error = string.Empty;
+            try
+            {
+                using (var session = Open(assetPath))
+                {
+                    PsdNineSlicePsdLayerEntry match = null;
+                    foreach (var entry in session.Layers)
+                    {
+                        if (entry.LayerId != layerId) continue;
+                        if (match != null) throw new InvalidDataException("PSD 中存在重复的 Photoshop 图层 ID。 ");
+                        match = entry;
+                    }
+
+                    if (layerId == 0U || match == null)
+                        throw new InvalidDataException("源 PSD 中找不到可解码的原始图层 ID：" + layerId);
+
+                    // 新会话的 GetPreview 直接调用完整 ImageDecoder；没有缩放、九宫裁剪或缩略图路径。
+                    Texture2D texture = session.GetPreview(match);
+                    if (texture == null || texture.width != (int)match.Rect.width || texture.height != (int)match.Rect.height)
+                        throw new InvalidDataException("解码像素尺寸与 PSD 原始渲染矩形不一致。");
+                    raster = PsdNineSliceTextureProcessor.ReadTextureRaster(texture);
+                    return true;
+                }
+            }
+            catch (Exception exception)
+            {
+                error = "无法读取原始 PSD 图层：" + exception.Message;
+                return false;
+            }
+        }
+
         public void Dispose()
         {
             if (disposed)

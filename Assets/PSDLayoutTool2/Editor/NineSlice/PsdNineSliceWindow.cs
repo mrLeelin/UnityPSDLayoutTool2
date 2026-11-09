@@ -415,10 +415,9 @@ namespace PsdLayoutTool2
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button(
                     new GUIContent(
-                        "Crop & apply to exported PNG",
-                        "Cuts the exported PNG down to the minimum stretchable 9-slice size (protected edges + a two-pixel stretch sample), " +
-                        "writes these four values into its spriteBorder, reimports that texture, and switches every Image using it to Sliced.\n" +
-                        "The pixel values are used exactly as shown here: no target-canvas rescale."),
+                        "从原始 PSD 重建并应用到导出 PNG",
+                        "每次从当前源 PSD 的完整图层重新生成九宫 PNG，并更新 spriteBorder。\n" +
+                        "只更新对应 PNG 和九宫参数，不修改引用组件或 Prefab；边距使用原始 PSD 像素。"),
                     GUILayout.Height(22f)))
             {
                 ApplyToExportedPng(entry, preview);
@@ -594,35 +593,27 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            // Keep the PSD asset's own record in step with what is pushed to the PNG.
-            SaveCurrentOverride(entry, preview);
-            string overrideNote = statusIsError ? " (PSD override not saved: " + status + ")" : string.Empty;
-
+            // 取消尚未落盘的自动保存，避免失败提示出现后又延迟写入参数。
+            autoSavePending = false;
             PsdNineSliceApplyReport report = PsdNineSliceExportedBorderApplier.Apply(
                 selectedExportedBorder == null ? null : selectedExportedBorder.AssetPath,
+                assetPath,
                 entry.LayerId,
                 editableBorder);
             if (!report.Succeeded)
             {
-                status = report.Error;
+                status = report.Error + " 编辑时此前已自动保存的参数保持应用前状态。";
                 statusIsError = true;
                 return;
             }
 
             RefreshLayerState();
             LoadSelectedPsdLayerState();
-            string sizeText = report.WasCropped
-                ? "cropped " + report.SourceWidth + "x" + report.SourceHeight + " -> " + report.Width + "x" + report.Height
-                : "kept " + report.Width + "x" + report.Height + " (already minimal)";
-            status = report.FileName + ": " + sizeText +
-                ", applied L" + report.Border.Left + " T" + report.Border.Top +
-                " R" + report.Border.Right + " B" + report.Border.Bottom +
-                ", switched " + report.ImageCount + " Image(s) to Sliced" +
-                (report.PrefabCount > 0 ? " (" + report.PrefabCount + " prefab(s) saved)." : ".") +
-                (report.RawImageCount > 0
-                    ? " Warning: " + report.RawImageCount + " RawImage(s) also use this texture and cannot be sliced."
-                    : string.Empty) +
-                overrideNote;
+            status = report.FileName + "：从原始 PSD " + report.SourceWidth + "×" + report.SourceHeight +
+                " 重建为 " + report.Width + "×" + report.Height +
+                "，左 " + report.Border.Left + " 上 " + report.Border.Top +
+                " 右 " + report.Border.Right + " 下 " + report.Border.Bottom +
+                "。已保存 PNG、导入信息和 PSD 九宫参数；引用组件与 Prefab 保持不变。";
             statusIsError = false;
             Repaint();
         }
@@ -913,15 +904,11 @@ namespace PsdLayoutTool2
                 return;
             }
 
-            string error;
-            if (!PsdNineSliceTextureProcessor.TryCropAndPersist(assetPath, importer, layerId, inference.Border, out error)) { status = error; statusIsError = true; return; }
-            importer.textureType = TextureImporterType.Sprite;
-            importer.spriteImportMode = SpriteImportMode.Single;
-            importer.mipmapEnabled = false;
-            importer.spriteBorder = PsdNineSliceTextureProcessor.ToUnityBorder(inference.Border);
-            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
-            status = "Applied. Future PSD imports reuse this crop only while the source pixels remain unchanged.";
-            statusIsError = false;
+            PsdNineSliceApplyReport report = PsdNineSliceExportedBorderApplier.Apply(assetPath, layerId, inference.Border);
+            status = report.Succeeded
+                ? "已从原始 PSD 图层重建 PNG 并保存九宫参数，未修改引用组件。"
+                : report.Error;
+            statusIsError = !report.Succeeded;
         }
 
         private void DrawStatus()
