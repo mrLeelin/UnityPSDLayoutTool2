@@ -30,6 +30,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAYLOADS = os.path.join(HERE, "payloads")
@@ -65,20 +66,51 @@ finally {{ PrefabUtility.UnloadPrefabContents(root); }}
 """
 
 
-def run_payload(project_path, unity, payload_path, timeout):
+def _run_cli(cmd):
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=40)
+    except subprocess.TimeoutExpired:
+        raise SystemExit("Unity CLI transport timed out; the Editor operation may still be running. Do not resubmit automatically.")
+    try:
+        data = json.loads(proc.stdout or "")
+    except (ValueError, TypeError):
+        raise SystemExit("could not parse Unity CLI output; execution outcome is unverified. Do not resubmit automatically.")
+    if proc.returncode or not data.get("success"):
+        raise SystemExit("Unity CLI error (do not resubmit automatically): " + json.dumps(data.get("errors"), ensure_ascii=False)[:600])
+    return data.get("data") or {}
+
+
+def run_payload(project_path, unity, payload_path, timeout, detached=False):
     cmd = [unity, "--json", "--non-interactive", "command",
            "--project-path", project_path, "--timeout", str(timeout + 30),
            "eval_file", "--", "--file", payload_path, "--timeout", str(timeout * 1000)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    raw = proc.stdout or ""
-    try:
-        data = json.loads(raw)
-    except Exception:
-        sys.stderr.write(raw[:800] + "\n" + (proc.stderr or "")[:400] + "\n")
-        raise SystemExit("could not parse Unity CLI output")
-    if not data.get("success"):
-        raise SystemExit("Unity CLI error: " + json.dumps(data.get("errors"), ensure_ascii=False)[:600])
-    result = (data.get("data") or {}).get("result") or {}
+    if detached:
+        cmd.insert(cmd.index("eval_file"), "--detach")
+    data = _run_cli(cmd)
+    result = data.get("result") or {}
+    if detached:
+        job_id = result.get("jobId") or data.get("jobId")
+        if not job_id:
+            raise SystemExit("Detached submission returned no jobId; outcome unverified. Do not resubmit.")
+        sys.stderr.write("NativeUnity read-only job: %s\n" % job_id)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                job = _run_cli([unity, "--json", "--non-interactive", "job", "status", job_id,
+                                "--project-path", project_path])
+            except SystemExit as error:
+                raise SystemExit("jobId=%s; %s. Reattach with unity job status; do not resubmit." % (job_id, error))
+            state = job.get("state")
+            if state == "completed":
+                result = job.get("result") or {}
+                break
+            if state in ("failed", "canceled"):
+                raise SystemExit("NativeUnity jobId=%s state=%s: %s" % (job_id, state, job.get("errorDetails") or job.get("error")))
+            if state not in ("queued", "running") or time.monotonic() >= deadline:
+                raise SystemExit("NativeUnity jobId=%s state=%s; result unverified. Reattach with unity job status; do not resubmit." % (job_id, state))
+            time.sleep(1)
+    if result.get("success") is False:
+        raise SystemExit("NativeUnity payload failed: " + json.dumps(result, ensure_ascii=False)[:800])
     return result.get("result") or "", result.get("diagnostics") or []
 
 
@@ -86,7 +118,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-path", required=True)
     ap.add_argument("--unity", default=shutil.which("unity") or "unity")
-    ap.add_argument("--mode", choices=["selection", "instance-links", "prefab-stage"], default="selection")
+    ap.add_argument("--mode", choices=["selection", "instance-links", "prefab-stage", "payload"], default="selection")
+    ap.add_argument("--payload", help="read-only C# payload for --mode payload")
+    ap.add_argument("--detach", action="store_true", help="submit one read-only job and poll its existing jobId")
     ap.add_argument("--prefab-path")
     ap.add_argument("--timeout", type=int, default=60)
     args = ap.parse_args()
@@ -95,6 +129,10 @@ def main():
         payload = os.path.join(PAYLOADS, "read_selection.cs")
     elif args.mode == "prefab-stage":
         payload = os.path.join(PAYLOADS, "read_selection.cs")
+    elif args.mode == "payload":
+        if not args.payload or not os.path.isfile(args.payload):
+            raise SystemExit("--mode payload requires an existing read-only --payload file")
+        payload = os.path.abspath(args.payload)
     else:
         if not args.prefab_path:
             raise SystemExit("--prefab-path is required for --mode instance-links")
@@ -102,7 +140,7 @@ def main():
         with open(payload, "w", encoding="utf-8") as fh:
             fh.write(LINKS_PAYLOAD.format(prefab=json.dumps(args.prefab_path)))
 
-    text, diagnostics = run_payload(args.project_path, args.unity, payload, args.timeout)
+    text, diagnostics = run_payload(args.project_path, args.unity, payload, args.timeout, detached=args.detach)
     print(text)
     if args.mode == "selection":
         for line in text.splitlines():

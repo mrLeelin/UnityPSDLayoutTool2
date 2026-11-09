@@ -31,8 +31,8 @@ Usage
   python preflight_v2.py --plan plan.json --snapshot snapshot.json [--project-root <dir>]
                          [--json-out report.json]
 
-Exit 0 = Unity should accept the plan before any write. Exit 2 = at least one would-be
-rejection. Warnings and notes never fail the run.
+Exit 0 = no offline rejection found; Unity's measured preflight remains mandatory.
+Exit 2 = at least one would-be rejection. Warnings and notes never fail the run.
 """
 from __future__ import annotations
 
@@ -202,7 +202,7 @@ def is_non_semantic_object_name(name):
 class PredictedNode:
     """One node of the Prefab as it will look AFTER the plan is applied."""
 
-    __slots__ = ("key", "name", "components", "frame", "world_rect", "existing_id", "sibling", "children")
+    __slots__ = ("key", "name", "components", "frame", "world_rect", "existing_id", "sibling", "children", "nested")
 
     def __init__(self, key, name, components, frame, world_rect, existing_id, sibling):
         self.key = key
@@ -213,6 +213,7 @@ class PredictedNode:
         self.existing_id = existing_id          # snapshot id, or None for a plan-created wrapper
         self.sibling = int(sibling) if sibling is not None else None
         self.children: list[str] = []
+        self.nested = False
 
     @property
     def child_count(self):
@@ -282,6 +283,11 @@ def build_predicted_snapshot(plan, records, sim):
 
     for key, node in by_key.items():
         node.children = [child for child in sim.kids.get(key, []) if child in by_key]
+        for sibling, child in enumerate(node.children):
+            by_key[child].sibling = sibling
+    for record in records:
+        if record["path"] in by_key:
+            by_key[record["path"]].nested = bool(record["node"].get("nestedPrefabAssetPath"))
 
     key_by_id = {node.existing_id: node.key for node in by_key.values() if node.existing_id}
     for rename in _read_objects(plan, "renames"):
@@ -355,6 +361,22 @@ def _parent_key_of(key, by_key):
 
 def build_predicted_candidates(by_key):
     """Port of PsdHierarchyChatClient.BuildComponentFamilyCandidates."""
+    def contains_nested(key):
+        ancestor, guard = key, set()
+        while ancestor is not None and ancestor not in guard:
+            guard.add(ancestor)
+            if by_key[ancestor].nested:
+                return True
+            ancestor = _parent_key_of(ancestor, by_key)
+        def below(current):
+            return by_key[current].nested or any(below(c) for c in by_key[current].children)
+        return below(key)
+
+    def suggested_name(value):
+        value = (value or "").strip()
+        value = value[:1].upper() + value[1:]
+        return value if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", value) else "ReusableItem"
+
     candidates, emitted, index = [], set(), 1
     for parent_key in sorted(by_key):
         parent = by_key[parent_key]
@@ -376,6 +398,7 @@ def build_predicted_candidates(by_key):
         for _, bare_child in bare:
             eligible = [stem for stem, members in groups.items()
                         if len(members) >= 2
+                        and not contains_nested(bare_child)
                         and consistent_frame([by_key[k] for k in members + [bare_child]])]
             if len(eligible) == 1:
                 groups[eligible[0]].append(bare_child)
@@ -388,7 +411,7 @@ def build_predicted_candidates(by_key):
 
         for stem in sorted(groups):
             group = sorted(groups[stem], key=lambda k: by_key[k].sort_key)
-            if len(group) < 3 or not consistent_frame([by_key[k] for k in group]):
+            if len(group) < 3 or not consistent_frame([by_key[k] for k in group]) or any(contains_nested(k) for k in group):
                 continue
             if stem == GENERATED_FLAT_SIBLING_STEM:
                 outer = _parent_key_of(parent_key, by_key)
@@ -400,9 +423,11 @@ def build_predicted_candidates(by_key):
             emitted.add(signature_key)
             identical = len({_structure_signature(k, by_key) for k in group}) == 1
             has_common = _has_common_direct_child_name(group, by_key)
-            suggested = stem if stem != GENERATED_FLAT_SIBLING_STEM else parent.name
+            suggested = suggested_name(stem if stem != GENERATED_FLAT_SIBLING_STEM else
+                                       (try_get_bare_numbered_family_stem(parent.name) or parent.name))
+            family_id = "family_%03d" % index
             candidates.append({
-                "id": "family_%03d" % index,
+                "id": family_id,
                 "kind": "numbered_repeated",
                 "parent": parent_key,
                 "sources": list(group),
@@ -412,6 +437,19 @@ def build_predicted_candidates(by_key):
                 "requiresExtraction": True,
             })
             index += 1
+            if not identical:
+                buckets = {}
+                for key in group:
+                    buckets.setdefault(_structure_signature(key, by_key), []).append(key)
+                for subset_index, subset in enumerate(buckets.values(), 1):
+                    candidates.append({
+                        "id": family_id + "_s%02d" % subset_index,
+                        "kind": "numbered_structure_subset", "familyCandidateId": family_id,
+                        "parent": parent_key, "sources": subset,
+                        "suggestedAssetName": suggested, "instanceCount": len(subset),
+                        "recommendedMode": "component" if len(subset) >= 2 else "skip",
+                        "requiresExtraction": False,
+                    })
     return candidates
 
 
@@ -784,6 +822,16 @@ def check_private_assets(report, plan, project_root):
         if (atlas.get("toName") or "") != prefab_name:
             report.error("spriteAtlasRenames[%d].toName %r 必须等于 prefabName %r"
                          % (index, atlas.get("toName"), prefab_name))
+        source = _normalize_asset_path(atlas.get("from"))
+        prefab_dir = _normalize_asset_path(plan.get("prefabAssetPath")).rsplit("/", 1)[0]
+        atlas_dir = source.rsplit("/", 1)[0]
+        within = lambda directory, root: directory == root or directory.startswith(root + "/")
+        sibling_root = prefab_dir.rsplit("/", 1)[0] + "/Atlas"
+        if not (within(atlas_dir, prefab_dir) or
+                (prefab_dir.endswith("/Prefab") and within(atlas_dir, sibling_root))):
+            report.error("spriteAtlasRenames[%d].from 不在 Prefab 目录或合法的同级 Atlas 目录: %s" % (index, source))
+        else:
+            report.note("SpriteAtlas 目录合格；packables、外部引用和 GUID 归属仍须 Unity 预检: " + source)
     seen = set()
     for entry in textures:
         source = _normalize_asset_path(entry.get("from"))

@@ -114,6 +114,8 @@ namespace PsdLayoutTool2
             IReadOnlyList<string> temporaryStateAssets = Array.Empty<string>();
             IReadOnlyList<string> temporaryVariantAssets = Array.Empty<string>();
             IReadOnlyList<string> temporaryStatefulAssets = Array.Empty<string>();
+            var temporaryPostGroupingAssets = new List<string>();
+            VisibleGeometry baselineGeometry = null;
             PsdHierarchyChatCleanupExecutionResult result = default;
             try
             {
@@ -121,6 +123,7 @@ namespace PsdLayoutTool2
                 var existingMissingReferences = PersistedExpectations.CaptureMissingReferences(root);
                 preservedMissingReferenceNotice = MissingReferenceNotice(existingMissingReferences);
                 execution = BindPlan(root, plan, context, replayOfConfirmedStage);
+                baselineGeometry = VisibleGeometry.Capture(root, execution.stateExtractions);
                 renames = PsdHierarchyNativeAssetRenamer.Bind(plan, prefabPath);
                 if (save && renames.Count > 0)
                     businessWritesAttempted = true;
@@ -147,6 +150,10 @@ namespace PsdLayoutTool2
                 PsdHierarchyPrefabExtraction.VerifySelectedExtractions(root, execution.selectedExtractions, save);
                 PsdHierarchyPrefabExtraction.VerifyCrossParentExtractions(root, execution.crossParentExtractions, save);
                 PsdHierarchyNativeAssetRenamer.Verify(renames, prefabPath, save);
+                baselineGeometry.Verify(root);
+                if (!save)
+                    SimulatePostGroupingExtraction(root, context, postGroupingIntents, prefabPath,
+                        temporaryPostGroupingAssets, replayOfConfirmedStage);
                 expectations = PersistedExpectations.Capture(root, existingMissingReferences);
                 if (save)
                 {
@@ -155,7 +162,9 @@ namespace PsdLayoutTool2
                         throw new InvalidOperationException("Failed to save Prefab: " + prefabPath);
                 }
                 result = Result(PsdHierarchyCleanupExecutionState.Success, "preflight",
-                    "PREFLIGHT_OK" + preservedMissingReferenceNotice);
+                    "PREFLIGHT_OK; " + (postGroupingIntents.Count > 0 && !save
+                        ? "hierarchy_and_extraction_simulated; " : "stage_simulated; ") +
+                    "visible_geometry=preserved; pixel_comparison=not_performed" + preservedMissingReferenceNotice);
             }
             catch (Exception exception)
             {
@@ -180,6 +189,7 @@ namespace PsdLayoutTool2
                 PsdHierarchyPrefabExtraction.CleanupTemporaryAssets(temporaryStateAssets);
                 PsdHierarchyPrefabExtraction.CleanupTemporaryAssets(temporaryVariantAssets);
                 PsdHierarchyPrefabExtraction.CleanupTemporaryAssets(temporaryStatefulAssets);
+                PsdHierarchyPrefabExtraction.CleanupTemporaryAssets(temporaryPostGroupingAssets);
                 result = UnloadContents(root, unloadPrefabContents, result, saveAttempted, "save-cleanup");
                 root = null;
             }
@@ -198,8 +208,10 @@ namespace PsdLayoutTool2
                 PsdHierarchyPrefabExtraction.VerifyCrossParentExtractions(root, execution.crossParentExtractions, true);
                 PsdHierarchyNativeAssetRenamer.Verify(renames, prefabPath, true);
                 expectations.Verify(root);
+                baselineGeometry.Verify(root);
                 result = Result(PsdHierarchyCleanupExecutionState.Success, "verify",
-                    "VERIFY_OK" + preservedMissingReferenceNotice);
+                    "VERIFY_OK; saved_structure=verified; visible_geometry=preserved; pixel_comparison=not_performed" +
+                    preservedMissingReferenceNotice);
             }
             catch (Exception exception)
             {
@@ -258,6 +270,97 @@ namespace PsdLayoutTool2
             return Result(PsdHierarchyCleanupExecutionState.Success, "verify",
                 "VERIFY_OK (hierarchy stage and post-grouping extraction stage)" +
                 Environment.NewLine + stageTwo.message);
+        }
+
+        private static void SimulatePostGroupingExtraction(
+            GameObject root, PsdHierarchyChatContext context, JArray intents, string prefabPath,
+            List<string> temporaryAssets, bool replay)
+        {
+            var nodes = new JArray();
+            int nodeIndex = 0;
+            PsdHierarchyChatContextBuilder.AppendSnapshotNode(root.transform, string.Empty, nodes, ref nodeIndex);
+            JArray candidates = PsdHierarchyChatContextBuilder.BuildComponentFamilyCandidates(nodes);
+            var snapshot = new JObject
+            {
+                ["nodes"] = nodes, ["componentFamilyCandidates"] = candidates,
+                ["containmentFindings"] = PsdHierarchyChatContextBuilder.BuildContainmentFindings(nodes, candidates),
+                ["flatSiblingFindings"] = PsdHierarchyChatContextBuilder.BuildFlatSiblingFindings(nodes),
+            };
+            var simulated = new PsdHierarchyChatContext(context.projectRoot, context.sourcePsdAssetPath,
+                prefabPath, context.skillFullPath, context.skillContent, context.prefabContent,
+                hierarchySnapshotJson: snapshot.ToString(), hierarchySnapshotFingerprint: context.hierarchySnapshotFingerprint);
+            simulated.incrementalReview = context.incrementalReview;
+            JObject stageTwo = PsdHierarchyPostGroupingExtraction.BuildStageTwoPlan(simulated, intents, prefabPath, out string error);
+            if (stageTwo == null)
+                throw new InvalidDataException("Unsaved post-grouping extraction could not be resolved: " + error);
+            if (intents.Count == 0) return;
+            ValidatedCleanupPlan execution = BindPlan(root, stageTwo, simulated, replay);
+            VisibleGeometry geometry = VisibleGeometry.Capture(root, execution.stateExtractions);
+            ApplyPlan(root, execution);
+            // 每类临时资产一创建即加入最终清理列表，失败时同样不遗留测试产物。
+            IReadOnlyList<string> assets = Array.Empty<string>();
+            try { PsdHierarchyPrefabExtraction.Apply(root, execution.extractions, false, out assets, replay); }
+            finally { temporaryAssets.AddRange(assets); }
+            try { PsdHierarchyPrefabExtraction.ApplyStateExtractions(root, execution.stateExtractions, false, out assets, replay); }
+            finally { temporaryAssets.AddRange(assets); }
+            try { PsdHierarchyPrefabExtraction.ApplyVariantExtractions(root, execution.variantExtractions, false, out assets, replay); }
+            finally { temporaryAssets.AddRange(assets); }
+            try { PsdHierarchyPrefabExtraction.ApplyStatefulExtractions(root, execution.statefulExtractions, false, out assets, replay); }
+            finally { temporaryAssets.AddRange(assets); }
+            execution.verification.Verify(root);
+            PsdHierarchyPrefabExtraction.Verify(root, execution.extractions, false);
+            PsdHierarchyPrefabExtraction.VerifyStateExtractions(root, execution.stateExtractions, false);
+            PsdHierarchyPrefabExtraction.VerifyVariantExtractions(root, execution.variantExtractions, false);
+            PsdHierarchyPrefabExtraction.VerifyStatefulExtractions(root, execution.statefulExtractions, false);
+            geometry.Verify(root);
+        }
+
+        // 结构核验和保存一致性不能证明提取前后的画面保全。先检查所有可见 Graphic 的四角，
+        // 与逐像素验收分开报告；路径/名称可变，使用内容与几何的多重集匹配。
+        private sealed class VisibleGeometry
+        {
+            private readonly List<KeyValuePair<string, Vector3[]>> graphics = new List<KeyValuePair<string, Vector3[]>>();
+
+            internal static VisibleGeometry Capture(GameObject root, IReadOnlyList<NativeStateExtractionOperation> stateExtractions = null)
+            {
+                Canvas.ForceUpdateCanvases();
+                var result = new VisibleGeometry();
+                foreach (UnityEngine.UI.Graphic graphic in root.GetComponentsInChildren<UnityEngine.UI.Graphic>(true))
+                {
+                    // state 模式已明确批准折叠到默认分支；其余状态的隐藏是计划行为，仍核对默认分支几何。
+                    if (stateExtractions != null && stateExtractions.Any(operation => operation.stateSources
+                        .Where((source, index) => index != operation.defaultStateIndex)
+                        .Any(source => graphic.transform == source || graphic.transform.IsChildOf(source)))) continue;
+                    bool active = graphic.enabled;
+                    for (Transform current = graphic.transform; current != null && current != root.transform; current = current.parent)
+                        active &= current.gameObject.activeSelf;
+                    if (!active) continue;
+                    var corners = new Vector3[4];
+                    graphic.rectTransform.GetWorldCorners(corners);
+                    string text = graphic.GetType().GetProperty("text")?.GetValue(graphic) as string ?? string.Empty;
+                    var image = graphic as UnityEngine.UI.Image;
+                    string key = graphic.GetType().FullName + "|" + graphic.color.ToString("R") + "|" +
+                        (graphic.mainTexture != null ? graphic.mainTexture.GetInstanceID() : 0) + "|" +
+                        (image != null && image.sprite != null ? image.sprite.GetInstanceID() : 0) + "|" + text;
+                    result.graphics.Add(new KeyValuePair<string, Vector3[]>(key, corners));
+                }
+                return result;
+            }
+
+            internal void Verify(GameObject root)
+            {
+                var remaining = new List<KeyValuePair<string, Vector3[]>>(Capture(root).graphics);
+                foreach (var expected in graphics)
+                {
+                    int match = remaining.FindIndex(actual => actual.Key == expected.Key &&
+                        Enumerable.Range(0, 4).All(index => Vector3.Distance(actual.Value[index], expected.Value[index]) <= 0.001f));
+                    if (match < 0)
+                        throw new InvalidOperationException("Visible descendant world corners or content changed during cleanup: " + expected.Key);
+                    remaining.RemoveAt(match);
+                }
+                if (remaining.Count > 0)
+                    throw new InvalidOperationException("Cleanup added visible Graphic content: " + remaining.Count);
+            }
         }
 
         private static string MissingReferenceNotice(Dictionary<Component, Dictionary<string, int>> missing)

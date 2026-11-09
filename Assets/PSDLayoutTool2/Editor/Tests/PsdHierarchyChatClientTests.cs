@@ -504,7 +504,9 @@ namespace PsdLayoutTool2.Tests
                 Does.Contain("没有独立的 RectTransform 锚点操作数组").And.Contain("不要发明字段"));
             Assert.That(
                 PsdHierarchyChatClient.AnchorPlanInstruction(false),
-                Does.Contain("不得出现锚点调整建议").And.Contain("保留快照中的所有 RectTransform 布局值"));
+                Does.Contain("不得提出锚点调整").And.Contain("局部坐标换算不属于锚点整理"));
+            Assert.That(PsdHierarchyChatClient.AnchorOrganizationInstruction(false),
+                Does.Contain("世界四角").And.Contain("anchoredPosition/localPosition/offsets"));
         }
 
         [Test]
@@ -661,6 +663,8 @@ namespace PsdLayoutTool2.Tests
             Assert.That(
                 prompt,
                 Does.Contain("E:/Project/Demo/monsterhunter/Library/PsdHierarchyTerminal/external-1.plan.json"));
+            Assert.That(prompt, Does.Contain("Offline draft lint/schema fixes").And.Contain("do not consume"));
+            Assert.That(prompt, Does.Contain("explicit approval of its current hash").And.Contain("no repair retry"));
             Assert.That(
                 prompt,
                 Does.Contain("E:/Project/Demo/monsterhunter/Library/PsdHierarchyTerminal/external-1.review.md"));

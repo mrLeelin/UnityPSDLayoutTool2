@@ -161,6 +161,8 @@ namespace PsdLayoutTool2.Tests
 
             var preflight = await PsdHierarchyChatCleanupExecution.ValidatePlanAsync(context, plan.ToString());
             Assert.That(preflight.success, Is.True, preflight.message);
+            Assert.That(preflight.message, Does.Contain("hierarchy_and_extraction_simulated"));
+            Assert.That(preflight.message, Does.Contain("pixel_comparison=not_performed"));
             Assert.That(File.Exists(ComponentPath), Is.False, "预检不得生成组件资产。");
             Assert.That(File.ReadAllBytes(Target), Is.EqualTo(before), "预检不得改动目标 Prefab。");
 
@@ -195,28 +197,25 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
-        public async Task UnresolvableIntentStopsAfterStageOneAndReportsPartial()
+        public async Task UnresolvableIntentIsRejectedByUnsavedStageTwoBeforeAnyWrite()
         {
             JObject plan = Plan(templatePath: "TaskView/[TaskList]/MissingRow");
 
             var result = await PsdHierarchyChatCleanupExecution.ApplyConfirmedAsync(context, plan.ToString());
 
             Assert.That(result.success, Is.False);
-            Assert.That(result.state, Is.EqualTo(PsdHierarchyCleanupExecutionState.Partial));
-            Assert.That(result.stage, Is.EqualTo("post-grouping"));
-            Assert.That(result.message, Does.Contain("refreshed snapshot"), result.message);
+            Assert.That(result.state, Is.EqualTo(PsdHierarchyCleanupExecutionState.Rejected));
+            Assert.That(result.stage, Is.EqualTo("preflight"));
+            Assert.That(result.message, Does.Contain("Unsaved post-grouping"), result.message);
             Assert.That(File.Exists(ComponentPath), Is.False, "解析失败时不得生成组件资产。");
 
-            // 首阶段已经写入并保存：分组容器必须在，且不被重跑或回滚。
+            // 第二阶段失败在预检内被拦截，首阶段也不得保存。
             GameObject root = PrefabUtility.LoadPrefabContents(Target);
             try
             {
                 Transform list = root.transform.Find("[TaskList]");
-                Assert.That(list, Is.Not.Null);
-                Assert.That(list.childCount, Is.EqualTo(4));
-                Assert.That(
-                    PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(list.GetChild(0).gameObject),
-                    Is.Empty);
+                Assert.That(list, Is.Null);
+                Assert.That(root.transform.childCount, Is.EqualTo(4));
             }
             finally
             {

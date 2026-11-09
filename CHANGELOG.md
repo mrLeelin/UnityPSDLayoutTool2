@@ -2,6 +2,30 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.4.5] - 2026-11-09
+
+### Fixed
+
+- Treat missing external-session transcripts as optional context instead of requiring a log that export never created. Record PowerShell transcription failures without preventing the CLI from starting.
+- Accept the exporter's sibling `Prefab / Atlas / Texture` layout for SpriteAtlas renames only when packables belong to the target dependency graph and have no external users. Enforce directory-segment boundaries while retaining GUID, ownership and name-conflict checks.
+- Accept existing `node:<id>` move destinations in the offline linter, and reject unknown destinations, parent cycles and simulated Prefab-root moves.
+- Parse wrapped YAML modification targets and resolve nested-instance names through the source Prefab's root GameObject identity instead of selecting an arbitrary `m_Name` override.
+- Include numbered recursive-structure subsets in offline candidate prediction, using final sibling order and nested-Prefab boundaries to match Unity's measurements.
+- Prevent variant extraction from applying a row's position, rotation and scale again inside its state branch. Preserve noncentral-anchor geometry by giving inserted Common/States containers their parent's coordinate frame.
+- Execute reviewed post-grouping extraction during the unsaved Unity preflight and reject invalid second stages before saving the hierarchy stage. Clean up temporary extraction assets on failure and compare visible Graphic world corners before and after extraction.
+
+### Changed
+
+- Add a detached NativeUnity read-only query runner that submits once and polls the returned job ID; an unknown result never causes automatic resubmission.
+- Check world rectangles alongside content fingerprints in the offline preservation audit. Receipts distinguish saved-structure and visible-geometry verification from pixel comparison, which remains a separate required visual audit.
+- Clarify that reparenting may convert local coordinates while preserving anchors, pivot, dimensions and world corners. Separate pre-approval draft/tool corrections from the automatic AI repair budget while retaining approval of the current plan hash and the prohibition on retrying uncertain writes.
+
+### Validation
+
+- Passed 175 targeted Unity EditMode tests and 82 Python tests; Unity 6000.3.6f1 compilation succeeded.
+- Verified zero changed pixels for independent six-row/three-structure variant and noncentral-anchor stateful extraction fixtures. Replayed the original read-only evidence to verify all six instance names, candidate parity and detection of the previously missed geometry differences.
+- Existing JellybeanUnity card positions, executed plans and approval artifacts were not modified. The original screen was not reapplied, reimported or repaired; its own final visual acceptance remains separate from these fixture results.
+
 ## [0.4.4] - 2026-10-20
 
 ### Fixed

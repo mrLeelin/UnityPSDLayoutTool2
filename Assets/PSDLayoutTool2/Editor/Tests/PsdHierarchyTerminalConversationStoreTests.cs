@@ -59,6 +59,22 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void ExternalSessionDoesNotRequireANonexistentTranscript()
+        {
+            string conversation = Path.Combine(directory, "new.conversation.jsonl");
+            File.WriteAllText(conversation, "{\"type\":\"external_prompt_created\"}\n");
+            string transcript = Path.Combine(directory, "new.terminal.log");
+            string prompt = PsdHierarchyTerminalConversationStore.BuildRecoveryPrompt(
+                conversation, transcript, Path.Combine(directory, "new.summary.md"), false);
+            Assert.That(prompt, Does.Contain("PowerShell terminal transcript (optional; not present at export)"));
+            Assert.That(prompt, Does.Contain("only prompt creation"));
+            Assert.That(File.Exists(transcript), Is.False);
+            File.WriteAllText(transcript, "real terminal history");
+            prompt = PsdHierarchyTerminalConversationStore.BuildRecoveryPrompt(conversation, transcript, "", true);
+            Assert.That(prompt, Does.Contain("PowerShell terminal transcript (present; read)"));
+        }
+
+        [Test]
         public void MissingConversationIsNotReportedAsRecoverable()
         {
             Assert.That(

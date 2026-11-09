@@ -94,12 +94,19 @@ namespace PsdLayoutTool2.Tests
         {
             // ---- 阶段一：终端哨兵执行「分组 + 改名 + 分组后抽取」 ----
             JObject plan = BuildInitialPlan();
-            WriteTerminalSession();
+            WriteTerminalSession(plan);
             File.WriteAllText(
                 PlanPath(),
                 plan.ToString(Newtonsoft.Json.Formatting.None),
                 new UTF8Encoding(false));
-            File.WriteAllText(ApplyPath(), string.Empty, new UTF8Encoding(false));
+            File.WriteAllText(ApplyPath(), Newtonsoft.Json.JsonConvert.SerializeObject(new PsdWorkflowApproval
+            {
+                approvalText = PsdWorkflowPlanBinding.ExplicitApprovalPhrase,
+                planPath = PlanPath(), planSha256 = PsdWorkflowPlanBinding.Sha256(plan.ToString(Newtonsoft.Json.Formatting.None)),
+                snapshotFingerprint = plan.Value<string>("snapshotFingerprint"),
+                reviewVersion = plan.Value<string>("reviewVersion"), targetPrefabPath = targetPrefabPath,
+                approvedAtUtc = DateTime.UtcNow.ToString("o"),
+            }), new UTF8Encoding(false));
 
             Assert.That(
                 await PsdHierarchyTerminalApplyWatcher.RunPendingApplyOnceForTestsAsync(),
@@ -221,8 +228,15 @@ namespace PsdLayoutTool2.Tests
             {
                 ["version"] = 2,
                 ["snapshotFingerprint"] = snapshot.Value<string>("fingerprint"),
+                ["reviewVersion"] = "acceptance-review",
                 ["prefabName"] = "Source",
                 ["prefabAssetPath"] = targetPrefabPath,
+                ["targetPrefabAssetPath"] = targetPrefabPath,
+                ["selectionNodeIds"] = new JArray("node:" + rootId),
+                ["operationScope"] = "group rows and extract reviewed components",
+                ["expectedNodeCount"] = ((JArray)snapshot["nodes"]).Count + 1,
+                ["expectedHierarchy"] = new JArray(), ["directChildren"] = new JArray(), ["absentPaths"] = new JArray(),
+                ["preserveRequirements"] = new JObject { ["visualResult"] = "unchanged" },
                 ["output"] = new JObject { ["mode"] = "in_place", ["assetPath"] = targetPrefabPath },
                 ["verify"] = new JObject(),
                 ["wrappers"] = new JArray(new JObject
@@ -378,14 +392,17 @@ namespace PsdLayoutTool2.Tests
             return string.Empty;
         }
 
-        private void WriteTerminalSession()
+        private void WriteTerminalSession(JObject plan)
         {
             PsdHierarchyOrganizerEntry.WriteTerminalSession(
                 sessionId,
                 SourceAssetPath,
                 targetPrefabPath,
                 PlanPath(),
-                Path.Combine(terminalDirectory, sessionId + ".review.md"));
+                Path.Combine(terminalDirectory, sessionId + ".review.md"),
+                snapshotFingerprint: plan.Value<string>("snapshotFingerprint"),
+                reviewVersion: plan.Value<string>("reviewVersion"));
+            File.WriteAllText(Path.Combine(terminalDirectory, sessionId + ".review.md"), "Reviewed grouping and extraction.");
         }
 
         private string ApplyPath()

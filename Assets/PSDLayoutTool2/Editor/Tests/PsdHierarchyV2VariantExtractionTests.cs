@@ -170,6 +170,81 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task SixOffsetRowsWithThreeVariantsPreserveEveryCornerAndRenderedPixel()
+        {
+            var expected = new System.Collections.Generic.List<Vector3[]>();
+            GameObject editing = PrefabUtility.LoadPrefabContents(Target);
+            try
+            {
+                RectTransform list = (RectTransform)editing.transform.Find("[ItemList]");
+                Object.Instantiate(list.GetChild(1).gameObject, list).name = "[Item_05]";
+                Object.Instantiate(list.GetChild(2).gameObject, list).name = "[Item_06]";
+                list.anchoredPosition = new Vector2(80, 40);
+                list.sizeDelta = new Vector2(900, 600);
+                for (int i = 0; i < list.childCount; i++)
+                {
+                    RectTransform row = (RectTransform)list.GetChild(i);
+                    row.anchoredPosition = new Vector2((i % 3 - 1) * 230, i < 3 ? 100 : -100);
+                    row.sizeDelta = new Vector2(140 + i, 80 + i);
+                    row.pivot = new Vector2(0.2f, 0.8f);
+                    int extraMembers = i == 0 ? 0 : (i == 2 || i == 5 ? 2 : 1);
+                    for (int member = 0; member < extraMembers; member++)
+                    {
+                        var mark = new GameObject("VariantMark" + member, typeof(RectTransform), typeof(Image));
+                        mark.transform.SetParent(row, false);
+                        ((RectTransform)mark.transform).sizeDelta = new Vector2(12, 12);
+                        ((RectTransform)mark.transform).anchoredPosition = new Vector2(20 * member, 0);
+                        mark.GetComponent<Image>().color = Color.cyan;
+                    }
+                    foreach (Text label in row.GetComponentsInChildren<Text>()) label.enabled = false;
+                    foreach (RectTransform rect in row.GetComponentsInChildren<RectTransform>(true))
+                    {
+                        var corners = new Vector3[4]; rect.GetWorldCorners(corners); expected.Add(corners);
+                    }
+                }
+                PrefabUtility.SaveAsPrefabAsset(editing, Target);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(editing); }
+            RefreshContext();
+            JObject snapshot = JObject.Parse(context.hierarchySnapshotJson);
+            ((JArray)snapshot["nodes"]).Add(new JObject { ["id"] = "item5", ["path"] = "InventoryPanelView/[ItemList]/[Item_05]" });
+            ((JArray)snapshot["nodes"]).Add(new JObject { ["id"] = "item6", ["path"] = "InventoryPanelView/[ItemList]/[Item_06]" });
+            context = new PsdHierarchyChatContext(context.projectRoot, "", Target, "", "", "",
+                hierarchySnapshotJson: snapshot.ToString(), hierarchySnapshotFingerprint: context.hierarchySnapshotFingerprint);
+            JObject plan = Plan();
+            var extraction = (JObject)plan["variantComponentExtractions"][0];
+            ((JArray)extraction["instances"]).Add(new JObject { ["source"] = "node:item5", ["name"] = "[Item_05]", ["state"] = "claimable" });
+            ((JArray)extraction["instances"]).Add(new JObject { ["source"] = "node:item6", ["name"] = "[Item_06]", ["state"] = "locked" });
+            Color32[] before = PsdHierarchyV2BasicCleanupTests.Render("six-variant-before", Target, 500);
+            var result = await PsdHierarchyNativeCleanupExecutor.ApplyAsync(context, plan.ToString());
+            Assert.That(result.success, Is.True, result.message);
+            Assert.That(PsdHierarchyV2BasicCleanupTests.Render("six-variant-after", Target, 500), Is.EqualTo(before));
+            GameObject saved = PrefabUtility.LoadPrefabContents(Target);
+            try
+            {
+                Transform list = saved.transform.Find("[ItemList]");
+                int rectIndex = 0;
+                for (int i = 0; i < list.childCount; i++)
+                {
+                    Transform states = list.GetChild(i).Find("[States]");
+                    for (int state = 0; state < states.childCount; state++)
+                    {
+                        if (!states.GetChild(state).gameObject.activeSelf) continue;
+                        foreach (RectTransform rect in states.GetChild(state).GetComponentsInChildren<RectTransform>(true))
+                        {
+                            var corners = new Vector3[4]; rect.GetWorldCorners(corners);
+                            for (int corner = 0; corner < 4; corner++)
+                                Assert.That(Vector3.Distance(corners[corner], expected[rectIndex][corner]), Is.LessThan(0.001f));
+                            rectIndex++;
+                        }
+                    }
+                }
+                Assert.That(rectIndex, Is.EqualTo(expected.Count));
+            }
+            finally { PrefabUtility.UnloadPrefabContents(saved); }
+        }
+
+        [Test]
         public async Task VariantExtractionKeepsOneInstancePerRowWithItsOwnActiveState()
         {
             JObject plan = Plan();

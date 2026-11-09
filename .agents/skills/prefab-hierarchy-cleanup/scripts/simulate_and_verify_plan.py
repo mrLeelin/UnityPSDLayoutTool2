@@ -112,6 +112,13 @@ def simulate(plan, nodes):
         if dst not in sim.kids:
             sim.errors.append("move destination missing: " + dst)
             continue
+        ancestor, seen = dst, set()
+        while ancestor is not None and ancestor != src and ancestor not in seen:
+            seen.add(ancestor)
+            ancestor = sim.par.get(ancestor)
+        if ancestor == src or ancestor in seen or sim.par.get(src) is None:
+            sim.errors.append("move creates a cycle or moves the Prefab root: " + src)
+            continue
         sim.kids[sim.par[src]].remove(src)
         sim.kids[dst].insert(min(int(m.get("siblingIndex", 0)), len(sim.kids[dst])), src)
         sim.par[src] = dst

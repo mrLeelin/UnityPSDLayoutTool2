@@ -5,6 +5,7 @@ namespace PsdLayoutTool2.Tests
     using Newtonsoft.Json.Linq;
     using NUnit.Framework;
     using UnityEditor;
+    using UnityEditor.U2D;
     using UnityEngine;
     using UnityEngine.UI;
 
@@ -166,6 +167,48 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public void SiblingAtlasRequiresPackablesThatBelongToTheTarget()
+        {
+            AssetDatabase.CreateFolder(Folder, "Prefab");
+            string movedTarget = Folder + "/Prefab/ExampleView.prefab";
+            Assert.That(AssetDatabase.MoveAsset(Target, movedTarget), Is.Empty);
+            Assert.That(() => PsdHierarchyNativeAssetRenamer.Bind(Plan(), movedTarget),
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains("nonempty target-owned packables"));
+            var atlas = AssetDatabase.LoadAssetAtPath<UnityEngine.U2D.SpriteAtlas>(AtlasPath);
+            atlas.Add(new UnityEngine.Object[] { AssetDatabase.LoadAssetAtPath<Texture2D>(TexturePath) });
+            EditorUtility.SetDirty(atlas);
+            AssetDatabase.SaveAssets();
+            var renames = PsdHierarchyNativeAssetRenamer.Bind(Plan(), movedTarget);
+            string guid = AssetDatabase.AssetPathToGUID(AtlasPath);
+            PsdHierarchyNativeAssetRenamer.Apply(renames, true);
+            Assert.That(AssetDatabase.AssetPathToGUID(RenamedAtlasPath), Is.EqualTo(guid));
+        }
+
+        [Test]
+        public void SimilarPrefixDirectoryIsNotInsidePrefabDirectory()
+        {
+            AssetDatabase.CreateFolder(Folder, "Prefab");
+            AssetDatabase.CreateFolder(Folder, "PrefabOther");
+            string movedTarget = Folder + "/Prefab/ExampleView.prefab";
+            Assert.That(AssetDatabase.MoveAsset(Target, movedTarget), Is.Empty);
+            string otherAtlas = Folder + "/PrefabOther/old_atlas.spriteatlas";
+            Assert.That(AssetDatabase.MoveAsset(AtlasPath, otherAtlas), Is.Empty);
+            Assert.That(() => PsdHierarchyNativeAssetRenamer.Bind(Plan(atlasFrom: otherAtlas), movedTarget),
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains("not a private SpriteAtlas"));
+        }
+
+        [Test]
+        public void AtlasReferencedByAnExternalAssetIsRejected()
+        {
+            var owner = ScriptableObject.CreateInstance<AtlasReferenceForTests>();
+            owner.atlas = AssetDatabase.LoadAssetAtPath<UnityEngine.U2D.SpriteAtlas>(AtlasPath);
+            AssetDatabase.CreateAsset(owner, Folder + "/ExternalOwner.asset");
+            AssetDatabase.SaveAssets();
+            Assert.That(() => PsdHierarchyNativeAssetRenamer.Bind(Plan(), Target),
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains("referenced outside"));
+        }
+
+        [Test]
         public async Task PrivateTextureAndAtlasAreRenamedWithIdentityAndReferencesPreserved()
         {
             JObject plan = Plan();
@@ -266,5 +309,10 @@ namespace PsdLayoutTool2.Tests
             Assert.That(result.message, Does.Contain("not referenced by the current target Prefab"));
             Assert.That(File.Exists(SharedTextureFolder + "/ExampleView_Shared_icon.png"), Is.False);
         }
+    }
+
+    public sealed class AtlasReferenceForTests : ScriptableObject
+    {
+        public UnityEngine.U2D.SpriteAtlas atlas;
     }
 }

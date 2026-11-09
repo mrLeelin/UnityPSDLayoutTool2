@@ -812,7 +812,7 @@ namespace PsdLayoutTool2
             }
         }
 
-        private static void AppendSnapshotNode(
+        internal static void AppendSnapshotNode(
             Transform node,
             string parentId,
             JArray nodes,
@@ -2069,14 +2069,14 @@ namespace PsdLayoutTool2
         {
             return organizeAnchors
                 ? "锚点整理开关已开启：读取 recttransform-anchor-cleanup 技能，把 anchorMin、anchorMax、pivot、anchoredPosition、sizeDelta、offset 和父子坐标关系纳入审查；按几何证据区分 point、edge、proportional、stretch、preserve 和 insufficient-evidence，只提出不会破坏当前视觉、布局组件、动画、绑定或嵌套 Prefab 的候选。"
-                : "锚点整理开关已关闭：本次只整理层级、命名和已允许的组件/资源操作，保留所有现有 RectTransform 的 anchorMin、anchorMax、pivot、anchoredPosition、sizeDelta、offsetMin、offsetMax 和相关布局值，不提出或执行锚点调整。";
+                : "锚点整理开关已关闭：保留 RectTransform 的 anchorMin、anchorMax、pivot、尺寸和世界四角，不提出或执行锚点调整。重挂父级时允许仅为保持画面所必需的 anchoredPosition/localPosition/offsets 换算，不能要求不同父坐标系下的局部值逐值不变。";
         }
 
         internal static string AnchorPlanInstruction(bool organizeAnchors)
         {
             return organizeAnchors
                 ? "锚点计划约束：当前 version 2 计划没有独立的 RectTransform 锚点操作数组；不要发明字段、把锚点字段塞入无关操作，或声称 Apply 已修改锚点。把每个候选的 node:<id>、当前值、建议值、几何证据、父级关系和风险写入评审与 verification；除非执行器已有明确支持，否则锚点调整只作为 review/verification 要求，实际 Prefab 不因该部分改变。"
-                : "锚点计划约束：锚点整理未启用，计划中不得出现锚点调整建议或伪造的锚点操作；保留快照中的所有 RectTransform 布局值。";
+                : "锚点计划约束：锚点整理未启用，不得提出锚点调整或伪造操作；锚点、pivot、尺寸和画面保持不变，重挂父级所需的局部坐标换算不属于锚点整理。";
         }
         internal const string DefaultUserPrompt =
             "请按整理技能完整审查当前目标 Prefab，并输出完整、可确认的层级整理方案，而不是只查看顶层或按名称猜测。\n" +
@@ -2743,7 +2743,7 @@ namespace PsdLayoutTool2
             builder.AppendLine("- Distinguish observed facts, inferences, and unknowns. Cross-check Prefab and snapshot; cite exact node:<id> references for important conclusions.");
             builder.AppendLine("- If evidence conflicts or intent is ambiguous before the review, ask focused questions. Never guess.");
             builder.AppendLine("- Preserve layout, components, bindings, generated assets, and unrelated content. Review all componentFamilyCandidates and flatSiblingFindings.");
-            builder.AppendLine("- When anchor organization is enabled, read recttransform-anchor-cleanup and include anchor candidates in the review and verification tables. The current v2 plan cannot execute anchor changes, so never invent an anchor operation or claim an anchor mutation; when disabled, preserve all RectTransform values.");
+            builder.AppendLine("- When anchor organization is enabled, read recttransform-anchor-cleanup and include anchor candidates in the review and verification tables. The current v2 plan cannot execute anchor changes, so never invent an anchor operation or claim an anchor mutation; when disabled, preserve anchors, pivot, dimensions and world corners, allowing only reparenting-required local coordinate conversion.");
             builder.AppendLine("- Efficiency rule: the authoritative snapshot is always complete. Rank image reads by evidence, but never skip an image solely because of a semantic name, narrow size, or background size. Escalate to image or render evidence for conflicts, overlapping candidates, state branches, transparency questions, or incomplete visual-unit closure; record every skip reason and keep before/after visual audit mandatory.");
             builder.AppendLine("- Efficiency rule: after local lint and simulation both pass against the same snapshot, publish the draft by byte-for-byte copy with hash verification. Do not regenerate equivalent JSON or Markdown after validation.");
             builder.AppendLine("- Efficiency rule: run local lint before simulation and stop on lint failure. Complete SKILL.md and plan-format.md remain the default; summary-only reading is allowed only for a proven simple hierarchy-only task, with automatic full-document fallback whenever extraction, state, variant, asset rename, nested Prefab, binding, or unresolved evidence is present.");
@@ -2754,11 +2754,11 @@ namespace PsdLayoutTool2
             builder.AppendLine("- Child Prefab extraction table columns: component ID, output asset path, mode, ordered instances, ordered Common members, every state ID/name/member list, default or per-instance state, evidence, and risk.");
             builder.AppendLine("- Also include preservation and verification tables covering unchanged nodes, nested Prefab or binding risks, layout, components, references, active states, sibling order, and generated assets.");
             builder.AppendLine("- Cite exact node:<id> references in the tables and disclose every child Prefab intended after grouping. Encode post-grouping work in postGroupingExtractionIntents so the later extraction cannot expand beyond the reviewed IDs, paths, modes, instances, or states.");
-            builder.AppendLine("- Ask whether the user is satisfied with this complete grouping, naming, and child-Prefab scheme. Do not modify files before the answer.");
-            builder.AppendLine("- After confirmation, execute the complete workflow automatically: create and validate the version 2 in_place plan, apply the reviewed hierarchy stage, refresh the authoritative hierarchy snapshot, generate and validate the exact manifest-matching component stage, create the reviewed child Prefabs, save the target Prefab, and run final verification.");
-            builder.AppendLine("- Do not ask for another confirmation after execution starts. Automatic JSON repair, resnapshot, component extraction, save, and verification are covered by the first confirmation.");
+            builder.AppendLine("- Write and validate the complete review and JSON draft before asking whether the user is satisfied with the grouping, naming, and child-Prefab scheme. JSON may be edited before approval under the repair rules below; every revision must be fully reviewed and validated. Do not modify Unity assets or write .apply before the answer.");
+            builder.AppendLine("- After confirmation, execute the complete workflow automatically: recheck the approved version 2 in_place plan bytes and fingerprint, apply the reviewed hierarchy stage, refresh the authoritative hierarchy snapshot, generate and validate the exact manifest-matching component stage, create the reviewed child Prefabs, save the target Prefab, and run final verification.");
+            builder.AppendLine("- Do not ask for another confirmation for the approved manifest. Resnapshot, extraction, save and verification are covered. Changed JSON needs fresh approval; follow rejected/partial/uncertain rules and never bypass a manifest mismatch.");
             builder.AppendLine("- If refreshed evidence conflicts with the reviewed manifest, stop without guessing or broadening scope and report the exact failure and current saved state.");
-            builder.AppendLine("- Time budget: at most one JSON repair before confirmation, one Apply per stage, and one read-only verification after an indeterminate Apply. The automatic second stage gets no repair retry. Never reinstall tools, rerun a failed plan, restore, or reimport automatically.");
+            builder.AppendLine("- Repair budget: one AI JSON replacement after Unity rejects a confirmable plan. Offline draft lint/schema fixes and diagnosed tool-compatibility fixes before confirmation do not consume this budget: record causes, revalidate exact bytes and update the review/reviewVersion. Every changed plan needs explicit approval of its current hash. One Apply per stage. After an indeterminate Apply, verify read-only once; never retry, restore or reimport. The second stage gets no repair retry.");
             builder.AppendLine("- Finish with a final verification report; do not claim that local assets changed unless the apply and verification commands prove it.");
             builder.AppendLine("If these paths are inaccessible, ask the user to upload the Prefab and snapshot; never guess their contents.");
             return builder.ToString();

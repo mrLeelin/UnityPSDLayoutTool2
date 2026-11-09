@@ -1,9 +1,44 @@
 # Local (offline) toolset — how to get the same answers in one pass
 
-Everything here runs without Unity, against the JSON hierarchy snapshot and version 2
-`node:<id>` plans. The scripts are fixture-agnostic: no asset path, object name, canvas
+The offline tools run against the JSON hierarchy snapshot and version 2 `node:<id>` plans;
+the NativeUnity query section requires a connected Editor. The scripts are fixture-agnostic: no asset path, object name, canvas
 size or expected count is baked in. All angles, sizes and counts are caller inputs or are
 derived from the snapshot/plan.
+
+## NativeUnity queries that can exceed five seconds
+
+Whole-Assets ownership scans and full extraction preflights must use a detached read-only job.
+Changing CLI `--timeout` alone does not bypass the synchronous dispatcher deadline. Use the
+bundled runner, which submits once, prints the job ID, and polls that same job:
+
+```powershell
+python scripts/read_unity_selection.py --project-path E:/Project/MyGame --mode payload `
+  --payload E:/Evidence/owners.cs --detach --timeout 120
+```
+
+The payload must be read-only. Live selection still uses `--mode selection` and the shipped
+selection payload. Do not substitute a cache or another backend. The underlying commands are:
+
+```powershell
+unity --json command --project-path E:/Project/MyGame --timeout 150 --detach eval_file -- --file E:/Evidence/owners.cs --timeout 120000
+unity --json job status <returned-job-id> --project-path E:/Project/MyGame
+```
+
+CLI timeout is seconds; the eval command argument after `--` is milliseconds. A timed-out
+submission or status read does not prove the Editor did nothing. Preserve the job ID, reattach
+to read its result, and never submit a duplicate or auto-retry an Apply. Domain reload can lose
+the in-memory job registry; report the result as unverified if the job is unavailable.
+
+## Verification claims
+
+Offline lint/simulation is a prediction. Unity preflight now simulates the reviewed second-stage
+extraction on the unsaved grouped tree and checks visible Graphic world corners. Temporary
+extraction assets are removed; the target and declared outputs are not saved. `PREFLIGHT_OK`
+discloses the stages executed. A saved `VERIFY_OK` proves the checked structure and visible
+geometry, and explicitly says `pixel_comparison=not_performed`. It is not a pixel-equivalence
+receipt. The final frozen-framing render comparison in `visual-audit.md` remains mandatory.
+`audit_prefab_preservation.py` checks content fingerprints and world AABBs separately with
+0.001-unit geometric tolerance; it cannot replace the pixel comparison either.
 
 ## Why this page exists
 

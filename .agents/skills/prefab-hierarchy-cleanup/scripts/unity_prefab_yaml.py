@@ -78,6 +78,31 @@ def classify_monobehaviour(body: str) -> str:
     return 'MonoBehaviour'
 
 
+def read_override_entries(body: str):
+    """Read bounded modification records, preserving the target identity.
+
+    Unity wraps flow mappings across lines. Property names alone are not keys:
+    different child objects can all override m_Name in the same instance.
+    """
+    records = []
+    marks = list(re.finditer(r'(?m)^[ \t]*-[ \t]*target:[ \t]*\{', body))
+    for index, mark in enumerate(marks):
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(body)
+        chunk = body[mark.start():end]
+        target_end = chunk.find('}')
+        if target_end < 0:
+            raise UnityYamlError('unterminated modification target')
+        target = chunk[:target_end + 1]
+        prop = scalar_after(chunk[target_end + 1:], 'propertyPath')
+        if prop is None:
+            raise UnityYamlError('modification has no propertyPath')
+        records.append(dict(propertyPath=prop, value=scalar_after(chunk[target_end + 1:], 'value'),
+                            targetFileId=fileid_after(target, 'target'), targetGuid=guid_after(target, 'target'),
+                            objectFileId=fileid_after(chunk, 'objectReference'),
+                            objectGuid=guid_after(chunk, 'objectReference')))
+    return records
+
+
 def read_overrides(body: str):
     """Read a PrefabInstance's `m_Modifications` into {propertyPath: {...}}.
 
@@ -87,22 +112,7 @@ def read_overrides(body: str):
           value: '[NavItem_Album]'
           objectReference: {fileID: 0}
     """
-    out = {}
-    pattern = re.compile(r'(?ms)^[ \t]*-[ \t]*target:[^\n]*\n[ \t]*propertyPath:[ \t]*')
-    for m in pattern.finditer(body):
-        prop, after = read_scalar(body, m.end())
-        vm = re.search(r'(?m)^[ \t]*value:[ \t]*', body[after:after + 400])
-        if not vm:
-            continue
-        value, after_val = read_scalar(body, after + vm.end())
-        rm = re.search(r'objectReference: \{fileID: (-?\d+)(?:, guid: ([0-9a-fA-F]+))?',
-                       body[after_val:after_val + 240])
-        out[prop] = {
-            'value': value,
-            'objectFileId': rm.group(1) if rm else None,
-            'objectGuid': rm.group(2).lower() if rm and rm.group(2) else None,
-        }
-    return out
+    return {entry['propertyPath']: entry for entry in read_override_entries(body)}
 
 
 # --------------------------------------------------------------------------------------
@@ -342,7 +352,7 @@ def walk_preorder(node):
 
 
 class PrefabDoc:
-    def __init__(self, path, text, sha256, blocks):
+    def __init__(self, path, text, sha256, blocks, source_paths=None):
         self.path = path
         self.text = text
         self.sha256 = sha256
@@ -422,17 +432,36 @@ class PrefabDoc:
                 m = re.search(r'guid: ([0-9a-fA-F]{32})', body)
                 src = m.group(1).lower() if m else None
             parent = fileid_after(body, 'm_TransformParent')
-            root_name = None
-            name_m = re.search(r'(?ms)^[ \t]*-[ \t]*target:[^\n]*\n'
-                               r'[ \t]*propertyPath:[ \t]*m_Name[ \t]*\n'
-                               r'[ \t]*value:[ \t]*', body)
-            if name_m:
-                root_name, _ = read_scalar(body, name_m.end())
+            entries = read_override_entries(body)
+            # 先用本文件的 stripped 根 GameObject 定位，多个 m_Name 时绝不随意取第一个。
+            root_ids = set()
+            source_root_name = None
+            source_path = (source_paths or {}).get(src)
+            if source_path:
+                with open(source_path, encoding='utf-8-sig') as fh:
+                    source_text = fh.read()
+                source_marks = list(BLOCK_RE.finditer(source_text))
+                for j, source_mark in enumerate(source_marks):
+                    if source_mark.group(1) not in ('4', '224') or source_mark.group('stripped'):
+                        continue
+                    source_body = source_text[source_mark.end():source_marks[j + 1].start()
+                                              if j + 1 < len(source_marks) else len(source_text)]
+                    if fileid_after(source_body, 'm_Father') == '0':
+                        root_ids.add(fileid_after(source_body, 'm_GameObject'))
+                for j, source_mark in enumerate(source_marks):
+                    if source_mark.group(1) == '1' and source_mark.group(2) in root_ids:
+                        source_body = source_text[source_mark.end():source_marks[j + 1].start()
+                                                  if j + 1 < len(source_marks) else len(source_text)]
+                        source_root_name = scalar_after(source_body, 'm_Name')
+            names = [e for e in entries if e['propertyPath'] == 'm_Name' and e['targetGuid'] == src]
+            root_names = [e['value'] for e in names if e['targetFileId'] in root_ids]
+            root_name = root_names[0] if len(root_names) == 1 else (source_root_name if not root_names else None)
             rec = {
                 'file_id': fid,
                 'source_guid': src,
                 'transform_parent': parent,
                 'root_name': root_name,
+                'modifications': entries,
                 'root_transform': None,
                 'override_count': len(re.findall(r'(?m)^[ \t]*propertyPath:', body)),
                 'overrides': read_overrides(body),
@@ -535,11 +564,11 @@ class PrefabDoc:
             for c in node.children:
                 stack.append((c, d + 1))
 
+        self.instance_asset_paths = source_paths or {}
         self._resolve_instance_assets(None)
 
     # -- helpers -------------------------------------------------------------------
     def _resolve_instance_assets(self, search_root):
-        self.instance_asset_paths = {}
         if search_root and os.path.isdir(search_root):
             self.instance_asset_paths = build_guid_index(search_root)
         for rec in self.prefab_instances:
@@ -652,9 +681,8 @@ def load_prefab(path, search_root=None):
         stop = marks[idx + 1].start() if idx + 1 < len(marks) else len(text)
         body = text[m.end():stop]
         blocks.append((m.group(1), m.group(2), body, bool(m.group('stripped'))))
-    doc = PrefabDoc(path, text, sha, blocks)
-    if search_root:
-        doc.resolve_instance_assets(search_root)
+    source_paths = build_guid_index(search_root) if search_root else None
+    doc = PrefabDoc(path, text, sha, blocks, source_paths)
     return doc
 
 

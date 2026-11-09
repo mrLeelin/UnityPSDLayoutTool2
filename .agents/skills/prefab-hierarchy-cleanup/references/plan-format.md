@@ -426,7 +426,7 @@ Use `statefulComponentExtractions` for repeated items that contain real shared c
 
 ## Private Asset Renames
 
-List only assets proven private to the current Prefab (a Texture referenced by it, or a SpriteAtlas in the Prefab's own folder). `toName` has no extension, and the target path must not exist yet.
+List only assets proven private to the current Prefab. Textures must be target dependencies. SpriteAtlases must be within the Prefab directory, or within the exact sibling `Atlas/` tree when the target is in `Prefab/` (the exporter's `Prefab / Atlas / Texture` layout). Sibling Atlas eligibility additionally requires nonempty packables whose textures are all target dependencies; directory placement alone is not ownership proof. Unity rejects outside references, unknown packables, GUID changes and name collisions. Directory boundaries are path segments: `PrefabOther` and `AtlasOther` are outside. `toName` has no extension, and the target path must not exist yet. Offline checks cannot prove AssetDatabase ownership; the measured Unity preflight is mandatory.
 
 `prefabName` **is** the naming prefix Unity enforces, and it is independent of the Prefab asset file name and root name:
 

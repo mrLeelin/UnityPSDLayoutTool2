@@ -74,6 +74,9 @@ def lint(plan, nodes=None):
             if not allow_wrapper:
                 errors.append("%s 不能引用 wrapper: %s" % (label, ref))
                 return None
+            if ref[1:] not in wrapper_ids:
+                errors.append("%s 引用了未知 wrapper: %s" % (label, ref))
+                return None
             return ref
         if not ref.startswith("node:"):
             errors.append("%s 必须使用 node:<id>，不能写层级路径: %s" % (label, ref))
@@ -107,14 +110,28 @@ def lint(plan, nodes=None):
         src, dst = m.get("source", ""), m.get("destination", "")
         used[src] += 1
         resolve(src, "move.source")
-        if not dst.startswith("@") or dst[1:] not in wrapper_ids:
-            errors.append("move.destination 不是已声明的 wrapper: %s" % dst)
+        resolve(dst, "move.destination", allow_wrapper=True)
         if m.get("siblingIndex") in per_dest_idx[dst]:
             errors.append("%s 内 siblingIndex 重复: %s" % (dst, m.get("siblingIndex")))
         per_dest_idx[dst].add(m.get("siblingIndex"))
     for src, c in used.items():
         if c > 1:
             errors.append("move.source 被使用 %d 次: %s" % (c, src))
+
+    # 用节点身份检查最终父链，不能用路径前缀判断重挂后的循环。
+    parents = {"node:" + n["id"]: ("node:" + n["parentId"] if n.get("parentId") else
+               next(("node:" + p["id"] for p in nodes or []
+                     if "/" in n["path"] and p["path"] == n["path"].rsplit("/", 1)[0]), None)) for n in nodes or []}
+    parents.update({"@" + w["id"]: w.get("parent") for w in plan.get("wrappers", [])})
+    parents.update({m.get("source"): m.get("destination") for m in plan.get("moves", [])})
+    for source in parents:
+        seen, current = set(), source
+        while current in parents:
+            if current in seen:
+                errors.append("父子关系形成循环: %s" % source)
+                break
+            seen.add(current)
+            current = parents[current]
 
     # ---- removals -------------------------------------------------------
     removed = {r.get("source", "") for r in plan.get("emptyContainerRemovals", [])}

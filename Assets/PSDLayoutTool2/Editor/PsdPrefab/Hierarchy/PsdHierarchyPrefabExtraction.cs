@@ -544,6 +544,7 @@ namespace PsdLayoutTool2
             }
 
             var created = new List<string>();
+            temporaryAssets = created;
             foreach (NativeExtractionOperation operation in operations)
             {
                 string assetPath = save ? operation.assetPath : BuildPreflightAssetPath(operation);
@@ -1088,6 +1089,7 @@ namespace PsdLayoutTool2
             }
 
             var created = new List<string>();
+            temporaryAssets = created;
             foreach (NativeStateExtractionOperation operation in operations)
             {
                 string assetPath = save ? operation.assetPath : BuildPreflightAssetPath(operation.assetPath, operation.prefabName);
@@ -1310,6 +1312,18 @@ namespace PsdLayoutTool2
             rect.localRotation = Quaternion.identity;
         }
 
+        // 插入的透明容器必须与源根使用相同坐标框；0x0 容器会改变非中心锚点子对象的位置。
+        private static void FillParentRect(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = ((RectTransform)rect.parent).pivot;
+            rect.sizeDelta = Vector2.zero;
+            rect.anchoredPosition3D = Vector3.zero;
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
+        }
+
         // ---------- 变体列表抽取（variantComponentExtractions） ----------
 
         internal static IReadOnlyList<NativeVariantExtractionOperation> BindVariantExtractions(
@@ -1464,6 +1478,7 @@ namespace PsdLayoutTool2
             }
 
             var created = new List<string>();
+            temporaryAssets = created;
             foreach (NativeVariantExtractionOperation operation in operations)
             {
                 string assetPath = save ? operation.assetPath : BuildPreflightAssetPath(operation.assetPath, operation.prefabName);
@@ -1583,11 +1598,11 @@ namespace PsdLayoutTool2
 
                 var common = new GameObject(operation.commonName, typeof(RectTransform));
                 common.transform.SetParent(builder.transform, false);
-                CentreRect(common.GetComponent<RectTransform>());
+                FillParentRect(common.GetComponent<RectTransform>());
 
                 var statesContainer = new GameObject(operation.statesName, typeof(RectTransform));
                 statesContainer.transform.SetParent(builder.transform, false);
-                CentreRect(statesContainer.GetComponent<RectTransform>());
+                FillParentRect(statesContainer.GetComponent<RectTransform>());
 
                 for (int index = 0; index < operation.states.Count; index++)
                 {
@@ -1596,10 +1611,7 @@ namespace PsdLayoutTool2
                     clone.name = state.name;
                     clone.transform.SetParent(statesContainer.transform, false);
                     CopyRectTransformGeometry(state.source, clone.transform);
-                    if (clone.transform is RectTransform cloneRect && operation.template is RectTransform templateRect)
-                    {
-                        cloneRect.anchoredPosition = state.expectation.anchoredPosition;
-                    }
+                    FillParentRect((RectTransform)clone.transform);
 
                     clone.SetActive(index == operation.defaultStateIndex);
                 }
@@ -1653,6 +1665,8 @@ namespace PsdLayoutTool2
             var map = new Dictionary<Transform, Transform>();
             MapStructure(source, activeBranch, map);
             CopySourceValues(source, map, renameRoot: false);
+            // 行根的位置、旋转和缩放已由实例根承载；内部状态根只提供同一坐标框，不能再应用一遍。
+            FillParentRect((RectTransform)activeBranch);
             RegisterRemap(map, remap);
             for (int index = 0; index < states.childCount; index++)
             {
@@ -1900,6 +1914,7 @@ namespace PsdLayoutTool2
             }
 
             var created = new List<string>();
+            temporaryAssets = created;
             foreach (NativeStatefulExtractionOperation operation in operations)
             {
                 string assetPath = save ? operation.assetPath : BuildPreflightAssetPath(operation.assetPath, operation.prefabName);
@@ -2043,11 +2058,11 @@ namespace PsdLayoutTool2
 
                 var statesContainer = new GameObject(operation.statesName, typeof(RectTransform));
                 statesContainer.transform.SetParent(builder.transform, false);
-                CentreRect(statesContainer.GetComponent<RectTransform>());
+                FillParentRect(statesContainer.GetComponent<RectTransform>());
 
                 var commonContainer = new GameObject(operation.commonName, typeof(RectTransform));
                 commonContainer.transform.SetParent(builder.transform, false);
-                CentreRect(commonContainer.GetComponent<RectTransform>());
+                FillParentRect(commonContainer.GetComponent<RectTransform>());
 
                 for (int index = 0; index < operation.common.members.Count; index++)
                 {
@@ -2063,7 +2078,7 @@ namespace PsdLayoutTool2
                     NativeStatefulState state = operation.states[index];
                     var stateContainer = new GameObject(state.name, typeof(RectTransform));
                     stateContainer.transform.SetParent(statesContainer.transform, false);
-                    CentreRect(stateContainer.GetComponent<RectTransform>());
+                    FillParentRect(stateContainer.GetComponent<RectTransform>());
                     foreach (NativeStatefulMember member in state.branch.members)
                     {
                         CloneMember(state.branch.source, member.sourceName, member.targetName, stateContainer.transform);

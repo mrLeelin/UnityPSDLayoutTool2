@@ -73,7 +73,7 @@ def capture(project_path, prefab_path, unity, timeout, out_path):
     payload = os.path.join(os.environ.get("TEMP", "/tmp"), "php_audit_prefab_dump.cs")
     with open(payload, "w", encoding="utf-8") as fh:
         fh.write(template.replace("\"ASSET_PATH_PLACEHOLDER\"", json.dumps(prefab_path), 1))
-    text, diagnostics = run_payload(project_path, unity, payload, timeout)
+    text, diagnostics = run_payload(project_path, unity, payload, timeout, detached=True)
     if "DUMP_END" not in text:
         raise SystemExit("payload did not complete; first 800 chars:\n" + text[:800])
     data = parse_dump(text)
@@ -163,6 +163,29 @@ def normalize_text(t):
     return " ".join((t or "").replace("\\n", "\n").split())
 
 
+def check_world_rects(errors, before_nodes, before_paths, after_nodes, after_paths, label):
+    """Match content identities AND world geometry, allowing only small float noise.
+
+    World AABBs complement the content fingerprint; they do not prove pixel equality.
+    Duplicate identical images are matched as a multiset rather than by renamed paths.
+    """
+    remaining = collections.defaultdict(list)
+    for path in after_paths:
+        remaining[fingerprint(after_nodes[path])].append(path)
+    for path in before_paths:
+        node = before_nodes[path]
+        candidates = remaining[fingerprint(node)]
+        rect = node.get("worldRect")
+        match = next((p for p in candidates if rect is not None
+                      and after_nodes[p].get("worldRect") is not None
+                      and len(rect) == len(after_nodes[p]["worldRect"]) == 4
+                      and all(abs(a - b) <= 0.001 for a, b in zip(rect, after_nodes[p]["worldRect"]))), None)
+        if match is None:
+            errors.append("%s 世界矩形改变或缺少几何证据: %s (%s)" % (label, path, rect))
+        else:
+            candidates.remove(match)
+
+
 def inside_nested_instance(nodes, kids, path):
     """True when any proper ancestor is a nested-Prefab instance root"""
     parts = path.split("/")
@@ -233,6 +256,7 @@ def compare(before, after, plan, quiet=False, notes=None):
     for fp, count in (got - expected).items():
         sample = next((p for p in after_identity if fingerprint(an[p]) == fp), "?")
         errors.append("A 多出 %d 个节点（示例 %s）: %s" % (count, sample, describe(fp)))
+    check_world_rects(errors, bn, keep_identity, an, after_identity, "A")
     notes.append("A 未受抽取影响的身份节点 %d 个（保留容器 %d 个）；after 侧新增容器 %d 个"
                  % (len(keep_identity), len(keep) - len(keep_identity), len(added_containers)))
 
@@ -289,6 +313,7 @@ def compare(before, after, plan, quiet=False, notes=None):
                 want = collections.Counter(fingerprint(bn[p]) for p in leaves(bn, bk, path))
                 scope = leaves(an, ak, path + "/[Common]") + leaves(an, ak, path + "/[States]/" + state_name)
                 have = collections.Counter(fingerprint(an[p]) for p in scope)
+                check_world_rects(errors, bn, leaves(bn, bk, path), an, scope, "B " + path)
                 for fp, count in (want - have).items():
                     errors.append("B 单元内容丢失 %s（%d 个）: %s" % (path, count, describe(fp)))
                 for fp, count in (have - want).items():

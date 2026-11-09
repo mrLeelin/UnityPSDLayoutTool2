@@ -515,7 +515,7 @@ namespace PsdLayoutTool2.Tests
             Assert.That(File.ReadAllBytes(AssetPath), Is.EqualTo(original));
         }
 
-        private static Color32[] Render(string name)
+        internal static Color32[] Render(string name, string assetPath = AssetPath, float orthographicSize = 100)
         {
             var scene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
             var cameraObject = new GameObject("V2TestCamera", typeof(Camera));
@@ -529,12 +529,12 @@ namespace PsdLayoutTool2.Tests
             RenderTexture previous = RenderTexture.active;
             try
             {
-                instance = Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>(AssetPath));
+                instance = Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>(assetPath));
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(instance, scene);
                 var canvas = instance.AddComponent<Canvas>();
                 canvas.renderMode = RenderMode.WorldSpace;
                 camera.orthographic = true;
-                camera.orthographicSize = 100;
+                camera.orthographicSize = orthographicSize;
                 camera.transform.position = new Vector3(0, 0, -100);
                 camera.transform.rotation = Quaternion.identity;
                 camera.clearFlags = CameraClearFlags.SolidColor;

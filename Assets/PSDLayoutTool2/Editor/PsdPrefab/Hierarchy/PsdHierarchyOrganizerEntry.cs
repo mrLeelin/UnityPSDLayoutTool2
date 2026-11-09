@@ -379,7 +379,7 @@ namespace PsdLayoutTool2
                 (context.organizeAnchors
                     ? "锚点整理已开启：同时阅读 " + PsdHierarchyChatClient.ToPortableFullPath(context.anchorSkillFullPath) +
                       "，按其证据规则审查 RectTransform；当前 v2 计划没有可执行的独立锚点操作，不能伪造字段或声称已修改锚点。\n"
-                    : "锚点整理已关闭：保留所有现有 RectTransform 锚点、pivot、位置、尺寸和 offsets，不提出锚点调整。\n") +
+                    : "锚点整理已关闭：保留 RectTransform 的 anchorMin/anchorMax、pivot、尺寸和世界四角，不提出锚点调整；重挂父级允许仅为保持画面所必需的局部坐标换算（anchoredPosition/localPosition/offsets），不能要求这些值在不同父坐标系下逐值不变。\n") +
                 "每轮审查只覆盖用户要求的变化及其必要依赖。计划文件仍是完整 v2 JSON 文档，" +
                 "但操作数组只包含本轮差异；operationScope.kind 必须是 incremental_adjustment，" +
                 "operationScope.requestedChange 必须记录用户明确提出的修改，selectionNodeIds 指向受影响的当前节点。" +
@@ -644,7 +644,11 @@ namespace PsdLayoutTool2
                     connection,
                     value => "'" + value.Replace("'", "''") + "'");
                 string command = "$transcriptPath = '" + transcriptPathForShell + "'; " +
-                    "try { Start-Transcript -LiteralPath $transcriptPath -Append -Force | Out-Null } catch { }; " +
+                    "try { Start-Transcript -LiteralPath $transcriptPath -Append -Force -ErrorAction Stop | Out-Null } catch { " +
+                    "$transcriptError = $_.Exception.ToString(); " +
+                    "try { [System.IO.File]::AppendAllText($transcriptPath + '.error.log', $transcriptError + [Environment]::NewLine) } " +
+                    "catch { Write-Warning ('Could not persist transcription diagnostics: ' + $_.Exception.Message) }; " +
+                    "Write-Warning ('Terminal transcription failed: ' + $transcriptError) }; " +
                     "[Console]::InputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
                     "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +
                     "$OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false; " +

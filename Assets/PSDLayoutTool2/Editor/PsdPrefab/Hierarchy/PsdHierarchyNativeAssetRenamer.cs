@@ -6,6 +6,9 @@ namespace PsdLayoutTool2
     using System.Linq;
     using Newtonsoft.Json.Linq;
     using UnityEditor;
+    using UnityEditor.U2D;
+    using UnityEngine;
+    using UnityEngine.U2D;
 
     /// <summary>
     /// 私有资源改名（v2 计划中的 textureRenames / spriteAtlasRenames）。
@@ -58,8 +61,8 @@ namespace PsdLayoutTool2
                 StringComparer.Ordinal);
             string prefabDirectory = Path.GetDirectoryName(Normalize(targetPrefabAssetPath))?.Replace('\\', '/') ?? string.Empty;
 
-            BindRenames(renames, textures, prefabName, true, dependencies, prefabDirectory);
-            BindRenames(renames, atlases, prefabName, false, dependencies, prefabDirectory);
+            BindRenames(renames, textures, prefabName, true, dependencies, prefabDirectory, Normalize(targetPrefabAssetPath));
+            BindRenames(renames, atlases, prefabName, false, dependencies, prefabDirectory, Normalize(targetPrefabAssetPath));
 
             var targetPaths = new HashSet<string>(StringComparer.Ordinal);
             foreach (NativeAssetRename rename in renames)
@@ -77,7 +80,8 @@ namespace PsdLayoutTool2
             string prefabName,
             bool isTexture,
             ISet<string> dependencies,
-            string prefabDirectory)
+            string prefabDirectory,
+            string targetPrefabPath)
         {
             string label = isTexture ? "textureRenames" : "spriteAtlasRenames";
             var sources = new HashSet<string>(StringComparer.Ordinal);
@@ -116,12 +120,16 @@ namespace PsdLayoutTool2
                         throw new InvalidDataException(
                             entryLabel + ".toName must equal prefabName \"" + prefabName + "\": " + toName);
                     string directory = Path.GetDirectoryName(fromPath)?.Replace('\\', '/') ?? string.Empty;
-                    if (!string.IsNullOrEmpty(prefabDirectory) &&
-                        !directory.StartsWith(prefabDirectory, StringComparison.Ordinal))
+                    bool beneathPrefab = IsWithin(directory, prefabDirectory);
+                    string exportRoot = Path.GetDirectoryName(prefabDirectory)?.Replace('\\', '/') ?? string.Empty;
+                    bool siblingAtlas = string.Equals(Path.GetFileName(prefabDirectory), "Prefab", StringComparison.Ordinal) &&
+                        IsWithin(directory, exportRoot + "/Atlas");
+                    if (!beneathPrefab && !siblingAtlas)
                     {
                         throw new InvalidDataException(
                             entryLabel + ".from is not a private SpriteAtlas of the current target Prefab: " + fromPath);
                     }
+                    ValidateAtlasOwnership(fromPath, targetPrefabPath, dependencies, siblingAtlas && !beneathPrefab, entryLabel);
                 }
 
                 if (!sources.Add(fromPath))
@@ -150,6 +158,50 @@ namespace PsdLayoutTool2
                     throw new InvalidDataException(entryLabel + " target already exists: " + toPath);
 
                 output.Add(new NativeAssetRename(fromPath, toPath, toName, currentGuid, isTexture));
+            }
+        }
+
+        private static bool IsWithin(string directory, string root)
+        {
+            return !string.IsNullOrEmpty(root) && (string.Equals(directory, root, StringComparison.Ordinal) ||
+                directory.StartsWith(root.TrimEnd('/') + "/", StringComparison.Ordinal));
+        }
+
+        private static void ValidateAtlasOwnership(
+            string atlasPath, string targetPrefabPath, ISet<string> dependencies, bool requirePackables, string label)
+        {
+            var atlas = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(atlasPath);
+            if (atlas == null) throw new InvalidDataException(label + ".from SpriteAtlas did not load: " + atlasPath);
+            var packedTextures = new HashSet<string>(StringComparer.Ordinal);
+            foreach (UnityEngine.Object packable in atlas.GetPackables())
+            {
+                string path = Normalize(AssetDatabase.GetAssetPath(packable));
+                if (AssetDatabase.IsValidFolder(path))
+                {
+                    foreach (string guid in AssetDatabase.FindAssets("t:Texture", new[] { path }))
+                        packedTextures.Add(Normalize(AssetDatabase.GUIDToAssetPath(guid)));
+                }
+                else if (packable is Texture2D || packable is Sprite)
+                    packedTextures.Add(path);
+                else
+                    throw new InvalidDataException(label + " has an unsupported packable; ownership is unverified: " + path);
+            }
+            if (requirePackables && packedTextures.Count == 0)
+                throw new InvalidDataException(label + " sibling Atlas requires nonempty target-owned packables: " + atlasPath);
+            foreach (string texture in packedTextures)
+                if (!dependencies.Contains(texture))
+                    throw new InvalidDataException(label + " packs a Texture not owned by the target Prefab: " + texture);
+
+            // 目录布局只是候选边界；直接引用方必须逐一检查，不能把同级目录整体当作私有。
+            foreach (string asset in AssetDatabase.GetAllAssetPaths())
+            {
+                if (!asset.StartsWith("Assets/", StringComparison.Ordinal) || asset == atlasPath ||
+                    asset == targetPrefabPath || AssetDatabase.IsValidFolder(asset)) continue;
+                string[] assetDependencies = AssetDatabase.GetDependencies(asset, false);
+                if (assetDependencies.Contains(atlasPath, StringComparer.Ordinal))
+                    throw new InvalidDataException(label + " SpriteAtlas is referenced outside the target Prefab: " + asset);
+                if (requirePackables && !dependencies.Contains(asset) && assetDependencies.Any(packedTextures.Contains))
+                    throw new InvalidDataException(label + " sibling Atlas packs a Texture shared outside the target dependency graph: " + asset);
             }
         }
 

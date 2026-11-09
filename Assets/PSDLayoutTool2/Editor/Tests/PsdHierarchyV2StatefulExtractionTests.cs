@@ -213,6 +213,51 @@ namespace PsdLayoutTool2.Tests
         }
 
         [Test]
+        public async Task OffsetRowsWithNoncentralAnchorsPreserveDescendantWorldCorners()
+        {
+            GameObject editing = PrefabUtility.LoadPrefabContents(Target);
+            var expected = new Vector3[4];
+            try
+            {
+                RectTransform list = (RectTransform)editing.transform.Find("[ItemList]");
+                list.anchoredPosition = new Vector2(344, -236);
+                list.sizeDelta = new Vector2(900, 600);
+                for (int index = 0; index < list.childCount; index++)
+                {
+                    RectTransform row = (RectTransform)list.GetChild(index);
+                    row.anchoredPosition = new Vector2(index * 140 - 210, 50);
+                    row.pivot = new Vector2(0.2f, 0.8f);
+                    RectTransform background = (RectTransform)row.Find("ItemBackground");
+                    background.anchorMin = background.anchorMax = new Vector2(0, 1);
+                    background.anchoredPosition = new Vector2(37, -19);
+                    // 只比较背景图；这个用例不要求已批准的 Common/States 顺序能遮住旧文字。
+                    foreach (Text label in row.GetComponentsInChildren<Text>()) label.enabled = false;
+                }
+                ((RectTransform)list.GetChild(0).Find("ItemBackground")).GetWorldCorners(expected);
+                PrefabUtility.SaveAsPrefabAsset(editing, Target);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(editing); }
+            RefreshContext();
+
+            Color32[] beforePixels = PsdHierarchyV2BasicCleanupTests.Render("stateful-offset-before", Target, 500);
+
+            var result = await PsdHierarchyNativeCleanupExecutor.ApplyAsync(context, Plan().ToString());
+            Assert.That(result.success, Is.True, result.message);
+            Color32[] afterPixels = PsdHierarchyV2BasicCleanupTests.Render("stateful-offset-after", Target, 500);
+            Assert.That(afterPixels, Is.EqualTo(beforePixels), "提取前后必须逐像素保持背景画面。");
+            GameObject root = PrefabUtility.LoadPrefabContents(Target);
+            try
+            {
+                var actual = new Vector3[4];
+                ((RectTransform)root.transform.Find("[ItemList]/[Item_01]/[States]/[State_Available]/AvailableBackground"))
+                    .GetWorldCorners(actual);
+                for (int corner = 0; corner < 4; corner++)
+                    Assert.That(Vector3.Distance(expected[corner], actual[corner]), Is.LessThan(0.001f), "corner " + corner);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+        }
+
+        [Test]
         public async Task StatefulExtractionPartitionsCommonAndStateMembersPerInstance()
         {
             JObject plan = Plan();
