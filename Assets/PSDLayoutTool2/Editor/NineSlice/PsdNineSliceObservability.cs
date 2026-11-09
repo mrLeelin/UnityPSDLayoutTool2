@@ -1,5 +1,6 @@
 namespace PsdLayoutTool2
 {
+    using System.Collections.Generic;
     using UnityEditor;
     using UnityEngine;
     using UnityEngine.UI;
@@ -10,6 +11,7 @@ namespace PsdLayoutTool2
         private const float IconSize = 13f;
         private static readonly Color NineSliceColor = new Color(0.36f, 0.73f, 0.63f, 0.95f);
         private static readonly Color ImageColor = new Color(0.56f, 0.59f, 0.64f, 0.95f);
+        private static readonly List<Component> HierarchyComponents = new List<Component>();
 
         static PsdNineSliceObservability()
         {
@@ -61,14 +63,29 @@ namespace PsdLayoutTool2
             GameObject gameObject = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
             if (!TryDescribeAnyImage(gameObject, out NineSliceDiagnostic diagnostic)) return;
 
-            Rect iconRect = new Rect(selectionRect.xMax - IconSize - 2f,
-                selectionRect.y + (selectionRect.height - IconSize) * 0.5f, IconSize, IconSize);
+            float labelWidth = EditorStyles.boldLabel.CalcSize(new GUIContent(gameObject.name)).x;
+            gameObject.GetComponents(HierarchyComponents);
+            int componentCount = HierarchyComponents.Count;
+            HierarchyComponents.Clear();
+            if (!TryGetHierarchyMarkerRect(selectionRect, labelWidth, componentCount, out Rect iconRect)) return;
             if (GUI.Button(iconRect, new GUIContent(string.Empty, diagnostic.ToTooltip() + "\n点击打开九宫编辑器"), GUIStyle.none))
             {
                 OpenNineSliceEditor(diagnostic.asset);
             }
 
             DrawGlyph(iconRect, diagnostic.isNineSlice);
+        }
+
+        internal static bool TryGetHierarchyMarkerRect(Rect selectionRect, float labelWidth,
+            int componentCount, out Rect iconRect)
+        {
+            // 标记跟随名称，右侧为 Unity 的 Prefab 操作、状态标记及第三方组件图标留出空间。
+            // 窄窗口、长名称或组件过多时不绘制，避免遮住名称或抢占其他图标的点击区域。
+            float x = selectionRect.x + 18f + labelWidth + 4f;
+            float rightLimit = selectionRect.xMax - 64f - componentCount * 16f;
+            iconRect = new Rect(x,
+                selectionRect.y + (selectionRect.height - IconSize) * 0.5f, IconSize, IconSize);
+            return selectionRect.height >= IconSize && iconRect.xMax <= rightLimit;
         }
 
         internal static bool OpenNineSliceEditor(UnityEngine.Object asset)

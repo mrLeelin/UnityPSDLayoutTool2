@@ -8,6 +8,36 @@ namespace PsdLayoutTool2.Tests
     public sealed class PsdNineSliceObservabilityTests
     {
         [Test]
+        public void HierarchyMarker_FollowsTheNameAndAvoidsRightHandIcons()
+        {
+            var row = new Rect(80f, 32f, 400f, 16f);
+            Assert.That(PsdNineSliceObservability.TryGetHierarchyMarkerRect(row, 100f, 4, out Rect marker), Is.True);
+            Assert.That(marker.xMin, Is.GreaterThanOrEqualTo(row.xMin + 18f + 100f));
+            Assert.That(marker.xMax, Is.LessThanOrEqualTo(row.xMax - 64f - 4f * 16f));
+            Assert.That(marker.center.y, Is.EqualTo(row.center.y));
+        }
+
+        [TestCase(180f, 100f, 2)]
+        [TestCase(400f, 350f, 2)]
+        [TestCase(400f, 100f, 16)]
+        [TestCase(0f, 0f, 0)]
+        public void HierarchyMarker_WithoutFreeSpaceIsHidden(float width, float labelWidth, int componentCount)
+        {
+            Assert.That(PsdNineSliceObservability.TryGetHierarchyMarkerRect(
+                new Rect(80f, 32f, width, 16f), labelWidth, componentCount, out _), Is.False);
+        }
+
+        [Test]
+        public void HierarchyMarker_PositionIsStableWhenTheWindowWidens()
+        {
+            Assert.That(PsdNineSliceObservability.TryGetHierarchyMarkerRect(
+                new Rect(80f, 32f, 400f, 16f), 100f, 2, out Rect narrow), Is.True);
+            Assert.That(PsdNineSliceObservability.TryGetHierarchyMarkerRect(
+                new Rect(80f, 32f, 800f, 16f), 100f, 2, out Rect wide), Is.True);
+            Assert.That(wide, Is.EqualTo(narrow));
+        }
+
+        [Test]
         public void TryDescribe_ReportsOnlySlicedImagesWithBorders()
         {
             var texture = new Texture2D(12, 12);
